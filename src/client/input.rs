@@ -48,12 +48,11 @@ pub fn stdin_reader_loop(
     #[cfg(windows)]
     {
         let _ = (
-            host_color_query_sent,
             host_cell_size_query_sent,
             host_mouse_capture_active,
             host_sgr_pixels_active,
         );
-        windows_stdin_reader_loop(event_tx, should_quit);
+        windows_stdin_reader_loop(event_tx, should_quit, host_color_query_sent);
     }
 
     #[cfg(unix)]
@@ -325,15 +324,21 @@ fn idle_flush_timeout_ms(
 fn windows_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
+    host_color_query_sent: bool,
 ) {
     if !super::windows_vti_input_backend_enabled() {
-        windows_crossterm_reader_loop(event_tx, should_quit);
+        windows_crossterm_reader_loop(event_tx, should_quit, host_color_query_sent);
     } else {
         match windows_vti::console_input_handle() {
             Ok(handle) if windows_vti::virtual_terminal_input_enabled(handle) => {
-                windows_vti::raw_console_reader_loop(handle, event_tx, should_quit);
+                windows_vti::raw_console_reader_loop(
+                    handle,
+                    event_tx,
+                    should_quit,
+                    host_color_query_sent,
+                );
             }
-            _ => windows_crossterm_reader_loop(event_tx, should_quit),
+            _ => windows_crossterm_reader_loop(event_tx, should_quit, host_color_query_sent),
         }
     }
 }
@@ -342,8 +347,9 @@ fn windows_stdin_reader_loop(
 fn windows_crossterm_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
+    host_color_query_sent: bool,
 ) {
-    let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+    let mut framer = windows_host_input_framer(host_color_query_sent);
 
     while !should_quit.load(Ordering::Acquire) {
         match crossterm::event::poll(Duration::from_millis(10)) {
@@ -380,7 +386,7 @@ fn windows_crossterm_reader_loop(
 
         if raw_sequence_pending {
             tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
-            if !send_windows_raw_events(framer.flush_timeout(), &event_tx) {
+            if !send_windows_raw_events(framer.flush_before_semantic_event(), &event_tx) {
                 return;
             }
         }
@@ -427,6 +433,16 @@ fn windows_crossterm_input_event(
         }),
         event => Some(event),
     }
+}
+
+#[cfg(any(windows, test))]
+fn windows_host_input_framer(host_color_query_sent: bool) -> crate::raw_input::RawInputFramer {
+    let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+    if host_color_query_sent {
+        framer.host_color_query_sent();
+        framer.enable_host_color_scheme_change_tracking();
+    }
+    framer
 }
 
 #[cfg(windows)]
@@ -553,9 +569,13 @@ fn windows_client_input_event_from_raw(
         crate::raw_input::RawInputEvent::OuterFocusLost => {
             Some(crate::protocol::ClientInputEvent::FocusLost)
         }
-        crate::raw_input::RawInputEvent::HostDefaultColor { .. }
-        | crate::raw_input::RawInputEvent::HostPaletteColors { .. }
-        | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)
+        crate::raw_input::RawInputEvent::HostDefaultColor { kind, color } => {
+            Some(crate::protocol::ClientInputEvent::HostDefaultColor { kind, color })
+        }
+        crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => Some(
+            crate::protocol::ClientInputEvent::HostColorSchemeChanged(appearance),
+        ),
+        crate::raw_input::RawInputEvent::HostPaletteColors { .. }
         | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
         | crate::raw_input::RawInputEvent::Unsupported => None,
     }
@@ -910,6 +930,59 @@ mod windows_tests {
                     bytes: b"\x1b[A".to_vec()
                 },
             }
+        );
+    }
+
+    #[test]
+    fn windows_host_color_replies_convert_to_semantic_events() {
+        let mut framer = windows_host_input_framer(true);
+        let events = framer.push(
+            b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\x1b]12;rgb:1212/3434/5656\x1b\\",
+        );
+        let events = events
+            .into_iter()
+            .filter_map(windows_client_input_event_from_raw)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            events,
+            vec![
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Foreground,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0xff,
+                        g: 0xee,
+                        b: 0xdd,
+                    },
+                },
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    },
+                },
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x12,
+                        g: 0x34,
+                        b: 0x56,
+                    },
+                },
+            ]
+        );
+
+        assert_eq!(
+            framer
+                .push(crate::raw_input::GHOSTTY_COLOR_SCHEME_LIGHT_REPORT)
+                .into_iter()
+                .filter_map(windows_client_input_event_from_raw)
+                .collect::<Vec<_>>(),
+            vec![crate::protocol::ClientInputEvent::HostColorSchemeChanged(
+                crate::terminal_theme::HostAppearance::Light,
+            )]
         );
     }
 

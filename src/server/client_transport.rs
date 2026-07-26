@@ -463,7 +463,9 @@ fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
             }
             ClientInputEvent::Mouse { .. }
             | ClientInputEvent::FocusGained
-            | ClientInputEvent::FocusLost => {}
+            | ClientInputEvent::FocusLost
+            | ClientInputEvent::HostDefaultColor { .. }
+            | ClientInputEvent::HostColorSchemeChanged(_) => {}
         }
     }
 

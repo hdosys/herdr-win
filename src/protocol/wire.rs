@@ -133,6 +133,11 @@ pub enum ClientInputEvent {
     },
     FocusGained,
     FocusLost,
+    HostDefaultColor {
+        kind: crate::terminal_theme::DefaultColorKind,
+        color: crate::terminal_theme::RgbColor,
+    },
+    HostColorSchemeChanged(crate::terminal_theme::HostAppearance),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +339,15 @@ impl ClientInputEvent {
             Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
             Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
             Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::HostDefaultColor { kind, color } => {
+                crate::raw_input::RawInputEvent::HostDefaultColor {
+                    kind: *kind,
+                    color: *color,
+                }
+            }
+            Self::HostColorSchemeChanged(appearance) => {
+                crate::raw_input::RawInputEvent::HostColorSchemeChanged(*appearance)
+            }
         }
     }
 }
@@ -520,6 +534,9 @@ pub struct CursorState {
     /// Cursor shape as a DECSCUSR parameter.
     #[serde(default)]
     pub shape: CursorShapeParam,
+    /// Explicit application cursor color. None means use the host default.
+    #[serde(default)]
+    pub color: Option<crate::terminal_theme::RgbColor>,
 }
 
 /// A rendered frame to be displayed by the client.
@@ -1181,6 +1198,17 @@ mod tests {
                     row: 4,
                     modifiers: 0,
                 },
+                ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    },
+                },
+                ClientInputEvent::HostColorSchemeChanged(
+                    crate::terminal_theme::HostAppearance::Dark,
+                ),
             ],
         };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
@@ -1188,9 +1216,9 @@ mod tests {
         assert_eq!(
             encoded,
             vec![
-                7, 5, 0, 15, 78, 1, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 1, 8, 27, 91, 49, 50, 55, 59, 49,
+                7, 7, 0, 15, 78, 1, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 1, 8, 27, 91, 49, 50, 55, 59, 49,
                 117, 0, 14, 0, 2, 1, 0, 2, 0, 1, 27, 1, 27, 0, 1, 7, 228, 189, 160, 240, 159, 153,
-                130, 2, 0, 0, 3, 4, 0,
+                130, 2, 0, 0, 3, 4, 0, 6, 1, 17, 34, 51, 7, 0,
             ]
         );
         let (decoded, _): (ClientMessage, _) =
@@ -1269,6 +1297,30 @@ mod tests {
             }
             other => panic!("expected backspace key event, got {other:?}"),
         }
+
+        let background = crate::terminal_theme::RgbColor {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        assert!(matches!(
+            (ClientInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color: background,
+            })
+            .to_raw_input_event(),
+            crate::raw_input::RawInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color,
+            } if color == background
+        ));
+        assert!(matches!(
+            ClientInputEvent::HostColorSchemeChanged(crate::terminal_theme::HostAppearance::Light,)
+                .to_raw_input_event(),
+            crate::raw_input::RawInputEvent::HostColorSchemeChanged(
+                crate::terminal_theme::HostAppearance::Light,
+            )
+        ));
     }
 
     #[test]
@@ -1463,6 +1515,11 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 6,
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
             }),
             hyperlinks: vec!["https://example.com".to_owned()],
             graphics: Vec::new(),
@@ -1698,6 +1755,7 @@ mod tests {
                 y: 5,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1981,6 +2039,7 @@ mod tests {
             y: 0,
             visible: true,
             shape: 0,
+            color: None,
         };
         let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
 

@@ -145,6 +145,7 @@ pub(crate) fn tab_surface_cursor(
             } else {
                 cursor.shape
             },
+            color: cursor.color,
         })
     } else if reveal && !scrolled_back {
         Some(CursorState {
@@ -152,6 +153,7 @@ pub(crate) fn tab_surface_cursor(
             y: info.inner_rect.y,
             visible: true,
             shape: app.cjk_ime_cursor_shape,
+            color: None,
         })
     } else {
         None
@@ -300,11 +302,11 @@ mod tests {
         assert_eq!(app.view.terminal_area, Rect::new(26, 1, 80, 19));
         assert_eq!(app.view.pane_infos.len(), 2);
         assert!(!app.view.split_borders.is_empty());
-        assert!(frame.cursor.is_some());
+        assert_eq!(frame.cursor.as_ref().and_then(|cursor| cursor.color), None);
         assert_eq!(frame.hyperlinks, vec![uri.to_owned()]);
         assert_eq!(
             frame_digest(&frame),
-            "a7c21fa42305a41231c7ae254f264f6ef923f46301d8fc4cd35ab6dfdd651b6b"
+            "5ed7414b3d26ee4d9e4031370036c97630822bd112b23606f8f97eb8abee595b"
         );
     }
 

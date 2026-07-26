@@ -1,11 +1,11 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RgbColor {
     pub r: u8,
     pub g: u8,
     pub b: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HostAppearance {
     Dark,
     Light,
@@ -48,13 +48,14 @@ impl Default for TerminalTheme {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DefaultColorKind {
     Foreground,
     Background,
+    Cursor,
 }
 
-pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
+pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\";
 #[cfg(any(not(windows), test))]
 pub const HOST_COLOR_SCHEME_QUERY_SEQUENCE: &str = "\x1b[?996n";
 pub const HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE: &str = "\x1b[?2031h";
@@ -65,6 +66,7 @@ impl TerminalTheme {
         match kind {
             DefaultColorKind::Foreground => self.foreground = Some(color),
             DefaultColorKind::Background => self.background = Some(color),
+            DefaultColorKind::Cursor => {}
         }
         self
     }
@@ -79,16 +81,8 @@ impl TerminalTheme {
     }
 }
 
-pub fn host_terminal_theme_query_sequence(include_palette: bool) -> String {
-    use std::fmt::Write as _;
-
-    let mut sequence = String::from(HOST_COLOR_QUERY_SEQUENCE);
-    if include_palette {
-        for index in 0..=u8::MAX {
-            let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
-        }
-    }
-    sequence
+pub fn host_terminal_theme_query_sequence() -> &'static str {
+    HOST_COLOR_QUERY_SEQUENCE
 }
 
 pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind, RgbColor)> {
@@ -100,6 +94,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
     let kind = match command {
         "10" => DefaultColorKind::Foreground,
         "11" => DefaultColorKind::Background,
+        "12" => DefaultColorKind::Cursor,
         _ => return None,
     };
     Some((kind, parse_rgb_color(value)?))
@@ -118,6 +113,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
     let command = match kind {
         DefaultColorKind::Foreground => 10,
         DefaultColorKind::Background => 11,
+        DefaultColorKind::Cursor => 12,
     };
     format!(
         "\x1b]{command};rgb:{:02x}/{:02x}/{:02x}\x1b\\",
@@ -129,6 +125,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str 
     match kind {
         DefaultColorKind::Foreground => "\x1b]110\x1b\\",
         DefaultColorKind::Background => "\x1b]111\x1b\\",
+        DefaultColorKind::Cursor => "\x1b]112\x1b\\",
     }
 }
 
@@ -207,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_palette_responses_and_builds_full_query() {
+    fn parses_palette_responses_without_querying_host_palette() {
         assert_eq!(
             parse_palette_color_response("\x1b]4;255;rgb:1111/2222/3333\x1b\\"),
             Some((
@@ -220,15 +217,25 @@ mod tests {
             ))
         );
 
-        let query = host_terminal_theme_query_sequence(true);
+        let query = host_terminal_theme_query_sequence();
         assert!(query.starts_with(HOST_COLOR_QUERY_SEQUENCE));
-        assert!(query.contains("\x1b]4;0;?\x1b\\"));
-        assert!(query.ends_with("\x1b]4;255;?\x1b\\"));
-        assert_eq!(query.matches("\x1b]4;").count(), 256);
+        assert_eq!(query.matches("\x1b]").count(), 3);
+        assert!(!query.contains("\x1b]4;"));
+    }
 
+    #[test]
+    fn parses_cursor_color_response() {
+        let parsed = parse_default_color_response("\x1b]12;rgb:1212/3434/5656\x1b\\");
         assert_eq!(
-            host_terminal_theme_query_sequence(false),
-            HOST_COLOR_QUERY_SEQUENCE
+            parsed,
+            Some((
+                DefaultColorKind::Cursor,
+                RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                },
+            ))
         );
     }
 
@@ -241,6 +248,10 @@ mod tests {
         assert_eq!(
             osc_reset_default_color_sequence(DefaultColorKind::Background),
             "\x1b]111\x1b\\"
+        );
+        assert_eq!(
+            osc_reset_default_color_sequence(DefaultColorKind::Cursor),
+            "\x1b]112\x1b\\"
         );
     }
 

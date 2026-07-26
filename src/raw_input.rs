@@ -194,6 +194,11 @@ impl RawInputFramer {
         Self::events_from_chunks(self.byte_framer.flush_timeout())
     }
 
+    #[cfg(any(windows, test))]
+    pub(crate) fn flush_before_semantic_event(&mut self) -> Vec<RawInputEvent> {
+        Self::events_from_chunks(self.byte_framer.flush_before_semantic_event())
+    }
+
     fn events_from_chunks(chunks: Vec<Vec<u8>>) -> Vec<RawInputEvent> {
         chunks
             .into_iter()
@@ -223,15 +228,17 @@ pub(crate) struct RawInputByteFramer {
     host_cell_size_replies_awaited: u16,
     host_appearance_reply_awaited: bool,
     held_pending_host_reply_esc: bool,
+    held_incomplete_default_color_response: bool,
     host_color_scheme_change_tracking: bool,
     host_appearance_query_on_focus: bool,
     split_coalesced_escape: bool,
 }
 
-const HOST_COLOR_QUERY_REPLIES: u16 = 258;
+const HOST_COLOR_QUERY_REPLIES: u16 = 3;
 #[cfg(any(unix, test))]
 const HOST_CELL_SIZE_QUERY_REPLIES: u16 = 1;
 const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
+const MAX_INCOMPLETE_DEFAULT_COLOR_RESPONSE_BYTES: usize = 128;
 
 impl RawInputByteFramer {
     pub(crate) fn for_host_input() -> Self {
@@ -248,15 +255,19 @@ impl RawInputByteFramer {
     }
 
     pub(crate) fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
+        if self.buffer.is_empty() {
+            self.held_incomplete_default_color_response = false;
+        }
         self.buffer.extend_from_slice(data);
         self.drain_available_chunks()
     }
 
-    /// Hold a lone trailing ESC for one idle flush so an OSC 10/11 reply split
+    /// Hold a lone trailing ESC for one idle flush so an OSC 10/11/12 reply split
     /// at its ESC introducer stitches back together instead of leaking (#549).
     pub(crate) fn host_color_query_sent(&mut self) {
         self.host_color_replies_awaited = HOST_COLOR_QUERY_REPLIES;
         self.held_pending_host_reply_esc = false;
+        self.held_incomplete_default_color_response = false;
     }
 
     fn host_appearance_query_sent(&mut self) {
@@ -379,6 +390,20 @@ impl RawInputByteFramer {
         }
 
         if starts_with_incomplete_default_color_response(&self.buffer) {
+            if self.buffer.len() > MAX_INCOMPLETE_DEFAULT_COLOR_RESPONSE_BYTES
+                || self.held_incomplete_default_color_response
+            {
+                tracing::warn!(
+                    len = self.buffer.len(),
+                    "discarding unterminated host color response"
+                );
+                self.buffer.clear();
+                self.host_color_replies_awaited = 0;
+                self.held_pending_host_reply_esc = false;
+                self.held_incomplete_default_color_response = false;
+                return chunks;
+            }
+            self.held_incomplete_default_color_response = true;
             tracing::trace!(
                 len = self.buffer.len(),
                 "waiting for host color response terminator"
@@ -489,7 +514,27 @@ impl RawInputByteFramer {
         tracing::debug!(bytes = ?self.buffer, "dropping incomplete raw input buffer after timeout");
         self.lone_escape_recently_flushed = false;
         self.buffer.clear();
+        self.held_incomplete_default_color_response = false;
         chunks
+    }
+
+    #[cfg(any(windows, test))]
+    fn flush_before_semantic_event(&mut self) -> Vec<Vec<u8>> {
+        if self.buffer.as_slice() == [ESC] {
+            self.host_color_replies_awaited = 0;
+            self.held_pending_host_reply_esc = false;
+        } else if starts_with_incomplete_default_color_response(&self.buffer) {
+            tracing::warn!(
+                len = self.buffer.len(),
+                "discarding host color response interrupted by semantic input"
+            );
+            self.buffer.clear();
+            self.host_color_replies_awaited = 0;
+            self.held_pending_host_reply_esc = false;
+            self.held_incomplete_default_color_response = false;
+            return Vec::new();
+        }
+        self.flush_timeout()
     }
 
     fn drain_available_chunks(&mut self) -> Vec<Vec<u8>> {
@@ -549,10 +594,7 @@ impl RawInputByteFramer {
             let Some((event, consumed)) = extract_one_event(&self.buffer) else {
                 break;
             };
-            if matches!(
-                event,
-                RawInputEvent::HostDefaultColor { .. } | RawInputEvent::HostPaletteColors { .. }
-            ) {
+            if matches!(event, RawInputEvent::HostDefaultColor { .. }) {
                 self.host_color_replies_awaited = self.host_color_replies_awaited.saturating_sub(1);
             } else if matches!(event, RawInputEvent::HostCellSizeReport { .. }) {
                 self.host_cell_size_replies_awaited =
@@ -568,6 +610,7 @@ impl RawInputByteFramer {
                 }
             }
             self.held_pending_host_reply_esc = false;
+            self.held_incomplete_default_color_response = false;
             chunks.push(self.buffer[..consumed].to_vec());
             self.buffer.drain(..consumed);
         }
@@ -626,7 +669,6 @@ pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEv
         .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
 }
 
-#[cfg(any(not(windows), test))]
 pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
     events
         .iter()
@@ -947,7 +989,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
         Some(ControlString::Incomplete {
             family: ControlStringFamily::Osc
         })
-    ) && matches!(buffer.get(..5), Some(b"\x1b]10;" | b"\x1b]11;"))
+    ) && matches!(
+        buffer.get(..5),
+        Some(b"\x1b]10;" | b"\x1b]11;" | b"\x1b]12;")
+    )
 }
 
 fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
@@ -1560,6 +1605,25 @@ mod tests {
                     b: 0x33,
                 }
             )]
+        );
+    }
+
+    #[test]
+    fn parses_host_cursor_color_response() {
+        let (RawInputEvent::HostDefaultColor { kind, color }, consumed) =
+            extract_one_event(b"\x1b]12;rgb:1212/3434/5656\x1b\\").unwrap()
+        else {
+            panic!("expected host cursor color response");
+        };
+        assert_eq!(consumed, 25);
+        assert_eq!(kind, DefaultColorKind::Cursor);
+        assert_eq!(
+            color,
+            RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
+            }
         );
     }
 
@@ -3067,7 +3131,36 @@ mod tests {
 
         assert!(framer.push(b"\x1b").is_empty());
         assert!(framer.flush_timeout().is_empty());
+        let chunks = framer.push(b"]12;#654321\x07");
+        assert_eq!(chunks.len(), 1);
+        let (event, _) = extract_one_event(&chunks[0]).unwrap();
+        assert!(matches!(
+            event,
+            RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Cursor,
+                color: RgbColor {
+                    r: 0x65,
+                    g: 0x43,
+                    b: 0x21
+                }
+            }
+        ));
+
+        assert!(framer.push(b"\x1b").is_empty());
         assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
+    }
+
+    #[test]
+    fn unterminated_default_color_response_is_bounded() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+
+        assert!(framer.push(b"\x1b]12;rgb:12").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert!(framer.push(b"user-input").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+
+        assert_eq!(framer.push(b"x"), vec![b"x".to_vec()]);
     }
 
     #[test]
@@ -3092,18 +3185,12 @@ mod tests {
 
     #[test]
     fn stops_holding_lone_escape_after_host_color_reply_completes() {
-        use std::fmt::Write as _;
-
         let mut framer = RawInputByteFramer::default();
         framer.host_color_query_sent();
-        let mut replies =
-            String::from("\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\");
-        for index in 0..=u8::MAX {
-            let _ = write!(replies, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
-        }
+        let replies = "\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\\x1b]12;rgb:aaaa/bbbb/cccc\x1b\\";
 
         let chunks = framer.push(replies.as_bytes());
-        assert_eq!(chunks.len(), 258);
+        assert_eq!(chunks.len(), 3);
 
         // Window closed: a later lone Escape flushes immediately.
         assert!(framer.push(b"\x1b").is_empty());

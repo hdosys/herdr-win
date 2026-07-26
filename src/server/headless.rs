@@ -7668,10 +7668,9 @@ next_tab = ""
         let mut state = AppState::test_new();
         let mut ws = crate::workspace::Workspace::test_new("test");
         let pane_id = ws.tabs[0].root_pane;
-        ws.insert_test_runtime(
-            pane_id,
-            crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 5, b"left"),
-        );
+        let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 5, b"left");
+        runtime.test_process_pty_bytes(b"\x1b]12;#112233\x07");
+        ws.insert_test_runtime(pane_id, runtime);
 
         state.workspaces = vec![ws];
         state.active = Some(0);
@@ -7695,6 +7694,11 @@ next_tab = ""
                 y: pane.inner_rect.y,
                 visible: true,
                 shape: cursor.as_ref().map(|c| c.shape).unwrap_or(0),
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                }),
             })
         );
     }
@@ -7731,6 +7735,7 @@ next_tab = ""
                 y: pane.inner_rect.y,
                 visible: false,
                 shape: cursor.as_ref().map(|c| c.shape).unwrap_or(0),
+                color: None,
             })
         );
     }
@@ -7832,6 +7837,7 @@ next_tab = ""
                 y: pane.inner_rect.y,
                 visible: true,
                 shape: state.cjk_ime_cursor_shape,
+                color: None,
             })
         );
     }
@@ -7909,6 +7915,7 @@ next_tab = ""
                 y: pane.inner_rect.y,
                 visible: true,
                 shape: state.cjk_ime_cursor_shape,
+                color: None,
             }),
             "fallback should anchor at pane top-left with the configured shape",
         );
@@ -10026,6 +10033,7 @@ next_tab = ""
                 y: expected.y,
                 visible: expected.visible,
                 shape: expected.shape,
+                color: expected.color,
             })
         );
     }

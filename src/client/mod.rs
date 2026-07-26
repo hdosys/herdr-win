@@ -50,6 +50,7 @@ use crate::protocol::{
 use crate::server::socket_paths::client_socket_path;
 
 static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+type SharedHostCursorColor = Arc<Mutex<Option<crate::terminal_theme::RgbColor>>>;
 
 // ---------------------------------------------------------------------------
 // Client state
@@ -98,6 +99,8 @@ struct ClientState {
     repaint_pending: bool,
     /// Whether this client draws the cursor into frame cells instead of using the host cursor.
     draw_host_cursor: bool,
+    /// Cursor fill color reported by the outer terminal through OSC 12.
+    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
 }
 
 #[derive(Debug, Default)]
@@ -234,6 +237,55 @@ impl ClientState {
     }
 }
 
+fn render_semantic_frame(state: &mut ClientState, frame_data: crate::protocol::FrameData) {
+    let frame_data = if state.draw_host_cursor {
+        render_ansi::frame_with_drawn_cursor(frame_data, state.host_cursor_color)
+    } else {
+        frame_data
+    };
+    let encoded = if state.draw_host_cursor {
+        state
+            .blit_encoder
+            .encode_with_suppressed_visible_cursor(&frame_data, state.repaint_pending)
+    } else {
+        state
+            .blit_encoder
+            .encode(&frame_data, state.repaint_pending)
+    };
+    let graphics = if state.kitty_graphics_enabled {
+        frame_data.graphics.as_slice()
+    } else {
+        &[]
+    };
+    let mut stdout = io::stdout();
+    let _ = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
+    let _ = stdout.flush();
+    state.blit_encoder.commit(frame_data, encoded);
+    state.repaint_pending = false;
+}
+
+fn update_host_cursor_color(
+    state: &mut ClientState,
+    restore_color: &SharedHostCursorColor,
+    color: crate::terminal_theme::RgbColor,
+) {
+    if state.host_cursor_color == Some(color) {
+        return;
+    }
+    let cached_frame = state
+        .draw_host_cursor
+        .then(|| state.blit_encoder.last_frame().cloned())
+        .flatten();
+    state.host_cursor_color = Some(color);
+    if let Ok(mut restore_color) = restore_color.lock() {
+        *restore_color = Some(color);
+    }
+    if let Some(frame) = cached_frame {
+        state.request_repaint();
+        render_semantic_frame(state, frame);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -359,6 +411,8 @@ fn setup_terminal_with_capabilities(
     enable_client_protocols: bool,
     mouse_capture: bool,
 ) -> io::Result<TerminalGuard> {
+    #[cfg(windows)]
+    let restore_windows_input_mode = windows_input_mode_value();
     ratatui::init();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let host_color_scheme_reports =
@@ -376,7 +430,7 @@ fn setup_terminal_with_capabilities(
         }
         push_keyboard_enhancement_flags()?;
     } else {
-        if should_query_host_terminal_theme() {
+        if host_color_scheme_reports_supported() {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
         if mouse_capture {
@@ -422,13 +476,18 @@ fn setup_terminal_with_capabilities(
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
         restored: false,
+        host_cursor_color: Arc::new(Mutex::new(None)),
         #[cfg(windows)]
-        restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
+        restore_windows_input_mode,
     })
 }
 
 fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
-    enable_client_protocols && should_query_host_terminal_theme()
+    enable_client_protocols && host_color_scheme_reports_supported()
+}
+
+fn host_color_scheme_reports_supported() -> bool {
+    !cfg!(windows)
 }
 
 /// Guard that restores the terminal when dropped.
@@ -436,6 +495,7 @@ struct TerminalGuard {
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
     restored: bool,
+    host_cursor_color: SharedHostCursorColor,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
 }
@@ -456,13 +516,28 @@ fn write_host_color_scheme_report_mode(
 fn write_terminal_restore_postlude(
     writer: &mut impl io::Write,
     reset_host_color_scheme_reports: bool,
+    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
 ) -> io::Result<()> {
     if reset_host_color_scheme_reports {
         writer.write_all(
             crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
         )?;
     }
-    // Restore a visible cursor and reset DECSCUSR back to the terminal default.
+    let cursor_color = host_cursor_color.map_or_else(
+        || {
+            crate::terminal_theme::osc_reset_default_color_sequence(
+                crate::terminal_theme::DefaultColorKind::Cursor,
+            )
+            .to_owned()
+        },
+        |color| {
+            crate::terminal_theme::osc_set_default_color_sequence(
+                crate::terminal_theme::DefaultColorKind::Cursor,
+                color,
+            )
+        },
+    );
+    writer.write_all(cursor_color.as_bytes())?;
     writer.write_all(b"\x1b[?25h\x1b[0 q")?;
     writer.flush()
 }
@@ -548,6 +623,20 @@ fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
 }
 
 #[cfg(windows)]
+fn windows_input_mode_value() -> Option<u32> {
+    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
+
+    let handle: HANDLE = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+
+    let mut mode = 0;
+    (unsafe { GetConsoleMode(handle, &mut mode) } != 0).then_some(mode)
+}
+
+#[cfg(windows)]
 fn restore_windows_input_mode_value(mode: u32) {
     use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Console::{GetStdHandle, SetConsoleMode, STD_INPUT_HANDLE};
@@ -583,6 +672,7 @@ fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
 fn restore_terminal_state(
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) -> io::Result<()> {
     let _ = clear_received_kitty_graphics(&mut io::stdout());
@@ -609,8 +699,11 @@ fn restore_terminal_state(
     }
 
     let restore_result = ratatui::try_restore();
-    let postlude_result =
-        write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
+    let postlude_result = write_terminal_restore_postlude(
+        &mut io::stdout(),
+        reset_host_color_scheme_reports,
+        host_cursor_color,
+    );
 
     #[cfg(windows)]
     if windows_vti_input_backend_enabled() && windows_win32_input_mode_enabled() {
@@ -665,9 +758,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
 impl TerminalGuard {
     fn restore(mut self) -> io::Result<()> {
         self.restored = true;
+        let host_cursor_color = self.host_cursor_color.lock().ok().and_then(|color| *color);
         restore_terminal_state(
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
+            host_cursor_color,
             #[cfg(windows)]
             self.restore_windows_input_mode,
         )
@@ -677,9 +772,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if !self.restored {
+            let host_cursor_color = self.host_cursor_color.lock().ok().and_then(|color| *color);
             let _ = restore_terminal_state(
                 self.reset_modify_other_keys,
                 self.reset_host_color_scheme_reports,
+                host_cursor_color,
                 #[cfg(windows)]
                 self.restore_windows_input_mode,
             );
@@ -1296,13 +1393,16 @@ fn run_client_with_mode(
     // Install a panic hook to restore the terminal on panic (same as monolithic).
     let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
     let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
+    let panic_host_cursor_color = terminal_guard.host_cursor_color.clone();
     #[cfg(windows)]
     let panic_restore_windows_input_mode = terminal_guard.restore_windows_input_mode;
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let host_cursor_color = panic_host_cursor_color.lock().ok().and_then(|color| *color);
         let _ = restore_terminal_state(
             panic_resets_modify_other_keys,
             panic_resets_host_color_scheme_reports,
+            host_cursor_color,
             #[cfg(windows)]
             panic_restore_windows_input_mode,
         );
@@ -1337,6 +1437,7 @@ fn run_client_with_mode(
             loop_config,
             negotiated_encoding,
             attach_escape,
+            terminal_guard.host_cursor_color.clone(),
         )
         .await
     });
@@ -1386,6 +1487,7 @@ async fn run_client_loop(
     config: ClientLoopConfig,
     negotiated_encoding: RenderEncoding,
     attach_escape: Option<AttachEscapeState>,
+    restore_host_cursor_color: SharedHostCursorColor,
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
@@ -1410,6 +1512,7 @@ async fn run_client_loop(
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
         draw_host_cursor,
+        host_cursor_color: None,
     };
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
@@ -1557,6 +1660,14 @@ async fn run_client_loop(
                     }
                 } else {
                     let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
+                    if let [crate::raw_input::RawInputEvent::HostDefaultColor {
+                        kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                        color,
+                    }] = events.as_slice()
+                    {
+                        update_host_cursor_color(&mut state, &restore_host_cursor_color, *color);
+                        continue;
+                    }
                     if crate::raw_input::events_require_host_surface_redraw(
                         &events,
                         state.redraw_on_focus_gained,
@@ -1621,8 +1732,29 @@ async fn run_client_loop(
                 }
             }
             #[cfg(windows)]
-            ClientLoopEvent::StdinEvents(events) => {
+            ClientLoopEvent::StdinEvents(mut events) => {
                 if state.attach_escape.is_some() {
+                    continue;
+                }
+                for event in &events {
+                    if let crate::protocol::ClientInputEvent::HostDefaultColor {
+                        kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                        color,
+                    } = event
+                    {
+                        update_host_cursor_color(&mut state, &restore_host_cursor_color, *color);
+                    }
+                }
+                events.retain(|event| {
+                    !matches!(
+                        event,
+                        crate::protocol::ClientInputEvent::HostDefaultColor {
+                            kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                            ..
+                        }
+                    )
+                });
+                if events.is_empty() {
                     continue;
                 }
                 if should_bridge_clipboard_image_events(
@@ -1652,6 +1784,9 @@ async fn run_client_loop(
                 ) {
                     state.request_repaint();
                 }
+                if crate::raw_input::events_require_host_terminal_theme_query(&raw_events) {
+                    query_host_terminal_theme();
+                }
                 let msg = ClientMessage::InputEvents { events };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
@@ -1673,32 +1808,7 @@ async fn run_client_loop(
             }
             ClientLoopEvent::ServerMessage(msg) => match msg {
                 ServerMessage::Frame(frame_data) => {
-                    let frame_data = if state.draw_host_cursor {
-                        render_ansi::frame_with_drawn_cursor(frame_data)
-                    } else {
-                        frame_data
-                    };
-                    let encoded = if state.draw_host_cursor {
-                        state.blit_encoder.encode_with_suppressed_visible_cursor(
-                            &frame_data,
-                            state.repaint_pending,
-                        )
-                    } else {
-                        state
-                            .blit_encoder
-                            .encode(&frame_data, state.repaint_pending)
-                    };
-                    let mut stdout = io::stdout();
-                    let graphics = if state.kitty_graphics_enabled {
-                        frame_data.graphics.as_slice()
-                    } else {
-                        &[]
-                    };
-                    let _ =
-                        write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
-                    let _ = stdout.flush();
-                    state.blit_encoder.commit(frame_data, encoded);
-                    state.repaint_pending = false;
+                    render_semantic_frame(&mut state, frame_data);
                 }
                 ServerMessage::Terminal(frame) => {
                     if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
@@ -2567,13 +2677,11 @@ fn query_host_terminal_theme() {
 }
 
 fn should_query_host_terminal_theme() -> bool {
-    !cfg!(windows)
+    true
 }
 
 fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
-    let query = crate::terminal_theme::host_terminal_theme_query_sequence(
-        crate::platform::should_query_host_terminal_palette(),
-    );
+    let query = crate::terminal_theme::host_terminal_theme_query_sequence();
     writer.write_all(query.as_bytes())?;
     writer.flush()
 }
@@ -3001,10 +3109,7 @@ mod tests {
         write_host_terminal_theme_query(&mut output).unwrap();
         assert_eq!(
             output,
-            crate::terminal_theme::host_terminal_theme_query_sequence(
-                crate::platform::should_query_host_terminal_palette(),
-            )
-            .as_bytes()
+            crate::terminal_theme::host_terminal_theme_query_sequence().as_bytes()
         );
         assert!(!output
             .windows(crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.len())
@@ -3038,8 +3143,8 @@ mod tests {
     }
 
     #[test]
-    fn host_terminal_theme_query_is_disabled_on_windows() {
-        assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
+    fn host_terminal_theme_query_is_enabled_on_all_platforms() {
+        assert!(should_query_host_terminal_theme());
     }
 
     #[test]
@@ -3088,20 +3193,36 @@ mod tests {
     #[test]
     fn terminal_restore_postlude_restores_visible_default_cursor() {
         let mut output = Vec::new();
-        write_terminal_restore_postlude(&mut output, false).unwrap();
-        assert_eq!(output, b"\x1b[?25h\x1b[0 q");
+        write_terminal_restore_postlude(&mut output, false, None).unwrap();
+        assert_eq!(output, b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
+    }
+
+    #[test]
+    fn terminal_restore_postlude_restores_queried_cursor_color() {
+        let mut output = Vec::new();
+        write_terminal_restore_postlude(
+            &mut output,
+            false,
+            Some(crate::terminal_theme::RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }),
+        )
+        .unwrap();
+        assert_eq!(output, b"\x1b]12;rgb:12/34/56\x1b\\\x1b[?25h\x1b[0 q");
     }
 
     #[test]
     fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
         let mut output = Vec::new();
-        write_terminal_restore_postlude(&mut output, true).unwrap();
+        write_terminal_restore_postlude(&mut output, true, None).unwrap();
 
         let mut expected = Vec::new();
         expected.extend_from_slice(
             crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
         );
-        expected.extend_from_slice(b"\x1b[?25h\x1b[0 q");
+        expected.extend_from_slice(b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
         assert_eq!(output, expected);
     }
 

@@ -220,6 +220,7 @@ impl CursorTrackingBackend {
             y: pos.y,
             visible: true,
             shape: 0,
+            color: None,
         })
     }
 }
@@ -361,6 +362,7 @@ fn popup_terminal_cursor(
         y: cursor.y,
         visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
         shape: cursor.shape,
+        color: cursor.color,
     })
 }
 
@@ -388,6 +390,7 @@ pub(crate) fn render_terminal_virtual(
             y: cursor.y,
             visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
             shape: cursor.shape,
+            color: cursor.color,
         })
         .or_else(|| {
             (!suppress_cursor)

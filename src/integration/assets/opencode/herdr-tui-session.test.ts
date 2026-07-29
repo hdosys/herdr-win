@@ -36,6 +36,7 @@ beforeEach(() => {
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
+  delete process.env.HERDR_OPENCODE_SUBAGENT_SESSION_ID;
 });
 
 afterEach(() => {
@@ -154,6 +155,20 @@ test("does not replace the root session with a selected child session", async ()
 
   expect(requests).toHaveLength(1);
   expect(requestParam(requests[0], "agent_session_id")).toBe("root-session");
+});
+
+test("reports the child session owned by a dedicated subagent pane", async () => {
+  process.env.HERDR_OPENCODE_SUBAGENT_SESSION_ID = "child-session";
+  const plugin = await loadPlugin();
+  const tui = fakeApi();
+  tui.addSession({ id: "root-session" });
+  tui.addSession({ id: "child-session", parentID: "root-session" });
+  tui.select("child-session");
+
+  await plugin.tui(tui.api);
+
+  expect(requests).toHaveLength(1);
+  expect(requestParam(requests[0], "agent_session_id")).toBe("child-session");
 });
 
 test("stops route polling when the TUI plugin is disposed", async () => {

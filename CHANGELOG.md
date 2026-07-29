@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

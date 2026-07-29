@@ -1,7 +1,7 @@
 // installed by herdr
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // HERDR_INTEGRATION_ID=opencode-tui
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=14
 
 import net from "node:net";
 
@@ -9,6 +9,7 @@ const SOURCE = "herdr:opencode";
 const AGENT = "opencode";
 const ROUTE_POLL_INTERVAL_MS = 100;
 const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
+const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
 
 function requestOnce(sessionID) {
   const paneId = process.env.HERDR_PANE_ID;
@@ -72,7 +73,11 @@ export default {
         typeof sessionID === "string" && sessionID
           ? api.state.session.get(sessionID)
           : undefined;
-      if (!session || session.parentID) {
+      const subagentSessionID = process.env[SUBAGENT_SESSION_ENV];
+      const ownsSession = subagentSessionID
+        ? sessionID === subagentSessionID
+        : !session?.parentID;
+      if (!session || !ownsSession) {
         selectedSessionID = undefined;
         retryIndex = 0;
         nextReportAt = 0;

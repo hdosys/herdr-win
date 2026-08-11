@@ -928,7 +928,7 @@ fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Res
     let mut lines = stdout.lines();
     let version = lines.next().unwrap_or_default().trim();
     let status = lines.next().unwrap_or_default();
-    Ok(version == format!("herdr {}", current_version())
+    Ok(version == crate::build_info::cli_version()
         && parse_client_status_json(status)
             .map(|status| status.protocol == CURRENT_PROTOCOL)
             .unwrap_or(false))

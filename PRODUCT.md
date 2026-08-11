@@ -16,6 +16,9 @@ tests remain the detailed implementation truth.
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
   `herdr` and stay compatible with upstream.
+- `herdr --version` begins with `herdr-win` followed by the canonical runtime
+  version, so integrations can require fork-specific features without changing the
+  executable, command, state, or protocol identity.
 - herdr-win snapshots currently target Windows x86_64. General CLI, TUI,
   configuration, integration, and issue behavior remains documented and owned
   upstream unless a maintained Windows delta explicitly changes it.

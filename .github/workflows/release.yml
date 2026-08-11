@@ -1757,7 +1757,7 @@ jobs:
             }
             $managed = Join-Path $installRoot "bin\herdr.exe"
             $version = Invoke-BoundedCaptured -FilePath $managed -Arguments @("--version")
-            if ($version -cne "herdr $env:BASE_VERSION-preview.$env:BUILD_ID") {
+            if ($version -cne "herdr-win $env:BASE_VERSION-preview.$env:BUILD_ID") {
               throw "published installer returned unexpected managed version: $version"
             }
             $managedUpdate = Invoke-BoundedCaptured -FilePath $managed -Arguments @("update")

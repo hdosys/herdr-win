@@ -182,6 +182,10 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         ):
             self.assertIn(required, registry)
         self.assertNotIn("SetEnvironmentVariable", registry)
+        self.assertNotIn("refusing to modify an ARP registration", registry)
+        self.assertIn(
+            "Windows Settings > Apps > Installed apps", text(HELPER_FILES)
+        )
 
         for required in (
             'join(".agents").join("skills")',
@@ -326,7 +330,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertIn('"/WX"', packager)
         self.assertIn("Invoke-HerdrIdentityQuery", packager)
         self.assertIn('"--herdr-private-launcher-build-id-v1"', packager)
-        self.assertIn('ExpectedOutput "herdr $DisplayVersion"', packager)
+        self.assertIn('ExpectedOutput "herdr-win $DisplayVersion"', packager)
 
     def test_real_fault_matrix_covers_retries_and_pending_activation(self) -> None:
         fault = text(FAULT_TEST)

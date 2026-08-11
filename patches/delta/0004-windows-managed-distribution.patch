@@ -1,4 +1,4 @@
-From 80f1acdd245846cade2524e14a56a55e3e59a52b Mon Sep 17 00:00:00 2001
+From 81087a9282c6ff6646840d6b3fce8f7ffeafbe33 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 23:02:52 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -24,7 +24,7 @@ Refs herdrdev/herdr#1947
  scripts/test_preview.py                       |  199 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  452 ++++
+ scripts/test_windows_installer.py             |  456 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
  scripts/windows_installer_fault_test.ps1      | 1133 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
@@ -32,28 +32,28 @@ Refs herdrdev/herdr#1947
  src/app/input/navigate.rs                     |    2 +-
  src/bin/herdr-installer-helper.rs             |   41 +
  src/bin/herdr-launcher.rs                     |   36 +
- src/build_info.rs                             |    7 +-
+ src/build_info.rs                             |   15 +-
  src/cli.rs                                    |   17 +-
  src/cli/status.rs                             |   12 +-
  src/config.rs                                 |    2 +-
  src/config/model.rs                           |   10 -
- src/distribution.rs                           |   40 +
- src/main.rs                                   |   19 +-
+ src/distribution.rs                           |   42 +
+ src/main.rs                                   |   21 +-
  src/managed_install.rs                        |  318 +++
  src/platform/mod.rs                           |   25 +
  src/platform/windows.rs                       |  158 +-
  src/platform/windows/installer_helper.rs      |  215 ++
- .../windows/installer_helper_files.rs         |  949 +++++++
- .../windows/installer_helper_lifecycle.rs     | 2274 +++++++++++++++++
- .../windows/installer_helper_registry.rs      |  880 +++++++
+ .../windows/installer_helper_files.rs         |  963 +++++++
+ .../windows/installer_helper_lifecycle.rs     | 2267 +++++++++++++++++
+ .../windows/installer_helper_registry.rs      |  878 +++++++
  .../windows/installer_helper_skills.rs        |  408 +++
  src/platform/windows/launcher.rs              | 1084 ++++++++
  src/platform/windows/managed_install.rs       |  689 +++++
- src/remote/attach.rs                          |   14 +-
+ src/remote/attach.rs                          |   16 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
  src/update.rs                                 |  878 ++++++-
- 48 files changed, 10978 insertions(+), 388 deletions(-)
+ 48 files changed, 10999 insertions(+), 390 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -52239,7 +52239,7 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  if __name__ == "__main__":
 diff --git a/scripts/package_windows_installer.ps1 b/scripts/package_windows_installer.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..cde59d33777f1b70abf1eae7cee8059cdd1b35c2
+index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e26f77a76
 --- /dev/null
 +++ b/scripts/package_windows_installer.ps1
 @@ -0,0 +1,537 @@
@@ -52687,7 +52687,7 @@ index 0000000000000000000000000000000000000000..cde59d33777f1b70abf1eae7cee8059c
 +[void](Invoke-HerdrIdentityQuery `
 +    -Executable $payloadExe `
 +    -Arguments @("--version") `
-+    -ExpectedOutput "herdr $DisplayVersion" `
++    -ExpectedOutput "herdr-win $DisplayVersion" `
 +    -Description "Staged Herdr --version")
 +[void](Invoke-HerdrIdentityQuery `
 +    -Executable $LauncherExe `
@@ -53366,10 +53366,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..60550b5ba4221bf14d9583a0bc8b6f837179bc7b
+index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f2753603c
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,452 @@
+@@ -0,0 +1,456 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -53554,6 +53554,10 @@ index 0000000000000000000000000000000000000000..60550b5ba4221bf14d9583a0bc8b6f83
 +        ):
 +            self.assertIn(required, registry)
 +        self.assertNotIn("SetEnvironmentVariable", registry)
++        self.assertNotIn("refusing to modify an ARP registration", registry)
++        self.assertIn(
++            "Windows Settings > Apps > Installed apps", text(HELPER_FILES)
++        )
 +
 +        for required in (
 +            'join(".agents").join("skills")',
@@ -53698,7 +53702,7 @@ index 0000000000000000000000000000000000000000..60550b5ba4221bf14d9583a0bc8b6f83
 +        self.assertIn('"/WX"', packager)
 +        self.assertIn("Invoke-HerdrIdentityQuery", packager)
 +        self.assertIn('"--herdr-private-launcher-build-id-v1"', packager)
-+        self.assertIn('ExpectedOutput "herdr $DisplayVersion"', packager)
++        self.assertIn('ExpectedOutput "herdr-win $DisplayVersion"', packager)
 +
 +    def test_real_fault_matrix_covers_retries_and_pending_activation(self) -> None:
 +        fault = text(FAULT_TEST)
@@ -55311,7 +55315,7 @@ index 0000000000000000000000000000000000000000..ddc4aa888719ebd71b62bf8a9aecb456
 +#[cfg(not(windows))]
 +fn main() {}
 diff --git a/src/build_info.rs b/src/build_info.rs
-index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..40c8b3eddcc6a0c0774b03a5517d877603c1052d 100644
+index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..6eaf5cd2c33c2b7e250d6e023c866e1665941820 100644
 --- a/src/build_info.rs
 +++ b/src/build_info.rs
 @@ -3,7 +3,7 @@
@@ -55323,7 +55327,18 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..40c8b3eddcc6a0c0774b03a5517d8776
  }
  
  pub fn build_id() -> Option<&'static str> {
-@@ -38,7 +38,8 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
+@@ -20,6 +20,10 @@ pub fn version() -> String {
+     }
+ }
+ 
++pub fn cli_version() -> String {
++    format!("{} {}", crate::distribution::CLI_VERSION_NAME, version())
++}
++
+ pub fn is_preview() -> bool {
+     channel() == "preview"
+ }
+@@ -38,7 +42,12 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
  #[cfg(test)]
  mod tests {
      #[test]
@@ -55332,6 +55347,10 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..40c8b3eddcc6a0c0774b03a5517d8776
 +    fn distribution_channel_owns_local_build_identity() {
 +        assert_eq!(super::channel(), "preview");
 +        assert!(super::version().starts_with(&format!("{}-preview", super::BASE_VERSION)));
++        assert_eq!(
++            super::cli_version(),
++            format!("herdr-win {}", super::version())
++        );
      }
  }
 diff --git a/src/cli.rs b/src/cli.rs
@@ -55459,12 +55478,13 @@ index e56ac087226af0bb995b6678980eccf828156d92..2751ab2cadc32380db14644d98703bb8
      }
 diff --git a/src/distribution.rs b/src/distribution.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..aa63fa9f40734f7566eccd9ad366bf5ff4449243
+index 0000000000000000000000000000000000000000..4de017f78e032f802d0d8a4f0bb7474202a3d91e
 --- /dev/null
 +++ b/src/distribution.rs
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,42 @@
 +//! Compile-time distribution configuration for herdr-win.
 +
++pub(crate) const CLI_VERSION_NAME: &str = "herdr-win";
 +pub(crate) const UPDATE_CHANNEL: &str = "preview";
 +pub(crate) const PREVIEW_MANIFEST_URL: &str =
 +    "https://raw.githubusercontent.com/hdosys/herdr-win/master/website/preview.json";
@@ -55484,6 +55504,7 @@ index 0000000000000000000000000000000000000000..aa63fa9f40734f7566eccd9ad366bf5f
 +
 +    #[test]
 +    fn preview_distribution_is_fork_owned() {
++        assert_eq!(CLI_VERSION_NAME, "herdr-win");
 +        assert_eq!(UPDATE_CHANNEL, "preview");
 +        assert_eq!(STABLE_MANIFEST_URL, PREVIEW_MANIFEST_URL);
 +        assert_eq!(
@@ -55504,7 +55525,7 @@ index 0000000000000000000000000000000000000000..aa63fa9f40734f7566eccd9ad366bf5f
 +    }
 +}
 diff --git a/src/main.rs b/src/main.rs
-index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54c7cd46dc7d3af572d3e4b7be85d0a41c98330a 100644
+index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b585f712ec4 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -63,6 +63,7 @@ mod cli;
@@ -55569,6 +55590,15 @@ index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54c7cd46dc7d3af572d3e4b7be85d0a4
              (
                  "herdr api <subcommand>",
                  "Inspect socket API metadata and live runtime state",
+@@ -688,7 +685,7 @@ fn main() -> io::Result<()> {
+     }
+ 
+     if args.iter().any(|a| a == "--version" || a == "-V") {
+-        println!("herdr {}", crate::build_info::version());
++        println!("{}", crate::build_info::cli_version());
+         return Ok(());
+     }
+ 
 diff --git a/src/managed_install.rs b/src/managed_install.rs
 new file mode 100644
 index 0000000000000000000000000000000000000000..fcb64ad4e1e4f551ed12581c5253165bb05d0efc
@@ -56363,10 +56393,10 @@ index 0000000000000000000000000000000000000000..368586be9ff394f7cf8bac71488ccf22
 +}
 diff --git a/src/platform/windows/installer_helper_files.rs b/src/platform/windows/installer_helper_files.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..28500eea757db1bbc0aa1ec2607a250bfdeb2ce6
+index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4cffcf7c81
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_files.rs
-@@ -0,0 +1,949 @@
+@@ -0,0 +1,963 @@
 +use std::{
 +    collections::{BTreeMap, BTreeSet},
 +    ffi::{OsStr, OsString},
@@ -56438,6 +56468,12 @@ index 0000000000000000000000000000000000000000..28500eea757db1bbc0aa1ec2607a250b
 +
 +pub(crate) fn invalid_data(message: impl Into<String>) -> io::Error {
 +    io::Error::new(io::ErrorKind::InvalidData, message.into())
++}
++
++pub(crate) fn incompatible_installation() -> io::Error {
++    invalid_data(
++        "An existing Herdr installation was created by an older setup and cannot be updated directly. Uninstall Herdr or Herdr Win from Windows Settings > Apps > Installed apps, then run this setup again. Your existing installation was not changed.",
++    )
 +}
 +
 +pub(crate) fn contextual(err: io::Error, context: impl Into<String>) -> io::Error {
@@ -57315,13 +57351,21 @@ index 0000000000000000000000000000000000000000..28500eea757db1bbc0aa1ec2607a250b
 +            assert!(validate_manifest_relative_path(invalid).is_err());
 +        }
 +    }
++
++    #[test]
++    fn incompatible_installation_error_gives_the_next_action() {
++        let message = incompatible_installation().to_string();
++        assert!(message.contains("Windows Settings > Apps > Installed apps"));
++        assert!(message.contains("then run this setup again"));
++        assert!(message.contains("was not changed"));
++    }
 +}
 diff --git a/src/platform/windows/installer_helper_lifecycle.rs b/src/platform/windows/installer_helper_lifecycle.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..5f992ecaa8be7400906de1d5f3f561c43eb48cbb
+index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660a630ae26
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_lifecycle.rs
-@@ -0,0 +1,2274 @@
+@@ -0,0 +1,2267 @@
 +use std::{
 +    collections::BTreeSet,
 +    ffi::{OsStr, OsString},
@@ -58088,7 +58132,7 @@ index 0000000000000000000000000000000000000000..5f992ecaa8be7400906de1d5f3f561c4
 +    let known = skills::read_managed_skill_hashes(&skill_hashes, Some(&skill))?;
 +    remove_stale_staging(install_root);
 +    if unsupported_launcher_hop(install_root)? {
-+        return Err(incompatible_root(install_root));
++        return Err(files::incompatible_installation());
 +    }
 +    let mut kind = match classify_root(install_root, true) {
 +        Ok(value) => value,
@@ -59080,14 +59124,7 @@ index 0000000000000000000000000000000000000000..5f992ecaa8be7400906de1d5f3f561c4
 +    if validate_uninstall_cleanup_root(install_root).is_ok() {
 +        return Ok(RootKind::UninstallResidual);
 +    }
-+    Err(incompatible_root(install_root))
-+}
-+
-+fn incompatible_root(root: &Path) -> io::Error {
-+    files::invalid_data(format!(
-+        "The existing Herdr installation is not compatible with this setup. Uninstall the existing Herdr or Herdr Win entry from Windows Installed Apps, then run setup again. Setup preserved: {}",
-+        root.display()
-+    ))
++    Err(files::incompatible_installation())
 +}
 +
 +fn unsupported_launcher_hop(install_root: &Path) -> io::Result<bool> {
@@ -59598,10 +59635,10 @@ index 0000000000000000000000000000000000000000..5f992ecaa8be7400906de1d5f3f561c4
 +}
 diff --git a/src/platform/windows/installer_helper_registry.rs b/src/platform/windows/installer_helper_registry.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..aa3fb8508590d2c54ce7a85a4b4c5c2f97841953
+index 0000000000000000000000000000000000000000..50a2f24d83b519c64f54a74c9c9247578908e083
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_registry.rs
-@@ -0,0 +1,880 @@
+@@ -0,0 +1,878 @@
 +use std::{
 +    collections::{BTreeMap, BTreeSet},
 +    ffi::OsStr,
@@ -60345,9 +60382,7 @@ index 0000000000000000000000000000000000000000..aa3fb8508590d2c54ce7a85a4b4c5c2f
 +        || dword("NoModify")? != 1
 +        || dword("NoRepair")? != 1
 +    {
-+        return Err(invalid_data(
-+            "refusing to modify an ARP registration not owned by this Herdr install",
-+        ));
++        return Err(super::installer_helper_files::incompatible_installation());
 +    }
 +    let optional_path_dword = |name| match key.query(name)? {
 +        None => Ok(0),
@@ -62682,7 +62717,7 @@ index 0000000000000000000000000000000000000000..569b245b5b144658ae4f23d5aa798a44
 +    io::Error::new(io::ErrorKind::InvalidData, message)
 +}
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index 2f31e76223bbd4125e236810c2c6602d1f2e07a5..a9ed267c4dad535ee9cb3f4302cbfab9ab8b39e1 100644
+index 2f31e76223bbd4125e236810c2c6602d1f2e07a5..5517a26849e0ac6ca2b707a41258e29b28118a62 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -23,14 +23,16 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
@@ -62704,6 +62739,15 @@ index 2f31e76223bbd4125e236810c2c6602d1f2e07a5..a9ed267c4dad535ee9cb3f4302cbfab9
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
  pub(crate) enum RemoteKeybindings {
      Local,
+@@ -926,7 +928,7 @@ fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Res
+     let mut lines = stdout.lines();
+     let version = lines.next().unwrap_or_default().trim();
+     let status = lines.next().unwrap_or_default();
+-    Ok(version == format!("herdr {}", current_version())
++    Ok(version == crate::build_info::cli_version()
+         && parse_client_status_json(status)
+             .map(|status| status.protocol == CURRENT_PROTOCOL)
+             .unwrap_or(false))
 @@ -1508,6 +1510,8 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
      let output = crate::noninteractive_process::curl_command()
          .args([

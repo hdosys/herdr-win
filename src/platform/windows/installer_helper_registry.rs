@@ -741,9 +741,7 @@ pub(crate) fn assert_arp_ownership(install_root: &Path) -> io::Result<()> {
         || dword("NoModify")? != 1
         || dword("NoRepair")? != 1
     {
-        return Err(invalid_data(
-            "refusing to modify an ARP registration not owned by this Herdr install",
-        ));
+        return Err(super::installer_helper_files::incompatible_installation());
     }
     let optional_path_dword = |name| match key.query(name)? {
         None => Ok(0),

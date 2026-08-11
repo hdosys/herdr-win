@@ -71,6 +71,12 @@ pub(crate) fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+pub(crate) fn incompatible_installation() -> io::Error {
+    invalid_data(
+        "An existing Herdr installation was created by an older setup and cannot be updated directly. Uninstall Herdr or Herdr Win from Windows Settings > Apps > Installed apps, then run this setup again. Your existing installation was not changed.",
+    )
+}
+
 pub(crate) fn contextual(err: io::Error, context: impl Into<String>) -> io::Error {
     io::Error::new(err.kind(), format!("{}: {err}", context.into()))
 }
@@ -945,5 +951,13 @@ mod tests {
         for invalid in ["", "/root", "../escape", "a/../b", "space name"] {
             assert!(validate_manifest_relative_path(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn incompatible_installation_error_gives_the_next_action() {
+        let message = incompatible_installation().to_string();
+        assert!(message.contains("Windows Settings > Apps > Installed apps"));
+        assert!(message.contains("then run this setup again"));
+        assert!(message.contains("was not changed"));
     }
 }

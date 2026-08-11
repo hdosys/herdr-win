@@ -20,6 +20,10 @@ pub fn version() -> String {
     }
 }
 
+pub fn cli_version() -> String {
+    format!("{} {}", crate::distribution::CLI_VERSION_NAME, version())
+}
+
 pub fn is_preview() -> bool {
     channel() == "preview"
 }
@@ -41,5 +45,9 @@ mod tests {
     fn distribution_channel_owns_local_build_identity() {
         assert_eq!(super::channel(), "preview");
         assert!(super::version().starts_with(&format!("{}-preview", super::BASE_VERSION)));
+        assert_eq!(
+            super::cli_version(),
+            format!("herdr-win {}", super::version())
+        );
     }
 }

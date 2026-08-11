@@ -78,8 +78,11 @@ Windows x86_64 is the managed distribution target. Each release also carries mat
 Download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from [Releases](https://github.com/hdosys/herdr-win/releases) and run it. Setup installs for the current user without administrator access, adds `herdr` to the user `PATH`, and registers an uninstaller. Open a new terminal and run:
 
 ```powershell
+herdr --version
 herdr
 ```
+
+`herdr --version` begins with `herdr-win` so integrations can identify this distribution and its Windows-specific features.
 
 Running a newer setup over a current managed installation updates it in place and repairs incomplete current installer registration.
 

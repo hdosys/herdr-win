@@ -764,7 +764,7 @@ fn install_layout(
     let known = skills::read_managed_skill_hashes(&skill_hashes, Some(&skill))?;
     remove_stale_staging(install_root);
     if unsupported_launcher_hop(install_root)? {
-        return Err(incompatible_root(install_root));
+        return Err(files::incompatible_installation());
     }
     let mut kind = match classify_root(install_root, true) {
         Ok(value) => value,
@@ -1756,14 +1756,7 @@ fn classify_root(install_root: &Path, allow_missing_helper: bool) -> io::Result<
     if validate_uninstall_cleanup_root(install_root).is_ok() {
         return Ok(RootKind::UninstallResidual);
     }
-    Err(incompatible_root(install_root))
-}
-
-fn incompatible_root(root: &Path) -> io::Error {
-    files::invalid_data(format!(
-        "The existing Herdr installation is not compatible with this setup. Uninstall the existing Herdr or Herdr Win entry from Windows Installed Apps, then run setup again. Setup preserved: {}",
-        root.display()
-    ))
+    Err(files::incompatible_installation())
 }
 
 fn unsupported_launcher_hop(install_root: &Path) -> io::Result<bool> {

@@ -1,5 +1,6 @@
 //! Compile-time distribution configuration for herdr-win.
 
+pub(crate) const CLI_VERSION_NAME: &str = "herdr-win";
 pub(crate) const UPDATE_CHANNEL: &str = "preview";
 pub(crate) const PREVIEW_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/hdosys/herdr-win/master/website/preview.json";
@@ -19,6 +20,7 @@ mod tests {
 
     #[test]
     fn preview_distribution_is_fork_owned() {
+        assert_eq!(CLI_VERSION_NAME, "herdr-win");
         assert_eq!(UPDATE_CHANNEL, "preview");
         assert_eq!(STABLE_MANIFEST_URL, PREVIEW_MANIFEST_URL);
         assert_eq!(

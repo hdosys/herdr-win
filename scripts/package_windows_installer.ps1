@@ -442,7 +442,7 @@ if ($InstallerHelperExe.Equals($payloadExe, [System.StringComparison]::OrdinalIg
 [void](Invoke-HerdrIdentityQuery `
     -Executable $payloadExe `
     -Arguments @("--version") `
-    -ExpectedOutput "herdr $DisplayVersion" `
+    -ExpectedOutput "herdr-win $DisplayVersion" `
     -Description "Staged Herdr --version")
 [void](Invoke-HerdrIdentityQuery `
     -Executable $LauncherExe `

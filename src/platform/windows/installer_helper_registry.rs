@@ -379,6 +379,10 @@ fn path_entry_equal(left: &str, right: &str, expand: bool) -> bool {
     )
 }
 
+fn raw_owned_path_entry_equal(candidate: &str, owned_entry: &str) -> bool {
+    Path::new(candidate).is_absolute() && candidate == owned_entry
+}
+
 pub(crate) fn add_user_path(
     bin_dir: &Path,
     previous_ownership: PathOwnership,
@@ -567,7 +571,10 @@ fn update_user_path(
             None,
         ));
     }
-    let Some(index) = segments.iter().position(|segment| segment == &entry) else {
+    let Some(index) = segments
+        .iter()
+        .position(|segment| raw_owned_path_entry_equal(segment, &entry))
+    else {
         return Ok((
             PathUpdate {
                 changed: false,
@@ -864,6 +871,16 @@ mod tests {
             r#""C:\Users\Example\Herdr\bin\""#,
             r"c:\users\example\herdr\bin",
             false,
+        ));
+    }
+
+    #[test]
+    fn raw_path_removal_accepts_literal_percent_and_rejects_expression_tokens() {
+        let literal = r"C:\Users\Percent%Name\AppData\Local\Programs\Herdr\bin";
+        assert!(raw_owned_path_entry_equal(literal, literal));
+        assert!(!raw_owned_path_entry_equal(
+            r"%LOCALAPPDATA%\Programs\Herdr\bin",
+            r"C:\Users\Example\AppData\Local\Programs\Herdr\bin"
         ));
     }
 

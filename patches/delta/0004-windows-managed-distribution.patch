@@ -1,4 +1,4 @@
-From 6f99011e7d27390ebd8942cb2fb51382b8d081a0 Mon Sep 17 00:00:00 2001
+From a075d7b84202c0b30abc14465048a16411990fd5 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 23:02:52 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -24,7 +24,7 @@ Refs herdrdev/herdr#1947
  scripts/test_preview.py                       |  199 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  467 ++++
+ scripts/test_windows_installer.py             |  476 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
  scripts/windows_installer_fault_test.ps1      | 1152 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
@@ -44,8 +44,8 @@ Refs herdrdev/herdr#1947
  src/platform/windows.rs                       |  158 +-
  src/platform/windows/installer_helper.rs      |  215 ++
  .../windows/installer_helper_files.rs         | 1014 +++++++
- .../windows/installer_helper_lifecycle.rs     | 2414 +++++++++++++++++
- .../windows/installer_helper_registry.rs      |  878 ++++++
+ .../windows/installer_helper_lifecycle.rs     | 2419 +++++++++++++++++
+ .../windows/installer_helper_registry.rs      |  895 ++++++
  .../windows/installer_helper_skills.rs        |  408 +++
  src/platform/windows/launcher.rs              | 1084 ++++++++
  src/platform/windows/managed_install.rs       |  689 +++++
@@ -53,7 +53,7 @@ Refs herdrdev/herdr#1947
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
  src/update.rs                                 |  878 +++++-
- 48 files changed, 11351 insertions(+), 390 deletions(-)
+ 48 files changed, 11382 insertions(+), 390 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -53462,10 +53462,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb696cf81eb7
+index 0000000000000000000000000000000000000000..83ffb3f2ba93e67211159564edee3c0c897b0608
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,467 @@
+@@ -0,0 +1,476 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -53624,6 +53624,11 @@ index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb69
 +        self.assertNotIn("ManagedLegacy", lifecycle)
 +        self.assertNotIn("installer-helper.ps1", lifecycle)
 +        self.assertNotIn("installer-lifecycle.lock", lifecycle)
++        self.assertIn(
++            'const LIFECYCLE_MUTEX_NAME: &str = r"Local\\HerdrWinInstallerLifecycle";',
++            lifecycle,
++        )
++        self.assertNotIn("HerdrWinInstallerLifecycle-v", lifecycle)
 +        self.assertLess(
 +            lifecycle.index("acquire_lifecycle_lock", lifecycle.index("pub(crate) fn install")),
 +            lifecycle.index("registry::assert_arp_ownership", lifecycle.index("pub(crate) fn install")),
@@ -53657,6 +53662,8 @@ index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb69
 +            self.assertIn(required, registry)
 +        self.assertNotIn("SetEnvironmentVariable", registry)
 +        self.assertNotIn("refusing to modify an ARP registration", registry)
++        self.assertIn("raw_owned_path_entry_equal", registry)
++        self.assertIn("%LOCALAPPDATA%\\Programs\\Herdr\\bin", registry)
 +        self.assertIn(
 +            "Windows Settings > Apps > Installed apps", text(HELPER_FILES)
 +        )
@@ -53749,6 +53756,7 @@ index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb69
 +        self.assertIn('StrCmp $HelperExitCode "error"', nsi)
 +        self.assertIn('StrCmp $HelperExitCode "timeout"', nsi)
 +        self.assertIn('!define APP_USER_PROFILE_ROOT "$PROFILE"', nsi)
++        self.assertNotIn("REPLACED_EXECUTABLE", nsi + text(PACKAGER))
 +        self.assertIn("RequestExecutionLevel user", nsi)
 +        self.assertIn(
 +            'InstallDir "$LOCALAPPDATA\\Programs\\${INFO_PRODUCTNAME}"', nsi
@@ -53854,6 +53862,7 @@ index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb69
 +            self.assertIn(contract, fault)
 +        self.assertIn("WaitForExit", fault)
 +        self.assertIn("taskkill.exe", fault)
++        self.assertIn('("hs%-" + [Guid]::NewGuid()', fault)
 +        self.assertNotIn("Wait-Process", fault)
 +
 +    def test_native_helper_owns_terminal_quiet_uninstall(self) -> None:
@@ -54156,7 +54165,7 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..d2d8794acedcdda8ca1b9d406cb9543fbeb16b66
+index 0000000000000000000000000000000000000000..225aa735559c1bdb6c7e92f47664254ab5a928d8
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
 @@ -0,0 +1,1152 @@
@@ -54359,7 +54368,7 @@ index 0000000000000000000000000000000000000000..d2d8794acedcdda8ca1b9d406cb9543f
 +
 +try {
 +if ($ownsAgentUserProfile) {
-+    $AgentUserProfileRoot = Join-Path ([IO.Path]::GetTempPath()) ("hs-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
++    $AgentUserProfileRoot = Join-Path ([IO.Path]::GetTempPath()) ("hs%-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 +    New-Item -ItemType Directory -Path $AgentUserProfileRoot | Out-Null
 +} elseif (-not (Test-Path -LiteralPath $AgentUserProfileRoot -PathType Container)) {
 +    throw "AgentUserProfileRoot must be an existing test-owned directory: $AgentUserProfileRoot"
@@ -57584,10 +57593,10 @@ index 0000000000000000000000000000000000000000..81359270df805796f8d44ad32f1c56a8
 +}
 diff --git a/src/platform/windows/installer_helper_lifecycle.rs b/src/platform/windows/installer_helper_lifecycle.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..7eb1a64073627463e662b3a8c588cbf7411a4e81
+index 0000000000000000000000000000000000000000..1c6d7d94a55cae4f9afa1c702a45b5d638cacbb5
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_lifecycle.rs
-@@ -0,0 +1,2414 @@
+@@ -0,0 +1,2419 @@
 +use std::{
 +    collections::BTreeSet,
 +    ffi::{OsStr, OsString},
@@ -57638,7 +57647,7 @@ index 0000000000000000000000000000000000000000..7eb1a64073627463e662b3a8c588cbf7
 +const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 +const LOCK_RETRY: Duration = Duration::from_millis(50);
 +const QUIET_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-+const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle-v1";
++const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle";
 +
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub(crate) enum InstallManager {
@@ -59955,6 +59964,11 @@ index 0000000000000000000000000000000000000000..7eb1a64073627463e662b3a8c588cbf7
 +    }
 +
 +    #[test]
++    fn lifecycle_mutex_name_is_stable_and_unversioned() {
++        assert_eq!(LIFECYCLE_MUTEX_NAME, r"Local\HerdrWinInstallerLifecycle");
++    }
++
++    #[test]
 +    fn lifecycle_mutex_rejects_a_live_owner() {
 +        let name = test_mutex_name("live");
 +        let worker_name = name.clone();
@@ -60004,10 +60018,10 @@ index 0000000000000000000000000000000000000000..7eb1a64073627463e662b3a8c588cbf7
 +}
 diff --git a/src/platform/windows/installer_helper_registry.rs b/src/platform/windows/installer_helper_registry.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..f89161a452ad0287137627f892db0d75043ab72c
+index 0000000000000000000000000000000000000000..7b72b20d9bca43c99affb9f899442fdeb14a0666
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_registry.rs
-@@ -0,0 +1,878 @@
+@@ -0,0 +1,895 @@
 +use std::{
 +    collections::{BTreeMap, BTreeSet},
 +    ffi::OsStr,
@@ -60389,6 +60403,10 @@ index 0000000000000000000000000000000000000000..f89161a452ad0287137627f892db0d75
 +    )
 +}
 +
++fn raw_owned_path_entry_equal(candidate: &str, owned_entry: &str) -> bool {
++    Path::new(candidate).is_absolute() && candidate == owned_entry
++}
++
 +pub(crate) fn add_user_path(
 +    bin_dir: &Path,
 +    previous_ownership: PathOwnership,
@@ -60577,7 +60595,10 @@ index 0000000000000000000000000000000000000000..f89161a452ad0287137627f892db0d75
 +            None,
 +        ));
 +    }
-+    let Some(index) = segments.iter().position(|segment| segment == &entry) else {
++    let Some(index) = segments
++        .iter()
++        .position(|segment| raw_owned_path_entry_equal(segment, &entry))
++    else {
 +        return Ok((
 +            PathUpdate {
 +                changed: false,
@@ -60874,6 +60895,16 @@ index 0000000000000000000000000000000000000000..f89161a452ad0287137627f892db0d75
 +            r#""C:\Users\Example\Herdr\bin\""#,
 +            r"c:\users\example\herdr\bin",
 +            false,
++        ));
++    }
++
++    #[test]
++    fn raw_path_removal_accepts_literal_percent_and_rejects_expression_tokens() {
++        let literal = r"C:\Users\Percent%Name\AppData\Local\Programs\Herdr\bin";
++        assert!(raw_owned_path_entry_equal(literal, literal));
++        assert!(!raw_owned_path_entry_equal(
++            r"%LOCALAPPDATA%\Programs\Herdr\bin",
++            r"C:\Users\Example\AppData\Local\Programs\Herdr\bin"
 +        ));
 +    }
 +

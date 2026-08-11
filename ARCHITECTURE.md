@@ -131,7 +131,9 @@ behavior; code and tests remain the detailed implementation truth.
   an update event; package/version absence is pending, while launch, source, timeout,
   containment, and other failures suppress the action and are logged. No polling,
   second availability feed, or package-manager state is added.
-- One stable Windows named mutex serializes every installer generation.
+- One stable unversioned Windows named mutex,
+  `Local\HerdrWinInstallerLifecycle`, serializes every installer generation and is
+  the permanent interoperability name across releases.
   The helper calls `CreateMutexW` without initial ownership and attempts ownership
   once with `WaitForSingleObject(0)`. A live owner blocks the operation, an abandoned
   owner is recovered, and the owning thread releases the mutex before closing its
@@ -176,6 +178,9 @@ behavior; code and tests remain the detailed implementation truth.
   the branded Welcome/Finish artwork; five checked-in BMP3 derivatives provide
   native 100–200% DPI buckets without runtime resampling. Installer compression
   uses datablock optimization, an 8 MiB LZMA dictionary, and solid final LZMA settings.
+  There is no replaced-executable definition or compatibility slot; the fixed
+  launcher and helper package leaves remain owned directly by the one package
+  schema.
 - Install/update preserves the raw user-PATH registry kind and bytes. It adds the
   literal managed `bin` path first only when no effective equivalent exists, records
   that exact ownership in ARP, and never claims or rewrites an equivalent user-owned
@@ -185,9 +190,11 @@ behavior; code and tests remain the detailed implementation truth.
   marker; if publication stops after `PathAdded` but before `PathValueCreated`, the
   exact pending marker completes only that missing fact on retry. Setup or uninstall
   recovery may claim only an exact literal entry while that marker remains.
-  Uninstall removes at most one exact owned entry, preserving every other entry and
-  its order, and deletes the value only when setup created it and no concurrent
-  entries remain.
+  Uninstall compares the raw unexpanded candidate and removes at most one exact
+  rooted owned entry, including a literal path containing `%`. An expandable token
+  such as `%LOCALAPPDATA%\...` remains foreign even when it resolves to the managed
+  directory. Every other entry and its order remain unchanged, and the value is
+  deleted only when setup created it and no concurrent entries remain.
 - Interactive and silent uninstall both preserve `%USERPROFILE%\.herdr` by
   default; the interactive checkbox or `/REMOVE_SETTINGS` explicitly authorizes
   deletion. Settings cleanup stays in the helper's validated filesystem boundary

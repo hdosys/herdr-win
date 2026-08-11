@@ -156,6 +156,11 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertNotIn("ManagedLegacy", lifecycle)
         self.assertNotIn("installer-helper.ps1", lifecycle)
         self.assertNotIn("installer-lifecycle.lock", lifecycle)
+        self.assertIn(
+            'const LIFECYCLE_MUTEX_NAME: &str = r"Local\\HerdrWinInstallerLifecycle";',
+            lifecycle,
+        )
+        self.assertNotIn("HerdrWinInstallerLifecycle-v", lifecycle)
         self.assertLess(
             lifecycle.index("acquire_lifecycle_lock", lifecycle.index("pub(crate) fn install")),
             lifecycle.index("registry::assert_arp_ownership", lifecycle.index("pub(crate) fn install")),
@@ -189,6 +194,8 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             self.assertIn(required, registry)
         self.assertNotIn("SetEnvironmentVariable", registry)
         self.assertNotIn("refusing to modify an ARP registration", registry)
+        self.assertIn("raw_owned_path_entry_equal", registry)
+        self.assertIn("%LOCALAPPDATA%\\Programs\\Herdr\\bin", registry)
         self.assertIn(
             "Windows Settings > Apps > Installed apps", text(HELPER_FILES)
         )
@@ -281,6 +288,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertIn('StrCmp $HelperExitCode "error"', nsi)
         self.assertIn('StrCmp $HelperExitCode "timeout"', nsi)
         self.assertIn('!define APP_USER_PROFILE_ROOT "$PROFILE"', nsi)
+        self.assertNotIn("REPLACED_EXECUTABLE", nsi + text(PACKAGER))
         self.assertIn("RequestExecutionLevel user", nsi)
         self.assertIn(
             'InstallDir "$LOCALAPPDATA\\Programs\\${INFO_PRODUCTNAME}"', nsi
@@ -386,6 +394,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             self.assertIn(contract, fault)
         self.assertIn("WaitForExit", fault)
         self.assertIn("taskkill.exe", fault)
+        self.assertIn('("hs%-" + [Guid]::NewGuid()', fault)
         self.assertNotIn("Wait-Process", fault)
 
     def test_native_helper_owns_terminal_quiet_uninstall(self) -> None:

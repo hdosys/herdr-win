@@ -48,7 +48,7 @@ use super::{
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_RETRY: Duration = Duration::from_millis(50);
 const QUIET_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle-v1";
+const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InstallManager {
@@ -2362,6 +2362,11 @@ mod tests {
         let (second, second_abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
         assert!(!second_abandoned);
         drop(second);
+    }
+
+    #[test]
+    fn lifecycle_mutex_name_is_stable_and_unversioned() {
+        assert_eq!(LIFECYCLE_MUTEX_NAME, r"Local\HerdrWinInstallerLifecycle");
     }
 
     #[test]

@@ -83,6 +83,8 @@ tests remain the detailed implementation truth.
   while pre-existing equivalent user entries remain unowned. The intent also
   records whether setup created the user `PATH` value itself, so uninstall restores
   an originally absent value as absent instead of leaving an empty registry value.
+  Exact rooted literal entries may contain `%`; expandable entries such as
+  `%LOCALAPPDATA%\...` remain foreign and are never removed as installer-owned.
 - Installed/current after setup and absent after uninstall are the terminal product
   outcomes. Fresh/update sibling directories are private disposable staging, not a
   second ownership or recovery authority; stale or malformed staging is removed

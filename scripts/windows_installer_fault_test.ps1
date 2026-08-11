@@ -197,7 +197,7 @@ function Remove-TestOwnedUserProfile {
 
 try {
 if ($ownsAgentUserProfile) {
-    $AgentUserProfileRoot = Join-Path ([IO.Path]::GetTempPath()) ("hs-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    $AgentUserProfileRoot = Join-Path ([IO.Path]::GetTempPath()) ("hs%-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Path $AgentUserProfileRoot | Out-Null
 } elseif (-not (Test-Path -LiteralPath $AgentUserProfileRoot -PathType Container)) {
     throw "AgentUserProfileRoot must be an existing test-owned directory: $AgentUserProfileRoot"

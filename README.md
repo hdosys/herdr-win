@@ -81,6 +81,8 @@ Download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from [Release
 herdr
 ```
 
+Running a newer setup over a current managed installation updates it in place and repairs incomplete current installer registration.
+
 For setup downloaded directly from Releases, use `herdr update` from an ordinary terminal after detaching from active Herdr sessions. Updates preserve running sessions and activate the new verified snapshot when it is safe. A WinGet-owned installation instead updates through:
 
 ```powershell

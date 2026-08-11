@@ -1,4 +1,4 @@
-From f68364a25c444611d324ca509f347289d479de47 Mon Sep 17 00:00:00 2001
+From 80f1acdd245846cade2524e14a56a55e3e59a52b Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 23:02:52 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -15,18 +15,18 @@ Refs herdrdev/herdr#1947
  .../installer-welcome-finish-287x550.bmp      |  Bin 0 -> 475254 bytes
  .../installer-welcome-finish-328x628.bmp      |  Bin 0 -> 618006 bytes
  .../installer-welcome-finish-source.png       |  Bin 0 -> 1698169 bytes
- packaging/windows/installer/project.nsi       |  489 ++++
+ packaging/windows/installer/project.nsi       |  494 ++++
  packaging/windows/managed-skill-hashes.txt    |    3 +
  scripts/package_windows_conpty.py             |   39 +-
- scripts/package_windows_installer.ps1         |  525 +++++
+ scripts/package_windows_installer.ps1         |  537 ++++
  scripts/preview.py                            |  120 +-
  scripts/test_package_windows_conpty.py        |   36 +-
  scripts/test_preview.py                       |  199 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  429 ++++
+ scripts/test_windows_installer.py             |  452 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      |  845 +++++++
+ scripts/windows_installer_fault_test.ps1      | 1133 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -42,18 +42,18 @@ Refs herdrdev/herdr#1947
  src/managed_install.rs                        |  318 +++
  src/platform/mod.rs                           |   25 +
  src/platform/windows.rs                       |  158 +-
- src/platform/windows/installer_helper.rs      |  212 ++
- .../windows/installer_helper_files.rs         |  939 ++++++++
- .../windows/installer_helper_lifecycle.rs     | 2012 +++++++++++++++++
- .../windows/installer_helper_registry.rs      |  590 +++++
- .../windows/installer_helper_skills.rs        |  408 ++++
- src/platform/windows/launcher.rs              | 1084 +++++++++
- src/platform/windows/managed_install.rs       |  689 ++++++
+ src/platform/windows/installer_helper.rs      |  215 ++
+ .../windows/installer_helper_files.rs         |  949 +++++++
+ .../windows/installer_helper_lifecycle.rs     | 2274 +++++++++++++++++
+ .../windows/installer_helper_registry.rs      |  880 +++++++
+ .../windows/installer_helper_skills.rs        |  408 +++
+ src/platform/windows/launcher.rs              | 1084 ++++++++
+ src/platform/windows/managed_install.rs       |  689 +++++
  src/remote/attach.rs                          |   14 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
  src/update.rs                                 |  878 ++++++-
- 48 files changed, 10085 insertions(+), 388 deletions(-)
+ 48 files changed, 10978 insertions(+), 388 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -51622,10 +51622,10 @@ HcmV?d00001
 
 diff --git a/packaging/windows/installer/project.nsi b/packaging/windows/installer/project.nsi
 new file mode 100644
-index 0000000000000000000000000000000000000000..2fe7d267e201f6f5b2684ec5ea5f9be4cf356f8a
+index 0000000000000000000000000000000000000000..75bacad970390168cec2db082289a030d99dde4a
 --- /dev/null
 +++ b/packaging/windows/installer/project.nsi
-@@ -0,0 +1,489 @@
+@@ -0,0 +1,494 @@
 +; Product identity, payloads, and runtime protocol names are build inputs.
 +!ifndef ARG_STAGE_DIR
 +  !error "ARG_STAGE_DIR is required"
@@ -51785,6 +51785,11 @@ index 0000000000000000000000000000000000000000..2fe7d267e201f6f5b2684ec5ea5f9be4
 +  !define APP_UNINSTALL_FAULT_ARGS '--uninstall-fault "${TEST_UNINSTALL_FAULT}" --fault-marker-prefix "${APP_TEST_MARKER_PREFIX}"'
 +!else
 +  !define APP_UNINSTALL_FAULT_ARGS ""
++!endif
++!ifdef TEST_INSTALL_FAULT
++  !define APP_INSTALL_FAULT_ARGS '--install-fault "install-${TEST_INSTALL_FAULT}" --fault-marker-prefix "${APP_TEST_MARKER_PREFIX}"'
++!else
++  !define APP_INSTALL_FAULT_ARGS ""
 +!endif
 +!ifdef TEST_USER_PROFILE_ROOT
 +  !define APP_USER_PROFILE_ROOT "${TEST_USER_PROFILE_ROOT}"
@@ -52060,7 +52065,7 @@ index 0000000000000000000000000000000000000000..2fe7d267e201f6f5b2684ec5ea5f9be4
 +
 +installer_inputs_ready:
 +  DetailPrint "Validating and activating ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}..."
-+  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" install --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --package-root "$PLUGINSDIR" --build-id "${APP_BUILD_ID}" --display-version "${INFO_PRODUCTVERSION_DISPLAY}" --numeric-version "${INFO_PRODUCTVERSION_FIXED}" --install-manager "$InstallManager"'
++  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" install --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --package-root "$PLUGINSDIR" --build-id "${APP_BUILD_ID}" --display-version "${INFO_PRODUCTVERSION_DISPLAY}" --numeric-version "${INFO_PRODUCTVERSION_FIXED}" --install-manager "$InstallManager" ${APP_INSTALL_FAULT_ARGS}'
 +  Pop $HelperExitCode
 +  Pop $HelperOutput
 +  StrCmp $HelperExitCode "error" installer_helper_start_failed
@@ -52234,10 +52239,10 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  if __name__ == "__main__":
 diff --git a/scripts/package_windows_installer.ps1 b/scripts/package_windows_installer.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..9e9c98e403993feae47e47265f9a3506126c7b2f
+index 0000000000000000000000000000000000000000..cde59d33777f1b70abf1eae7cee8059cdd1b35c2
 --- /dev/null
 +++ b/scripts/package_windows_installer.ps1
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,537 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)]
@@ -52267,14 +52272,21 @@ index 0000000000000000000000000000000000000000..9e9c98e403993feae47e47265f9a3506
 +    [string]$NsisCacheDir,
 +
 +    [ValidateSet(
++        "after-bin-directory",
 +        "after-uninstall-pending",
 +        "after-launcher-lock",
 +        "after-installer-helper",
 +        "after-state-directory",
 +        "before-uninstaller",
-+        "after-uninstaller"
++        "after-uninstaller",
++        "after-user-path",
++        "after-arp-registration",
++        "terminate-after-installer-helper"
 +    )]
 +    [string]$TestUninstallFault,
++
++    [ValidateSet("after-user-path", "after-arp-path-added")]
++    [string]$TestInstallFault,
 +
 +    [string]$TestUserProfileRoot
 +)
@@ -52748,6 +52760,11 @@ index 0000000000000000000000000000000000000000..9e9c98e403993feae47e47265f9a3506
 +    if (-not [string]::IsNullOrWhiteSpace($TestUninstallFault)) {
 +        $makensisArguments = @(
 +            "/DTEST_UNINSTALL_FAULT=$TestUninstallFault"
++        ) + $makensisArguments
++    }
++    if (-not [string]::IsNullOrWhiteSpace($TestInstallFault)) {
++        $makensisArguments = @(
++            "/DTEST_INSTALL_FAULT=$TestInstallFault"
 +        ) + $makensisArguments
 +    }
 +    if (-not [string]::IsNullOrWhiteSpace($TestUserProfileRoot)) {
@@ -53349,10 +53366,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9c6198bf7
+index 0000000000000000000000000000000000000000..60550b5ba4221bf14d9583a0bc8b6f837179bc7b
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,429 @@
+@@ -0,0 +1,452 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -53531,6 +53548,7 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +            "RegDeleteTreeW",
 +            "REG_EXPAND_SZ",
 +            '"PathAdded"',
++            '"PathValueCreated"',
 +            '"QuietUninstallString"',
 +            "ExpandEnvironmentStringsW",
 +        ):
@@ -53617,6 +53635,8 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +        self.assertIn("/NATIVE_QUIET_TOKEN=", nsi)
 +        self.assertIn("--quiet-runner-process-id", nsi)
 +        self.assertIn("--quiet-token", nsi)
++        self.assertIn("APP_INSTALL_FAULT_ARGS", nsi)
++        self.assertIn("--install-fault", nsi)
 +        self.assertIn("/TIMEOUT=180000", nsi)
 +        self.assertIn("/TIMEOUT=30000", nsi)
 +        self.assertIn('StrCmp $HelperExitCode "error"', nsi)
@@ -53659,6 +53679,7 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +    def test_packager_validates_three_distinct_x64_binaries(self) -> None:
 +        packager = text(PACKAGER)
 +        self.assertIn("[string]$InstallerHelperExe", packager)
++        self.assertIn("[string]$TestInstallFault", packager)
 +        self.assertIn("$InstallerHelperExe = (Resolve-Path", packager)
 +        self.assertEqual(packager.count("Assert-X64Pe -Path"), 3)
 +        self.assertIn("separately built native installer helper", packager)
@@ -53683,12 +53704,16 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +        fault = text(FAULT_TEST)
 +        self.assertIn("[string]$InstallerHelperExe", fault)
 +        for stage in (
++            "after-bin-directory",
 +            "after-uninstall-pending",
 +            "after-launcher-lock",
 +            "after-installer-helper",
 +            "after-state-directory",
 +            "before-uninstaller",
 +            "after-uninstaller",
++            "after-user-path",
++            "after-arp-registration",
++            "terminate-after-installer-helper",
 +        ):
 +            self.assertIn(f'"{stage}"', fault)
 +        for contract in (
@@ -53698,6 +53723,12 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +            "Reparse settings residual remained nonblocking",
 +            "Native missing-helper repair passed",
 +            "Native pending-update activation passed",
++            "Cross-mode uninstall retry passed",
++            "Setup retry ownership passed",
++            "Interrupted PATH ownership recovery passed",
++            "Interrupted ARP ownership publication recovery passed",
++            "Hard-termination cleanup recovery passed",
++            "Incomplete current ARP update repair passed",
 +            "Malformed pending-launcher state did not fail closed",
 +            "Malformed ARP display identity did not fail closed",
 +            "Assert-TestUserPathRestored",
@@ -53707,9 +53738,11 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +            '"runtime\\$BuildId"',
 +            '"quiet-uninstall"',
 +            '"state\\installer-helper.exe"',
++            '"state\\path-add.pending"',
 +        ):
 +            self.assertIn(contract, fault)
 +        self.assertIn("WaitForExit", fault)
++        self.assertIn("taskkill.exe", fault)
 +        self.assertNotIn("Wait-Process", fault)
 +
 +    def test_native_helper_owns_terminal_quiet_uninstall(self) -> None:
@@ -53719,7 +53752,14 @@ index 0000000000000000000000000000000000000000..7444cc799f64e848f01725640bd716c9
 +        self.assertIn("QUIET_UNINSTALL_TIMEOUT", lifecycle)
 +        self.assertIn("ProcessJob::new", lifecycle)
 +        self.assertIn("wait_for_runner_and_remove_helper", lifecycle)
-+        self.assertIn("restore_quiet_uninstall_retry", lifecycle)
++        self.assertIn("RetryOwnership", lifecycle)
++        self.assertIn("restore_user_path", lifecycle)
++        self.assertIn("restore_arp_registration", lifecycle)
++        self.assertIn("uninstall.pending", lifecycle)
++        self.assertIn("path-add.pending", lifecycle)
++        self.assertIn("PATH_ADD_PENDING_CREATED_VALUE", text(HELPER_FILES))
++        self.assertIn("PATH_ADD_PENDING_EXISTING_VALUE", text(HELPER_FILES))
++        self.assertIn("stage_managed_directory_for_uninstall", lifecycle)
 +        self.assertIn("quiet-uninstall --install-root", registry)
 +        self.assertNotIn("powershell", registry.lower())
 +
@@ -54005,10 +54045,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce2968931f877906
+index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68ab7c0dbc8
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,845 @@
+@@ -0,0 +1,1133 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -54022,12 +54062,15 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    [string]$PackageName = "Herdr Win",
 +    [string]$AgentUserProfileRoot,
 +    [string[]]$Faults = @(
++        "after-bin-directory",
 +        "after-uninstall-pending",
 +        "after-launcher-lock",
 +        "after-installer-helper",
 +        "after-state-directory",
 +        "before-uninstaller",
-+        "after-uninstaller"
++        "after-uninstaller",
++        "after-user-path",
++        "after-arp-registration"
 +    )
 +)
 +
@@ -54104,15 +54147,15 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    }
 +}
 +
-+function Assert-TestUserPathRestored {
++function Test-TestUserPathRestored {
 +    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
 +    if ($null -eq $key) {
-+        throw "HKCU\Environment is unavailable while verifying PATH restoration."
++        return $false
 +    }
 +    try {
 +        $actualExists = @($key.GetValueNames()) -contains "Path"
 +        if ($actualExists -ne $originalUserPathExists) {
-+            throw "Uninstall did not restore whether the user PATH value exists."
++            return $false
 +        }
 +        if ($actualExists) {
 +            $actualValue = $key.GetValue(
@@ -54122,11 +54165,56 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +            )
 +            $actualKind = $key.GetValueKind("Path")
 +            if ([string]$actualValue -cne [string]$originalUserPath -or $actualKind -ne $originalUserPathKind) {
-+                throw "Uninstall did not restore the exact user PATH value and registry kind. Expected '$originalUserPath' ($originalUserPathKind), got '$actualValue' ($actualKind)."
++                return $false
 +            }
 +        }
++        return $true
 +    } finally {
 +        $key.Dispose()
++    }
++}
++
++function Assert-TestUserPathRestored {
++    if (-not (Test-TestUserPathRestored)) {
++        throw "Uninstall did not restore the exact user PATH value and registry kind."
++    }
++}
++
++function Test-TestUserPathRetryOwned {
++    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
++    if ($null -eq $key) {
++        return $false
++    }
++    try {
++        if (@($key.GetValueNames()) -notcontains "Path") {
++            return $false
++        }
++        $actualValue = [string]$key.GetValue(
++            "Path",
++            $null,
++            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
++        )
++        $actualKind = $key.GetValueKind("Path")
++        $managedBin = Join-Path $installRoot "bin"
++        $expectedValue = if ($originalUserPathExists -and -not [string]::IsNullOrEmpty([string]$originalUserPath)) {
++            "$managedBin;$originalUserPath"
++        } else {
++            $managedBin
++        }
++        $expectedKind = if ($originalUserPathExists) {
++            $originalUserPathKind
++        } else {
++            [Microsoft.Win32.RegistryValueKind]::ExpandString
++        }
++        return $actualValue -ceq $expectedValue -and $actualKind -eq $expectedKind
++    } finally {
++        $key.Dispose()
++    }
++}
++
++function Assert-TestUserPathRetryOwned {
++    if (-not (Test-TestUserPathRetryOwned)) {
++        throw "Failed uninstall did not restore the exact installer-owned PATH state."
 +    }
 +}
 +
@@ -54169,13 +54257,18 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +New-Item -ItemType Directory -Path $inheritedUserProfileDecoy | Out-Null
 +$env:USERPROFILE = $inheritedUserProfileDecoy
 +$allowedFaults = @(
++    "after-bin-directory",
 +    "after-uninstall-pending",
 +    "after-launcher-lock",
 +    "after-installer-helper",
 +    "after-state-directory",
 +    "before-uninstaller",
-+    "after-uninstaller"
++    "after-uninstaller",
++    "after-user-path",
++    "after-arp-registration"
 +)
++$hardTerminationFault = "terminate-after-installer-helper"
++$cleanupFaults = @($allowedFaults) + @($hardTerminationFault)
 +if ($ProductName -cnotmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$') {
 +    throw "Invalid product name '$ProductName'."
 +}
@@ -54207,8 +54300,22 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
 +    try {
 +        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-+            $process.Kill()
-+            [void]$process.WaitForExit(5000)
++            $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
++            $cleanup = Start-Process -FilePath $taskkill -ArgumentList @(
++                "/PID", $process.Id, "/T", "/F"
++            ) -PassThru -NoNewWindow
++            try {
++                if (-not $cleanup.WaitForExit(10000)) {
++                    $cleanup.Kill()
++                    [void]$cleanup.WaitForExit(5000)
++                }
++            } finally {
++                $cleanup.Dispose()
++            }
++            if (-not $process.WaitForExit(10000)) {
++                $process.Kill()
++                [void]$process.WaitForExit(5000)
++            }
 +            throw "$FilePath exceeded its $TimeoutMilliseconds ms process deadline."
 +        }
 +        return $process.ExitCode
@@ -54328,7 +54435,7 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
 +        throw "Cannot safely clean unexpected test install root: $installRoot"
 +    }
-+    foreach ($fault in $allowedFaults) {
++    foreach ($fault in $cleanupFaults) {
 +        [IO.File]::WriteAllText(
 +            (Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"),
 +            "cleanup"
@@ -54392,6 +54499,7 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 +}
 +
++$testFailure = $null
 +try {
 +    foreach ($fault in $Faults) {
 +        $faultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"
@@ -54447,12 +54555,26 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +        [IO.File]::WriteAllText((Join-Path $settingsRoot "settings.toml"), "preserve-by-default")
 +
 +        $uninstaller = Join-Path $installRoot "uninstall.exe"
-+        $firstQuietExit = Invoke-TestQuietUninstall
-+        if ($firstQuietExit -eq 0) {
-+            throw "Quiet uninstall reported success after injected failure $fault."
++        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper") {
++            $firstDirectExit = Start-TestProcess -FilePath $uninstaller -Arguments @("/S")
++            if ($firstDirectExit -ne 0) {
++                throw "Direct uninstall bootstrap for $fault exited with $firstDirectExit."
++            }
++        } else {
++            $firstQuietExit = Invoke-TestQuietUninstall
++            if ($firstQuietExit -eq 0) {
++                throw "Quiet uninstall reported success after injected failure $fault."
++            }
 +        }
 +        Wait-TestCondition -Description "first injected uninstall for $fault" -Condition {
 +            Test-Path -LiteralPath $faultMarker
++        }
++        Wait-TestCondition -Description "restored uninstall retry ownership for $fault" -Condition {
++            (Test-Path -LiteralPath $uninstaller -PathType Leaf) -and
++                (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf) -and
++                (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending") -PathType Leaf) -and
++                (Test-Path -LiteralPath $arpKey) -and
++                (Test-TestUserPathRetryOwned)
 +        }
 +        Wait-TestUninstallerIdle
 +        if (Test-Path -LiteralPath $skillPath) {
@@ -54474,22 +54596,202 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +        if (-not (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf)) {
 +            throw "Injected uninstall $fault removed its native quiet retry helper."
 +        }
++        if (-not (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending") -PathType Leaf)) {
++            throw "Injected uninstall $fault removed its final ownership sentinel."
++        }
++        Assert-TestUserPathRetryOwned
 +
-+        $retryQuietExit = Invoke-TestQuietUninstall
-+        if ($retryQuietExit -ne 0) {
-+            throw "Quiet uninstall retry $fault exited with $retryQuietExit."
++        if ($fault -eq "after-state-directory") {
++            $setupRetryExit = Start-TestProcess -FilePath $installer -Arguments @("/S")
++            if ($setupRetryExit -ne 0) {
++                throw "Setup retry $fault exited with $setupRetryExit."
++            }
++            Wait-TestCondition -Description "setup retry for $fault" -Condition {
++                (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
++                    (Test-Path -LiteralPath $arpKey)
++            }
++            $retryQuietExit = Invoke-TestQuietUninstall
++            if ($retryQuietExit -ne 0) {
++                throw "Quiet uninstall after setup retry $fault exited with $retryQuietExit."
++            }
++        } elseif ($fault -eq "after-uninstaller") {
++            $retryDirectExit = Start-TestProcess -FilePath $uninstaller -Arguments @("/S")
++            if ($retryDirectExit -ne 0) {
++                throw "Direct uninstall retry $fault exited with $retryDirectExit."
++            }
++        } else {
++            $retryQuietExit = Invoke-TestQuietUninstall
++            if ($retryQuietExit -ne 0) {
++                throw "Quiet uninstall retry $fault exited with $retryQuietExit."
++            }
 +        }
 +        Wait-TestCondition -Description "retry uninstall for $fault" -Condition {
 +            -not (Test-Path -LiteralPath $installRoot) -and
 +                -not (Test-Path -LiteralPath $arpKey) -and
 +                -not (Test-Path -LiteralPath $faultMarker)
 +        }
++        Assert-TestUserPathRestored
 +        if ([IO.File]::ReadAllText((Join-Path $settingsRoot "settings.toml")) -cne "preserve-by-default") {
 +            throw "Retry uninstall $fault did not preserve settings by default."
 +        }
 +        Remove-Item -LiteralPath $settingsRoot -Recurse -Force
++        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper" -or $fault -eq "after-uninstaller") {
++            Write-Host "Cross-mode uninstall retry passed: $fault"
++        }
++        if ($fault -eq "after-state-directory") {
++            Write-Host "Setup retry ownership passed: $fault"
++        }
 +        Write-Host "Uninstall fault retry passed: $fault"
 +    }
++
++    $savedOriginalUserPathExists = $originalUserPathExists
++    $savedOriginalUserPath = $originalUserPath
++    $savedOriginalUserPathKind = $originalUserPathKind
++    $originalUserPathExists = $false
++    $originalUserPath = $null
++    $originalUserPathKind = $null
++    try {
++    Restore-TestUserPath
++    $installFaults = @(
++        [pscustomobject]@{ Name = "after-user-path"; PartialArp = $false },
++        [pscustomobject]@{ Name = "after-arp-path-added"; PartialArp = $true }
++    )
++    foreach ($installFaultCase in $installFaults) {
++        $installFault = $installFaultCase.Name
++        $installFaultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-install-$installFault.once"
++        $installFaultInstaller = Join-Path $OutputDir "herdr-installer-fault-install-$installFault.exe"
++        foreach ($path in @($installFaultMarker, $installFaultInstaller)) {
++            if (Test-Path -LiteralPath $path) {
++                Remove-Item -LiteralPath $path -Force
++            }
++        }
++        & $packager `
++            -StageDir $StageDir `
++            -LauncherExe $LauncherExe `
++            -InstallerHelperExe $InstallerHelperExe `
++            -BuildId $BuildId `
++            -DisplayVersion $DisplayVersion `
++            -NumericVersion $NumericVersion `
++            -ProductName $ProductName `
++            -OutputPath $installFaultInstaller `
++            -TestInstallFault $installFault `
++            -TestUserProfileRoot $AgentUserProfileRoot
++        $firstInstallFaultExit = Start-TestProcess -FilePath $installFaultInstaller -Arguments @("/S")
++        if ($firstInstallFaultExit -eq 0) {
++            throw "Setup reported success after injected ownership failure $installFault."
++        }
++        Wait-TestCondition -Description "interrupted ownership publication at $installFault" -Condition {
++            $arpReady = if ($installFaultCase.PartialArp) {
++                if (-not (Test-Path -LiteralPath $arpKey)) {
++                    $false
++                } else {
++                    $partialArp = Get-ItemProperty -LiteralPath $arpKey
++                    $partialNames = @((Get-Item -LiteralPath $arpKey).Property)
++                    [int]$partialArp.PathAdded -eq 1 -and $partialNames -notcontains "PathValueCreated"
++                }
++            } else {
++                -not (Test-Path -LiteralPath $arpKey)
++            }
++            (Test-Path -LiteralPath (Join-Path $installRoot "state\path-add.pending") -PathType Leaf) -and
++                (Test-Path -LiteralPath $installFaultMarker -PathType Leaf) -and
++                $arpReady -and
++                (Test-TestUserPathRetryOwned)
++        }
++        $retryInstallFaultExit = Start-TestProcess -FilePath $installFaultInstaller -Arguments @("/S")
++        if ($retryInstallFaultExit -ne 0) {
++            throw "Setup ownership retry $installFault exited with $retryInstallFaultExit."
++        }
++        Wait-TestCondition -Description "recovered ownership publication at $installFault" -Condition {
++            (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
++                -not (Test-Path -LiteralPath (Join-Path $installRoot "state\path-add.pending")) -and
++                (Test-Path -LiteralPath $arpKey)
++        }
++        $recoveredArp = Get-ItemProperty -LiteralPath $arpKey
++        if ([int]$recoveredArp.PathAdded -ne 1) {
++            throw "Recovered setup did not retain ownership of its pending PATH entry."
++        }
++        if ([int]$recoveredArp.PathValueCreated -ne 1) {
++            throw "Recovered setup did not retain ownership of its newly created PATH value."
++        }
++        $installFaultUninstallExit = Invoke-TestQuietUninstall
++        if ($installFaultUninstallExit -ne 0) {
++            throw "Uninstall after ownership recovery $installFault exited with $installFaultUninstallExit."
++        }
++        Wait-TestCondition -Description "ownership recovery uninstall at $installFault" -Condition {
++            -not (Test-Path -LiteralPath $installRoot) -and
++                -not (Test-Path -LiteralPath $arpKey)
++        }
++        Assert-TestUserPathRestored
++        Remove-Item -LiteralPath $installFaultMarker -Force
++        if ($installFaultCase.PartialArp) {
++            Write-Host "Interrupted ARP ownership publication recovery passed."
++        } else {
++            Write-Host "Interrupted PATH ownership recovery passed."
++        }
++    }
++    } finally {
++        $originalUserPathExists = $savedOriginalUserPathExists
++        $originalUserPath = $savedOriginalUserPath
++        $originalUserPathKind = $savedOriginalUserPathKind
++        Restore-TestUserPath
++    }
++
++    $hardTerminationMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$hardTerminationFault.once"
++    $hardTerminationInstaller = Join-Path $OutputDir "herdr-installer-fault-$hardTerminationFault.exe"
++    foreach ($path in @($hardTerminationMarker, $hardTerminationInstaller)) {
++        if (Test-Path -LiteralPath $path) {
++            Remove-Item -LiteralPath $path -Force
++        }
++    }
++    & $packager `
++        -StageDir $StageDir `
++        -LauncherExe $LauncherExe `
++        -InstallerHelperExe $InstallerHelperExe `
++        -BuildId $BuildId `
++        -DisplayVersion $DisplayVersion `
++        -NumericVersion $NumericVersion `
++        -ProductName $ProductName `
++        -OutputPath $hardTerminationInstaller `
++        -TestUninstallFault $hardTerminationFault `
++        -TestUserProfileRoot $AgentUserProfileRoot
++    $hardInstallExit = Start-TestProcess -FilePath $hardTerminationInstaller -Arguments @("/S")
++    if ($hardInstallExit -ne 0) {
++        throw "Hard-termination fixture setup exited with $hardInstallExit."
++    }
++    $hardUninstaller = Join-Path $installRoot "uninstall.exe"
++    [void](Start-TestProcess -FilePath $hardUninstaller -Arguments @("/S"))
++    Wait-TestCondition -Description "hard-termination cleanup fault" -Condition {
++        Test-Path -LiteralPath $hardTerminationMarker -PathType Leaf
++    }
++    Wait-TestUninstallerIdle
++    if (-not (Test-Path -LiteralPath $hardUninstaller -PathType Leaf) -or
++        (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending")) -or
++        (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe")) -or
++        (Test-Path -LiteralPath (Join-Path $installRoot "state\launcher.lock")) -or
++        (Test-Path -LiteralPath $arpKey)) {
++        throw "Hard-terminated cleanup did not leave the exact classifiable residual."
++    }
++    Assert-TestUserPathRestored
++    $hardRecoveryExit = Start-TestProcess -FilePath $hardTerminationInstaller -Arguments @("/S")
++    if ($hardRecoveryExit -ne 0) {
++        throw "Setup recovery from hard-terminated cleanup exited with $hardRecoveryExit."
++    }
++    Wait-TestCondition -Description "hard-termination setup recovery" -Condition {
++        (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
++            (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf) -and
++            (Test-Path -LiteralPath $arpKey)
++    }
++    $hardCleanupExit = Invoke-TestQuietUninstall
++    if ($hardCleanupExit -ne 0) {
++        throw "Quiet uninstall after hard-termination recovery exited with $hardCleanupExit."
++    }
++    Wait-TestCondition -Description "hard-termination recovery uninstall" -Condition {
++        -not (Test-Path -LiteralPath $installRoot) -and
++            -not (Test-Path -LiteralPath $arpKey) -and
++            -not (Test-Path -LiteralPath $hardTerminationMarker)
++    }
++    Assert-TestUserPathRestored
++    Write-Host "Hard-termination cleanup recovery passed."
 +
 +    $modifiedInstaller = Join-Path $OutputDir "herdr-installer-modified-skill-tree.exe"
 +    if (Test-Path -LiteralPath $modifiedInstaller) {
@@ -54523,6 +54825,16 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    if (Test-Path -LiteralPath (Join-Path $installRoot "state\package-manager")) {
 +        throw "Setup accepted /WINGETjunk as package-manager ownership."
 +    }
++    Remove-ItemProperty -LiteralPath $arpKey -Name PathValueCreated
++    $incompleteArpUpdateExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S")
++    if ($incompleteArpUpdateExit -ne 0) {
++        throw "Update from the preceding current ARP registration exited with $incompleteArpUpdateExit."
++    }
++    $repairedArp = Get-ItemProperty -LiteralPath $arpKey
++    if ([int]$repairedArp.PathAdded -ne 1 -or [int]$repairedArp.PathValueCreated -ne 0) {
++        throw "Update did not repair the current ARP registration without losing PATH ownership."
++    }
++    Write-Host "Incomplete current ARP update repair passed."
 +    $wingetInstallExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S", "/WINGET")
 +    if ($wingetInstallExit -ne 0) {
 +        throw "Exact /WINGET setup exited with $wingetInstallExit."
@@ -54820,8 +55132,18 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    }
 +    Assert-TestUserPathRestored
 +    Write-Host "Native pending-update activation passed."
++} catch {
++    $testFailure = $_
++    throw
 +} finally {
-+    Remove-TestInstallIfPresent
++    try {
++        Remove-TestInstallIfPresent
++    } catch {
++        if ($null -eq $testFailure) {
++            throw
++        }
++        Write-Warning "Test cleanup also failed after the original error: $_"
++    }
 +    if (Test-Path -LiteralPath $skillRoot) {
 +        Remove-Item -LiteralPath $skillRoot -Recurse -Force -ErrorAction SilentlyContinue
 +    }
@@ -54831,7 +55153,7 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +    if (Test-Path -LiteralPath $settingsRoot) {
 +        Remove-Item -LiteralPath $settingsRoot -Recurse -Force -ErrorAction SilentlyContinue
 +    }
-+    foreach ($fault in $allowedFaults) {
++    foreach ($fault in $cleanupFaults) {
 +        $faultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"
 +        if (Test-Path -LiteralPath $faultMarker) {
 +            Remove-Item -LiteralPath $faultMarker -Force -ErrorAction SilentlyContinue
@@ -54839,6 +55161,12 @@ index 0000000000000000000000000000000000000000..86ab7f7623ab264bfc581db7ce296893
 +        $installFailure = Join-Path $env:TEMP "herdr-install-failure-$fault.txt"
 +        if (Test-Path -LiteralPath $installFailure) {
 +            Remove-Item -LiteralPath $installFailure -Force -ErrorAction SilentlyContinue
++        }
++    }
++    foreach ($installFault in @("after-user-path", "after-arp-path-added")) {
++        $installFaultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-install-$installFault.once"
++        if (Test-Path -LiteralPath $installFaultMarker) {
++            Remove-Item -LiteralPath $installFaultMarker -Force
 +        }
 +    }
 +}
@@ -55814,10 +56142,10 @@ index e3d9761014b79e10ae5a0c8e91a9fded952a2480..a92453bde980e358611bfe6944cb2add
          use base64::Engine as _;
 diff --git a/src/platform/windows/installer_helper.rs b/src/platform/windows/installer_helper.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..d6e948b5cfda728607efa9fd231c52c9d0147e78
+index 0000000000000000000000000000000000000000..368586be9ff394f7cf8bac71488ccf22c1ca7dff
 --- /dev/null
 +++ b/src/platform/windows/installer_helper.rs
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,215 @@
 +//! Native owner for the managed Windows install lifecycle.
 +
 +use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf};
@@ -55868,6 +56196,9 @@ index 0000000000000000000000000000000000000000..d6e948b5cfda728607efa9fd231c52c9
 +                    )))
 +                }
 +            },
++            fault: optional_utf8(&values, "--install-fault")?,
++            fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
++                .unwrap_or_else(|| "herdr".to_string()),
 +        }),
 +        "uninstall" => installer_helper_lifecycle::uninstall(UninstallOptions {
 +            install_root: required_path(&values, "--install-root")?,
@@ -56032,10 +56363,10 @@ index 0000000000000000000000000000000000000000..d6e948b5cfda728607efa9fd231c52c9
 +}
 diff --git a/src/platform/windows/installer_helper_files.rs b/src/platform/windows/installer_helper_files.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..773a878ec59fab5f70e18af4615788209b6c146b
+index 0000000000000000000000000000000000000000..28500eea757db1bbc0aa1ec2607a250bfdeb2ce6
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_files.rs
-@@ -0,0 +1,939 @@
+@@ -0,0 +1,949 @@
 +use std::{
 +    collections::{BTreeMap, BTreeSet},
 +    ffi::{OsStr, OsString},
@@ -56072,6 +56403,10 @@ index 0000000000000000000000000000000000000000..773a878ec59fab5f70e18af461578820
 +pub(crate) const RUNTIME_MANIFEST_HEADER: &str = "herdr-runtime-manifest-v1";
 +pub(crate) const MANAGED_BIN_MARKER: &[u8] = b"herdr-managed-bin-v1\n";
 +pub(crate) const PACKAGE_MANAGER_MARKER: &[u8] = b"herdr-package-manager-v1\nmanager=winget\n";
++pub(crate) const PATH_ADD_PENDING_EXISTING_VALUE: &[u8] =
++    b"herdr-path-add-pending-v1\nvalue_created=0\n";
++pub(crate) const PATH_ADD_PENDING_CREATED_VALUE: &[u8] =
++    b"herdr-path-add-pending-v1\nvalue_created=1\n";
 +pub(crate) const UNINSTALL_MARKER: &[u8] = b"herdr-uninstall-v1\n";
 +pub(crate) const NATIVE_HELPER_NAME: &str = "installer-helper.exe";
 +pub(crate) const QUIET_UNINSTALL_PENDING: &[u8] = b"herdr-quiet-uninstall-v1\nstatus=pending\n";
@@ -56307,6 +56642,12 @@ index 0000000000000000000000000000000000000000..773a878ec59fab5f70e18af461578820
 +        digest.update(&buffer[..count]);
 +    }
 +    Ok(format!("{:x}", digest.finalize()))
++}
++
++pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
++    let mut digest = Sha256::new();
++    digest.update(bytes);
++    format!("{:x}", digest.finalize())
 +}
 +
 +pub(crate) fn normalized_text_sha256(path: &Path) -> io::Result<String> {
@@ -56977,10 +57318,10 @@ index 0000000000000000000000000000000000000000..773a878ec59fab5f70e18af461578820
 +}
 diff --git a/src/platform/windows/installer_helper_lifecycle.rs b/src/platform/windows/installer_helper_lifecycle.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1bbf73bb04
+index 0000000000000000000000000000000000000000..5f992ecaa8be7400906de1d5f3f561c43eb48cbb
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_lifecycle.rs
-@@ -0,0 +1,2012 @@
+@@ -0,0 +1,2274 @@
 +use std::{
 +    collections::BTreeSet,
 +    ffi::{OsStr, OsString},
@@ -57050,6 +57391,8 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    pub(crate) display_version: String,
 +    pub(crate) numeric_version: String,
 +    pub(crate) install_manager: InstallManager,
++    pub(crate) fault: Option<String>,
++    pub(crate) fault_marker_prefix: String,
 +}
 +
 +#[derive(Clone, Debug)]
@@ -57120,6 +57463,20 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    process_id: u32,
 +    result_path: PathBuf,
 +    moved_helper_path: PathBuf,
++}
++
++#[derive(Clone, Debug)]
++struct FileSnapshot {
++    bytes: Vec<u8>,
++    sha256: String,
++}
++
++#[derive(Clone, Debug)]
++struct RetryOwnership {
++    helper: FileSnapshot,
++    launcher_lock: FileSnapshot,
++    path_add_pending: Option<FileSnapshot>,
++    uninstaller: FileSnapshot,
 +}
 +
 +impl Drop for ProcessHandle {
@@ -57238,6 +57595,112 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    }
 +}
 +
++impl FileSnapshot {
++    fn capture(path: &Path) -> io::Result<Self> {
++        files::assert_regular_file(path)?;
++        let bytes = fs::read(path)?;
++        Ok(Self {
++            sha256: files::sha256_bytes(&bytes),
++            bytes,
++        })
++    }
++
++    fn empty() -> Self {
++        Self {
++            bytes: Vec::new(),
++            sha256: files::sha256_bytes(&[]),
++        }
++    }
++
++    fn restore(&self, path: &Path) -> io::Result<()> {
++        if files::path_exists(path)? {
++            files::assert_regular_file(path)?;
++            if files::sha256(path)? != self.sha256 {
++                return Err(files::invalid_data(format!(
++                    "retry ownership file changed before restoration: {}",
++                    path.display()
++                )));
++            }
++        } else {
++            files::write_durable(path, &self.bytes)?;
++        }
++        if files::sha256(path)? != self.sha256 {
++            return Err(files::invalid_data(format!(
++                "restored retry ownership file differs from its snapshot: {}",
++                path.display()
++            )));
++        }
++        Ok(())
++    }
++}
++
++impl RetryOwnership {
++    fn capture(install_root: &Path) -> io::Result<Self> {
++        let state = install_root.join("state");
++        let installed_helper = state.join(files::NATIVE_HELPER_NAME);
++        let helper_source = if files::path_exists(&installed_helper)? {
++            installed_helper
++        } else {
++            std::env::current_exe()?
++        };
++        let launcher_lock = state.join("launcher.lock");
++        let path_add_pending = state.join("path-add.pending");
++        Ok(Self {
++            helper: FileSnapshot::capture(&helper_source)?,
++            launcher_lock: if files::path_exists(&launcher_lock)? {
++                FileSnapshot::capture(&launcher_lock)?
++            } else {
++                FileSnapshot::empty()
++            },
++            path_add_pending: if registry::path_add_pending_value_created(&path_add_pending)?
++                .is_some()
++            {
++                Some(FileSnapshot::capture(&path_add_pending)?)
++            } else {
++                None
++            },
++            uninstaller: FileSnapshot::capture(&install_root.join("uninstall.exe"))?,
++        })
++    }
++
++    fn restore(&self, install_root: &Path) -> io::Result<()> {
++        if files::path_exists(install_root)? {
++            files::assert_regular_dir(install_root)?;
++        } else {
++            let parent = install_root
++                .parent()
++                .ok_or_else(|| files::invalid_data("install root has no parent"))?;
++            files::assert_regular_dir(parent)?;
++            fs::create_dir(install_root)?;
++        }
++        let state = install_root.join("state");
++        if files::path_exists(&state)? {
++            files::assert_regular_dir(&state)?;
++        } else {
++            fs::create_dir(&state)?;
++        }
++        self.helper
++            .restore(&state.join(files::NATIVE_HELPER_NAME))?;
++        self.launcher_lock.restore(&state.join("launcher.lock"))?;
++        if let Some(path_add_pending) = &self.path_add_pending {
++            path_add_pending.restore(&state.join("path-add.pending"))?;
++        }
++        let marker = state.join("uninstall.pending");
++        if files::path_exists(&marker)? {
++            files::assert_regular_file(&marker)?;
++            if fs::read(&marker)? != files::UNINSTALL_MARKER {
++                return Err(files::invalid_data(
++                    "uninstall retry ownership marker changed before restoration",
++                ));
++            }
++        } else {
++            files::write_durable(&marker, files::UNINSTALL_MARKER)?;
++        }
++        self.uninstaller
++            .restore(&install_root.join("uninstall.exe"))
++    }
++}
++
 +fn validate_quiet_token(token: &str) -> io::Result<()> {
 +    if token.len() != 32
 +        || !token
@@ -57271,7 +57734,8 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
 +    registry::assert_arp_ownership(&install_root)?;
 +    let allow_convergence = registry::arp_exists()?;
-+    let previous_path_owned = registry::arp_path_owned(&install_root)?;
++    let path_add_pending = install_root.join("state").join("path-add.pending");
++    let previous_path_ownership = current_path_ownership(&install_root, &path_add_pending)?;
 +    let agent_root = skills::agent_skills_root(&profile)?;
 +    let claude_root = if skills::claude_installed(&profile)? {
 +        Some(skills::claude_skills_root(
@@ -57292,13 +57756,31 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        claude_root.as_deref(),
 +        allow_convergence,
 +    )?;
-+    let path_update = registry::add_user_path(&install_root.join("bin"), previous_path_owned)?;
++    let path_update = registry::add_user_path(
++        &install_root.join("bin"),
++        previous_path_ownership,
++        &path_add_pending,
++    )?;
++    inject_fault(
++        "install-after-user-path",
++        options.fault.as_deref(),
++        &options.fault_marker_prefix,
++    )?;
 +    registry::set_arp_registration(
 +        &install_root,
 +        &options.display_version,
 +        &options.numeric_version,
 +        path_update.owned,
++        path_update.value_created,
++        || {
++            inject_fault(
++                "install-after-arp-path-added",
++                options.fault.as_deref(),
++                &options.fault_marker_prefix,
++            )
++        },
 +    )?;
++    remove_file_if_exists(&path_add_pending)?;
 +    Ok(result)
 +}
 +
@@ -57309,13 +57791,23 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        .as_ref()
 +        .map(|value| QuietSession::new(&install_root, value))
 +        .transpose()?;
++    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
++    let retry_ownership = if files::path_exists(&install_root)? {
++        Some(RetryOwnership::capture(&install_root)?)
++    } else {
++        None
++    };
++    let arp_snapshot = registry::snapshot_arp_registration(&install_root)?;
++    let mut path_rollback = None;
++    let mut arp_removed = false;
++    let mut residual_ready = false;
 +    let result = (|| {
 +        let profile = skills::user_profile_root(&options.user_profile_root)?;
 +        let known = skills::read_managed_skill_hashes(&options.skill_hash_manifest, None)?;
-+        let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
 +        registry::assert_arp_ownership(&install_root)?;
 +        let allow_convergence = registry::arp_exists()?;
-+        let path_owned = registry::arp_path_owned(&install_root)?;
++        let path_add_pending = install_root.join("state").join("path-add.pending");
++        let path_ownership = current_path_ownership(&install_root, &path_add_pending)?;
 +        let agent_root = skills::agent_skills_root(&profile)?;
 +        let claude_roots = skills::claude_roots_for_removal(&profile)?;
 +        let mut warnings = Vec::new();
@@ -57326,15 +57818,33 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +            &known,
 +            options.skill_disposition,
 +            allow_convergence,
++            quiet.as_ref(),
 +            options.fault.as_deref(),
 +            &options.fault_marker_prefix,
-+            quiet.as_ref(),
 +        )?;
 +        if let Some(warning) = warning {
 +            warnings.push(warning);
 +        }
-+        let _ = registry::remove_user_path(&install_root.join("bin"), path_owned)?;
-+        registry::remove_arp_registration(&install_root)?;
++        residual_ready = true;
++        let (_, rollback) = registry::remove_user_path(&install_root.join("bin"), path_ownership)?;
++        path_rollback = rollback;
++        inject_fault(
++            "after-user-path",
++            options.fault.as_deref(),
++            &options.fault_marker_prefix,
++        )?;
++        arp_removed = registry::remove_arp_registration(&install_root)?;
++        inject_fault(
++            "after-arp-registration",
++            options.fault.as_deref(),
++            &options.fault_marker_prefix,
++        )?;
++        remove_uninstall_residual(
++            &install_root,
++            options.fault.as_deref(),
++            &options.fault_marker_prefix,
++            quiet.as_ref(),
++        )?;
 +        if options.settings_disposition == SettingsDisposition::Remove {
 +            if let Err(err) = skills::remove_user_settings(&profile) {
 +                warnings.push(format!(
@@ -57352,6 +57862,40 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        }
 +        Ok(output)
 +    })();
++    let result = if let Err(original) = result {
++        if residual_ready {
++            let mut restore_errors = Vec::new();
++            if let Some(retry_ownership) = &retry_ownership {
++                if let Err(err) = retry_ownership.restore(&install_root) {
++                    restore_errors.push(format!("filesystem ownership: {err}"));
++                }
++            }
++            if let Some(rollback) = &path_rollback {
++                if let Err(err) = registry::restore_user_path(rollback) {
++                    restore_errors.push(format!("PATH ownership: {err}"));
++                }
++            }
++            if arp_removed {
++                if let Some(snapshot) = &arp_snapshot {
++                    if let Err(err) = registry::restore_arp_registration(snapshot) {
++                        restore_errors.push(format!("ARP ownership: {err}"));
++                    }
++                }
++            }
++            if restore_errors.is_empty() {
++                Err(original)
++            } else {
++                Err(io::Error::other(format!(
++                    "{original}; uninstall retry restoration failed: {}",
++                    restore_errors.join("; ")
++                )))
++            }
++        } else {
++            Err(original)
++        }
++    } else {
++        result
++    };
 +    if let Some(quiet) = &quiet {
 +        let success = result.is_ok();
 +        let publish_result = quiet.publish_result(success);
@@ -57420,9 +57964,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    }
 +    let deadline = Instant::now() + QUIET_UNINSTALL_TIMEOUT;
 +    loop {
-+        if files::path_exists(&result_path)? {
-+            files::assert_regular_file(&result_path)?;
-+            let status = fs::read(&result_path)?;
++        if let Some(status) = read_quiet_result(&result_path)? {
 +            if status != files::QUIET_UNINSTALL_PENDING {
 +                remove_file_if_exists(&result_path)?;
 +                return match status.as_slice() {
@@ -57457,6 +57999,27 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +            ));
 +        }
 +        thread::sleep(LOCK_RETRY);
++    }
++}
++
++fn read_quiet_result(path: &Path) -> io::Result<Option<Vec<u8>>> {
++    if !files::path_exists(path)? {
++        return Ok(None);
++    }
++    if let Err(err) = files::assert_regular_file(path) {
++        return if err.kind() == io::ErrorKind::NotFound {
++            Ok(None)
++        } else {
++            Err(err)
++        };
++    }
++    match fs::read(path) {
++        Ok(value) => Ok(Some(value)),
++        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
++        Err(err) => Err(files::contextual(
++            err,
++            format!("failed to read quiet-uninstall result: {}", path.display()),
++        )),
 +    }
 +}
 +
@@ -57540,20 +58103,32 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        Err(err) => return Err(err),
 +    };
 +    if kind == RootKind::UninstallRetry {
-+        let _ = uninstall_layout(
-+            install_root,
-+            agent_skills_root,
-+            &claude_skills_root
-+                .into_iter()
-+                .map(Path::to_path_buf)
-+                .collect::<Vec<_>>(),
-+            &known,
-+            SkillDisposition::Keep,
-+            true,
-+            None,
-+            "herdr",
-+            None,
-+        )?;
++        let retry_ownership = RetryOwnership::capture(install_root)?;
++        let cleanup = (|| {
++            let _ = uninstall_layout(
++                install_root,
++                agent_skills_root,
++                &claude_skills_root
++                    .into_iter()
++                    .map(Path::to_path_buf)
++                    .collect::<Vec<_>>(),
++                &known,
++                SkillDisposition::Keep,
++                true,
++                None,
++                None,
++                "herdr",
++            )?;
++            remove_uninstall_residual(install_root, None, "herdr", None)
++        })();
++        if let Err(original) = cleanup {
++            return match retry_ownership.restore(install_root) {
++                Ok(()) => Err(original),
++                Err(restore) => Err(io::Error::other(format!(
++                    "{original}; setup could not restore uninstall retry ownership: {restore}"
++                ))),
++            };
++        }
 +        kind = RootKind::New;
 +    } else if kind == RootKind::UninstallResidual {
 +        remove_uninstall_residual(install_root, None, "herdr", None)?;
@@ -57978,9 +58553,9 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    known: &BTreeSet<String>,
 +    skill_disposition: SkillDisposition,
 +    allow_convergence: bool,
-+    fault: Option<&str>,
-+    marker_prefix: &str,
 +    quiet: Option<&QuietSession>,
++    fault: Option<&str>,
++    fault_prefix: &str,
 +) -> io::Result<(Vec<PathBuf>, Option<String>)> {
 +    remove_stale_staging(install_root);
 +    if !files::path_exists(install_root)? {
@@ -58017,7 +58592,6 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +            known,
 +            skill_disposition,
 +        );
-+        remove_uninstall_residual(install_root, fault, marker_prefix, quiet)?;
 +        return Ok(result);
 +    }
 +    if !matches!(kind, RootKind::ManagedNative | RootKind::UninstallRetry) {
@@ -58064,9 +58638,9 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        files::assert_regular_file(&marker)?;
 +    }
 +    for name in ["bin", "runtime"] {
-+        let path = install_root.join(name);
-+        if files::path_exists(&path)? {
-+            files::remove_validated_directory(&path)?;
++        stage_managed_directory_for_uninstall(install_root, name)?;
++        if name == "bin" {
++            inject_fault("after-bin-directory", fault, fault_prefix)?;
 +        }
 +    }
 +    if let Some(pending) = files::pending_launcher(&state)? {
@@ -58080,8 +58654,25 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    }
 +    drop(_coordination);
 +    validate_uninstall_residual(install_root)?;
-+    remove_uninstall_residual(install_root, fault, marker_prefix, quiet)?;
 +    Ok((preserved, warning))
++}
++
++fn stage_managed_directory_for_uninstall(install_root: &Path, name: &str) -> io::Result<()> {
++    let source = install_root.join(name);
++    if !files::path_exists(&source)? {
++        return Ok(());
++    }
++    files::assert_regular_dir(&source)?;
++    let staging = new_staging("uninstall", install_root)?;
++    if let Err(err) = fs::rename(&source, staging.path.join(name)) {
++        cleanup_staging(&staging);
++        return Err(files::contextual(
++            err,
++            format!("failed to stage managed {name} for uninstall"),
++        ));
++    }
++    cleanup_staging(&staging);
++    Ok(())
 +}
 +
 +fn remove_current_root_for_convergence(install_root: &Path) -> io::Result<()> {
@@ -58175,6 +58766,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        files::NATIVE_HELPER_NAME,
 +        "install.manifest",
 +        "package-manager",
++        "path-add.pending",
 +    ];
 +    for entry in fs::read_dir(&state)? {
 +        let entry = entry?;
@@ -58212,6 +58804,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    }
 +    validate_leases_dir(&state.join("leases"))?;
 +    validate_package_manager_marker(&state.join("package-manager"))?;
++    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
 +    let manifest = files::read_install_manifest(&state.join("install.manifest"))?;
 +    validate_managed_bin(&install_root.join("bin"), &manifest.bootstrap_sha256)?;
 +    let _ = files::pending_launcher(&state)?;
@@ -58313,6 +58906,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        files::NATIVE_HELPER_NAME,
 +        "install.manifest",
 +        "package-manager",
++        "path-add.pending",
 +        "uninstall.pending",
 +    ];
 +    for entry in fs::read_dir(&state)? {
@@ -58347,6 +58941,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        validate_leases_dir(&state.join("leases"))?;
 +    }
 +    validate_package_manager_marker(&state.join("package-manager"))?;
++    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
 +    if files::path_exists(&state.join("install.manifest"))? {
 +        let _ = files::read_install_manifest(&state.join("install.manifest"))?;
 +    }
@@ -58395,6 +58990,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    let allowed = [
 +        files::NATIVE_HELPER_NAME,
 +        "launcher.lock",
++        "path-add.pending",
 +        "uninstall.pending",
 +    ];
 +    for entry in fs::read_dir(&state)? {
@@ -58416,6 +59012,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    ] {
 +        files::assert_regular_file(&state.join(required))?;
 +    }
++    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
 +    Ok(())
 +}
 +
@@ -58444,9 +59041,10 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    let allowed = [
 +        files::NATIVE_HELPER_NAME,
 +        "launcher.lock",
++        "path-add.pending",
 +        "uninstall.pending",
 +    ];
-+    for entry in fs::read_dir(state)? {
++    for entry in fs::read_dir(&state)? {
 +        let entry = entry?;
 +        if !allowed
 +            .iter()
@@ -58458,6 +59056,7 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        }
 +        files::assert_regular_file(&entry.path())?;
 +    }
++    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
 +    Ok(())
 +}
 +
@@ -58798,6 +59397,33 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +    Ok(true)
 +}
 +
++fn current_path_ownership(
++    install_root: &Path,
++    pending_marker: &Path,
++) -> io::Result<registry::PathOwnership> {
++    let arp = registry::arp_path_ownership(install_root)?;
++    let pending_value_created = registry::path_add_pending_value_created(pending_marker)?;
++    let pending_owned = pending_value_created.is_some()
++        && registry::exact_user_path_entry_exists(&install_root.join("bin"))?;
++    if !pending_owned {
++        return Ok(arp.ownership);
++    }
++    let pending = registry::PathOwnership {
++        owned: true,
++        value_created: pending_value_created.unwrap_or(false),
++    };
++    if arp.ownership.owned && arp.value_created_present && arp.ownership != pending {
++        return Err(files::invalid_data(
++            "PATH ownership intent differs from Installed Apps ownership",
++        ));
++    }
++    Ok(if arp.ownership.owned && arp.value_created_present {
++        arp.ownership
++    } else {
++        pending
++    })
++}
++
 +fn set_package_manager_marker(state: &Path, manager: InstallManager) -> io::Result<()> {
 +    let path = state.join("package-manager");
 +    if files::path_exists(&path)? {
@@ -58821,17 +59447,24 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +}
 +
 +fn inject_fault(point: &str, fault: Option<&str>, prefix: &str) -> io::Result<()> {
-+    if fault != Some(point) {
++    let Some(selected) = fault else {
++        return Ok(());
++    };
++    let terminate = selected.strip_prefix("terminate-") == Some(point);
++    if selected != point && !terminate {
 +        return Ok(());
 +    }
-+    let marker = fault_marker(point, prefix)?;
++    let marker = fault_marker(selected, prefix)?;
 +    if files::path_exists(&marker)? {
 +        files::assert_regular_file(&marker)?;
 +        return Ok(());
 +    }
 +    files::write_durable(&marker, &[])?;
++    if terminate {
++        std::process::exit(86);
++    }
 +    Err(files::invalid_data(format!(
-+        "injected uninstall cleanup fault after {point}"
++        "injected installer lifecycle fault after {point}"
 +    )))
 +}
 +
@@ -58852,9 +59485,11 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +        return Ok(());
 +    }
 +    validate_uninstall_cleanup_root(install_root)?;
-+    let result = (|| {
++    (|| {
 +        let state = install_root.join("state");
 +        if files::path_exists(&state)? {
++            remove_file_if_exists(&state.join("path-add.pending"))?;
++            validate_uninstall_cleanup_root(install_root)?;
 +            remove_file_if_exists(&state.join("uninstall.pending"))?;
 +            inject_fault("after-uninstall-pending", fault, prefix)?;
 +            remove_file_if_exists(&state.join("launcher.lock"))?;
@@ -58872,44 +59507,12 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +                remove_file_if_exists(&helper)?;
 +            }
 +            inject_fault("after-installer-helper", fault, prefix)?;
++            validate_uninstall_cleanup_root(install_root)?;
 +            fs::remove_dir(&state)?;
 +            inject_fault("after-state-directory", fault, prefix)?;
 +        }
 +        remove_terminal_uninstall_files(install_root, fault, prefix)
-+    })();
-+    if result.is_err() {
-+        if let Some(quiet) = quiet {
-+            restore_quiet_uninstall_retry(install_root, quiet)?;
-+        }
-+    }
-+    result
-+}
-+
-+fn restore_quiet_uninstall_retry(install_root: &Path, quiet: &QuietSession) -> io::Result<()> {
-+    if !files::path_exists(install_root)? || !files::path_exists(&quiet.moved_helper_path)? {
-+        return Ok(());
-+    }
-+    files::assert_regular_dir(install_root)?;
-+    let state = install_root.join("state");
-+    if files::path_exists(&state)? {
-+        files::assert_regular_dir(&state)?;
-+    } else {
-+        fs::create_dir(&state)?;
-+    }
-+    let helper = state.join(files::NATIVE_HELPER_NAME);
-+    if files::path_exists(&helper)? {
-+        return Err(files::invalid_data(
-+            "quiet-uninstall retry helper destination already exists",
-+        ));
-+    }
-+    fs::rename(&quiet.moved_helper_path, &helper)?;
-+    if !files::path_exists(&state.join("launcher.lock"))? {
-+        files::write_durable(&state.join("launcher.lock"), &[])?;
-+    }
-+    if !files::path_exists(&state.join("uninstall.pending"))? {
-+        files::write_durable(&state.join("uninstall.pending"), files::UNINSTALL_MARKER)?;
-+    }
-+    validate_uninstall_retry_root(install_root)
++    })()
 +}
 +
 +fn remove_terminal_uninstall_files(
@@ -58995,28 +59598,35 @@ index 0000000000000000000000000000000000000000..28edf89aa56efed0c8aaff20fc459b1b
 +}
 diff --git a/src/platform/windows/installer_helper_registry.rs b/src/platform/windows/installer_helper_registry.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4a7afda72
+index 0000000000000000000000000000000000000000..aa3fb8508590d2c54ce7a85a4b4c5c2f97841953
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_registry.rs
-@@ -0,0 +1,590 @@
-+use std::{collections::BTreeSet, ffi::OsStr, io, os::windows::ffi::OsStrExt as _, path::Path};
+@@ -0,0 +1,880 @@
++use std::{
++    collections::{BTreeMap, BTreeSet},
++    ffi::OsStr,
++    io,
++    os::windows::ffi::OsStrExt as _,
++    path::{Path, PathBuf},
++};
 +
 +use windows_sys::Win32::{
 +    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS},
 +    System::{
 +        Environment::ExpandEnvironmentStringsW,
 +        Registry::{
-+            RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumValueW, RegOpenKeyExW,
-+            RegQueryInfoKeyW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-+            KEY_WRITE, REG_CREATED_NEW_KEY, REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE,
-+            REG_SZ,
++            RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegEnumValueW,
++            RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW, RegSetValueExW, HKEY,
++            HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_CREATED_NEW_KEY, REG_DWORD, REG_EXPAND_SZ,
++            REG_OPTION_NON_VOLATILE, REG_SZ,
 +        },
 +    },
 +};
 +
 +use super::installer_helper_files::{
 +    assert_regular_file, full_path, invalid_data, os_eq_ignore_case, parse_display_version,
-+    path_eq, NATIVE_HELPER_NAME,
++    path_eq, path_exists, write_durable, NATIVE_HELPER_NAME, PATH_ADD_PENDING_CREATED_VALUE,
++    PATH_ADD_PENDING_EXISTING_VALUE,
 +};
 +
 +const PRODUCT_NAME: &str = "Herdr Win";
@@ -59028,12 +59638,38 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +pub(crate) struct PathUpdate {
 +    pub(crate) changed: bool,
 +    pub(crate) owned: bool,
++    pub(crate) value_created: bool,
 +}
 +
-+#[derive(Clone, Debug)]
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(crate) struct PathOwnership {
++    pub(crate) owned: bool,
++    pub(crate) value_created: bool,
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(crate) struct ArpPathOwnership {
++    pub(crate) ownership: PathOwnership,
++    pub(crate) value_created_present: bool,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
 +enum RegistryValue {
 +    String { value: String, kind: u32 },
 +    Dword(u32),
++}
++
++#[derive(Clone, Debug)]
++pub(crate) struct PathRollback {
++    before: String,
++    after: Option<String>,
++    kind: u32,
++}
++
++#[derive(Clone, Debug)]
++pub(crate) struct ArpSnapshot {
++    install_root: PathBuf,
++    values: BTreeMap<String, RegistryValue>,
 +}
 +
 +struct RegistryKey(HKEY);
@@ -59052,9 +59688,17 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +    }
 +
 +    fn create(root: HKEY, subkey: &str) -> io::Result<Self> {
++        Self::create_checked(root, subkey, false)
++    }
++
++    fn create_new(root: HKEY, subkey: &str) -> io::Result<Self> {
++        Self::create_checked(root, subkey, true)
++    }
++
++    fn create_checked(root: HKEY, subkey: &str, require_new: bool) -> io::Result<Self> {
 +        let subkey = wide(subkey)?;
 +        let mut handle = std::ptr::null_mut();
-+        let mut disposition = REG_CREATED_NEW_KEY;
++        let mut disposition = 0;
 +        // SAFETY: all pointers are valid for the immediate create call.
 +        let result = unsafe {
 +            RegCreateKeyExW(
@@ -59070,7 +59714,13 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +            )
 +        };
 +        check_registry(result, "create registry key")?;
-+        Ok(Self(handle))
++        let key = Self(handle);
++        if require_new && disposition != REG_CREATED_NEW_KEY {
++            return Err(invalid_data(
++                "registry key appeared before installer rollback",
++            ));
++        }
++        Ok(key)
 +    }
 +
 +    fn query(&self, name: &str) -> io::Result<Option<RegistryValue>> {
@@ -59183,6 +59833,22 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +                )
 +            },
 +            "write registry DWORD",
++        )
++    }
++
++    fn set_value(&self, name: &str, value: &RegistryValue) -> io::Result<()> {
++        match value {
++            RegistryValue::String { value, kind } => self.set_string(name, value, *kind),
++            RegistryValue::Dword(value) => self.set_dword(name, *value),
++        }
++    }
++
++    fn delete_value(&self, name: &str) -> io::Result<()> {
++        let name = wide(name)?;
++        // SAFETY: name is a valid NUL-terminated registry value name.
++        check_registry(
++            unsafe { RegDeleteValueW(self.0, name.as_ptr()) },
++            "delete registry value",
 +        )
 +    }
 +
@@ -59317,20 +59983,89 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +    )
 +}
 +
-+pub(crate) fn add_user_path(bin_dir: &Path, previously_owned: bool) -> io::Result<PathUpdate> {
-+    update_user_path(bin_dir, true, previously_owned)
++pub(crate) fn add_user_path(
++    bin_dir: &Path,
++    previous_ownership: PathOwnership,
++    pending_marker: &Path,
++) -> io::Result<PathUpdate> {
++    Ok(update_user_path(bin_dir, true, previous_ownership, Some(pending_marker))?.0)
 +}
 +
-+pub(crate) fn remove_user_path(bin_dir: &Path, installer_owned: bool) -> io::Result<PathUpdate> {
-+    update_user_path(bin_dir, false, installer_owned)
++pub(crate) fn remove_user_path(
++    bin_dir: &Path,
++    ownership: PathOwnership,
++) -> io::Result<(PathUpdate, Option<PathRollback>)> {
++    update_user_path(bin_dir, false, ownership, None)
 +}
 +
-+fn update_user_path(bin_dir: &Path, add: bool, installer_owned: bool) -> io::Result<PathUpdate> {
-+    if !add && !installer_owned {
-+        return Ok(PathUpdate {
-+            changed: false,
-+            owned: false,
-+        });
++pub(crate) fn path_add_pending_value_created(path: &Path) -> io::Result<Option<bool>> {
++    if !path_exists(path)? {
++        return Ok(None);
++    }
++    assert_regular_file(path)?;
++    match std::fs::read(path)?.as_slice() {
++        PATH_ADD_PENDING_EXISTING_VALUE => Ok(Some(false)),
++        PATH_ADD_PENDING_CREATED_VALUE => Ok(Some(true)),
++        _ => Err(invalid_data("PATH ownership-intent marker is invalid")),
++    }
++}
++
++pub(crate) fn exact_user_path_entry_exists(bin_dir: &Path) -> io::Result<bool> {
++    let Some(key) = RegistryKey::open_optional(HKEY_CURRENT_USER, ENVIRONMENT_SUBKEY, KEY_READ)?
++    else {
++        return Ok(false);
++    };
++    let entry = full_path(bin_dir)?.to_string_lossy().to_string();
++    match key.query("Path")? {
++        Some(RegistryValue::String { value, .. }) => {
++            Ok(value.split(';').any(|segment| segment == entry))
++        }
++        Some(_) => Err(invalid_data("current-user Path is not a string")),
++        None => Ok(false),
++    }
++}
++
++pub(crate) fn restore_user_path(rollback: &PathRollback) -> io::Result<()> {
++    let Some(key) =
++        RegistryKey::open_optional(HKEY_CURRENT_USER, ENVIRONMENT_SUBKEY, KEY_READ | KEY_WRITE)?
++    else {
++        return Err(invalid_data(
++            "current-user Environment key disappeared during PATH rollback",
++        ));
++    };
++    let current = key.query("Path")?;
++    let expected = rollback.after.as_ref().map(|value| RegistryValue::String {
++        value: value.clone(),
++        kind: rollback.kind,
++    });
++    if current != expected {
++        return Err(invalid_data(
++            "current-user PATH changed before installer rollback",
++        ));
++    }
++    key.set_string("Path", &rollback.before, rollback.kind)
++}
++
++fn update_user_path(
++    bin_dir: &Path,
++    add: bool,
++    ownership: PathOwnership,
++    pending_marker: Option<&Path>,
++) -> io::Result<(PathUpdate, Option<PathRollback>)> {
++    if ownership.value_created && !ownership.owned {
++        return Err(invalid_data(
++            "PATH value ownership requires installer entry ownership",
++        ));
++    }
++    if !add && !ownership.owned {
++        return Ok((
++            PathUpdate {
++                changed: false,
++                owned: false,
++                value_created: false,
++            },
++            None,
++        ));
 +    }
 +    let key = if add {
 +        match RegistryKey::open_optional(
@@ -59348,24 +60083,33 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +            KEY_READ | KEY_WRITE,
 +        )?
 +        else {
-+            return Ok(PathUpdate {
-+                changed: false,
-+                owned: false,
-+            });
++            return Ok((
++                PathUpdate {
++                    changed: false,
++                    owned: false,
++                    value_created: false,
++                },
++                None,
++            ));
 +        };
 +        key
 +    };
 +    let entry = full_path(bin_dir)?.to_string_lossy().to_string();
 +    let current = key.query("Path")?;
++    let value_missing = current.is_none();
 +    let (value, kind) = match current {
 +        Some(RegistryValue::String { value, kind }) => (value, kind),
 +        Some(_) => return Err(invalid_data("current-user Path is not a string")),
 +        None if add => (String::new(), REG_EXPAND_SZ),
 +        None => {
-+            return Ok(PathUpdate {
-+                changed: false,
-+                owned: false,
-+            })
++            return Ok((
++                PathUpdate {
++                    changed: false,
++                    owned: false,
++                    value_created: false,
++                },
++                None,
++            ))
 +        }
 +    };
 +    let mut segments = value.split(';').map(str::to_string).collect::<Vec<_>>();
@@ -59375,38 +60119,157 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +            .any(|segment| path_entry_equal(segment, &entry, kind == REG_EXPAND_SZ))
 +        {
 +            let exact = segments.iter().any(|segment| segment == &entry);
-+            return Ok(PathUpdate {
-+                changed: false,
-+                owned: installer_owned && exact,
-+            });
++            if ownership.owned && ownership.value_created && exact && kind != REG_EXPAND_SZ {
++                return Err(invalid_data(
++                    "installer-created PATH value changed type before setup recovery",
++                ));
++            }
++            return Ok((
++                PathUpdate {
++                    changed: false,
++                    owned: ownership.owned && exact,
++                    value_created: ownership.owned && exact && ownership.value_created,
++                },
++                None,
++            ));
 +        }
 +        let updated = if value.is_empty() {
 +            entry
 +        } else {
 +            format!("{entry};{value}")
 +        };
++        let pending_marker = pending_marker.ok_or_else(|| {
++            invalid_data("PATH addition requires a durable ownership-intent marker")
++        })?;
++        let value_created = ownership.value_created || value_missing;
++        if let Some(pending_value_created) = path_add_pending_value_created(pending_marker)? {
++            if pending_value_created != value_created
++                || (pending_value_created && !value_missing)
++                || (!pending_value_created && value_missing)
++            {
++                return Err(invalid_data(
++                    "current-user PATH changed after installer ownership intent",
++                ));
++            }
++        } else {
++            write_durable(
++                pending_marker,
++                if value_created {
++                    PATH_ADD_PENDING_CREATED_VALUE
++                } else {
++                    PATH_ADD_PENDING_EXISTING_VALUE
++                },
++            )?;
++        }
 +        key.set_string("Path", &updated, kind)?;
-+        return Ok(PathUpdate {
-+            changed: true,
-+            owned: true,
-+        });
++        return Ok((
++            PathUpdate {
++                changed: true,
++                owned: true,
++                value_created,
++            },
++            None,
++        ));
 +    }
 +    let Some(index) = segments.iter().position(|segment| segment == &entry) else {
-+        return Ok(PathUpdate {
-+            changed: false,
-+            owned: false,
-+        });
++        return Ok((
++            PathUpdate {
++                changed: false,
++                owned: false,
++                value_created: false,
++            },
++            None,
++        ));
 +    };
 +    segments.remove(index);
-+    key.set_string("Path", &segments.join(";"), kind)?;
-+    Ok(PathUpdate {
-+        changed: true,
-+        owned: false,
-+    })
++    let after = segments.join(";");
++    let after = if ownership.value_created && after.is_empty() {
++        if kind != REG_EXPAND_SZ {
++            return Err(invalid_data(
++                "installer-created PATH value changed type before removal",
++            ));
++        }
++        key.delete_value("Path")?;
++        None
++    } else {
++        key.set_string("Path", &after, kind)?;
++        Some(after)
++    };
++    Ok((
++        PathUpdate {
++            changed: true,
++            owned: false,
++            value_created: false,
++        },
++        Some(PathRollback {
++            before: value,
++            after,
++            kind,
++        }),
++    ))
 +}
 +
 +pub(crate) fn arp_exists() -> io::Result<bool> {
 +    Ok(RegistryKey::open_optional(HKEY_CURRENT_USER, ARP_SUBKEY, KEY_READ)?.is_some())
++}
++
++pub(crate) fn snapshot_arp_registration(install_root: &Path) -> io::Result<Option<ArpSnapshot>> {
++    assert_arp_ownership(install_root)?;
++    let Some(key) = RegistryKey::open_optional(HKEY_CURRENT_USER, ARP_SUBKEY, KEY_READ)? else {
++        return Ok(None);
++    };
++    let mut values = BTreeMap::new();
++    for name in key.value_names()? {
++        let value = key.query(&name)?.ok_or_else(|| {
++            invalid_data("ARP value disappeared while its ownership snapshot was captured")
++        })?;
++        values.insert(name, value);
++    }
++    Ok(Some(ArpSnapshot {
++        install_root: install_root.to_path_buf(),
++        values,
++    }))
++}
++
++fn registry_values_match(
++    key: &RegistryKey,
++    expected: &BTreeMap<String, RegistryValue>,
++) -> io::Result<bool> {
++    if key.value_names()? != expected.keys().cloned().collect() {
++        return Ok(false);
++    }
++    for (name, value) in expected {
++        if key.query(name)?.as_ref() != Some(value) {
++            return Ok(false);
++        }
++    }
++    Ok(true)
++}
++
++pub(crate) fn restore_arp_registration(snapshot: &ArpSnapshot) -> io::Result<()> {
++    if RegistryKey::open_optional(HKEY_CURRENT_USER, ARP_SUBKEY, KEY_READ)?.is_some() {
++        return Err(invalid_data(
++            "ARP registration appeared before installer rollback",
++        ));
++    }
++    let key = RegistryKey::create_new(HKEY_CURRENT_USER, ARP_SUBKEY)?;
++    let mut restored = BTreeMap::new();
++    for (name, value) in &snapshot.values {
++        if !registry_values_match(&key, &restored)? || key.query(name)?.is_some() {
++            return Err(invalid_data(
++                "ARP registration changed before installer rollback",
++            ));
++        }
++        key.set_value(name, value)?;
++        restored.insert(name.clone(), value.clone());
++    }
++    if !registry_values_match(&key, &snapshot.values)? {
++        return Err(invalid_data(
++            "ARP registration changed during installer rollback",
++        ));
++    }
++    drop(key);
++    assert_arp_ownership(&snapshot.install_root)
 +}
 +
 +pub(crate) fn quiet_uninstall_string(install_root: &Path) -> io::Result<String> {
@@ -59439,9 +60302,11 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +    .into_iter()
 +    .map(str::to_string)
 +    .collect::<BTreeSet<_>>();
-+    let mut with_path = required.clone();
-+    with_path.insert("PathAdded".to_string());
-+    if names != required && names != with_path {
++    let mut with_path_ownership = required.clone();
++    with_path_ownership.insert("PathAdded".to_string());
++    let mut current = with_path_ownership.clone();
++    current.insert("PathValueCreated".to_string());
++    if names != required && names != with_path_ownership && names != current {
 +        return Err(invalid_data(
 +            "the Herdr ARP registration contains unknown or incomplete state",
 +        ));
@@ -59484,34 +60349,59 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +            "refusing to modify an ARP registration not owned by this Herdr install",
 +        ));
 +    }
-+    if let Some(value) = key.query("PathAdded")? {
-+        match value {
-+            RegistryValue::Dword(value) if value <= 1 => {}
-+            _ => return Err(invalid_data("Herdr ARP PathAdded is invalid")),
-+        }
++    let optional_path_dword = |name| match key.query(name)? {
++        None => Ok(0),
++        Some(RegistryValue::Dword(value)) => Ok(value),
++        _ => Err(invalid_data(format!("Herdr ARP {name} must be REG_DWORD"))),
++    };
++    let path_added = optional_path_dword("PathAdded")?;
++    // The immediately preceding current registration has PathAdded but predates
++    // PathValueCreated. Treat the missing fact as unowned rather than blocking
++    // setup or claiming authority to delete the user's PATH value.
++    let path_value_created = optional_path_dword("PathValueCreated")?;
++    if path_added > 1 || path_value_created > 1 || (path_value_created == 1 && path_added == 0) {
++        return Err(invalid_data("Herdr ARP PATH ownership is invalid"));
 +    }
 +    Ok(())
 +}
 +
-+pub(crate) fn arp_path_owned(install_root: &Path) -> io::Result<bool> {
++pub(crate) fn arp_path_ownership(install_root: &Path) -> io::Result<ArpPathOwnership> {
 +    assert_arp_ownership(install_root)?;
 +    let Some(key) = RegistryKey::open_optional(HKEY_CURRENT_USER, ARP_SUBKEY, KEY_READ)? else {
-+        return Ok(false);
++        return Ok(ArpPathOwnership::default());
 +    };
-+    match key.query("PathAdded")? {
-+        None => Ok(false),
-+        Some(RegistryValue::Dword(0)) => Ok(false),
-+        Some(RegistryValue::Dword(1)) => Ok(true),
-+        _ => Err(invalid_data("Herdr ARP PathAdded is invalid")),
-+    }
++    let dword = |name| match key.query(name)? {
++        None => Ok(None),
++        Some(RegistryValue::Dword(value)) if value <= 1 => Ok(Some(value == 1)),
++        _ => Err(invalid_data(format!("Herdr ARP {name} is invalid"))),
++    };
++    let path_added = dword("PathAdded")?;
++    let path_value_created = dword("PathValueCreated")?;
++    Ok(ArpPathOwnership {
++        ownership: PathOwnership {
++            owned: path_added.unwrap_or(false),
++            value_created: path_value_created.unwrap_or(false),
++        },
++        value_created_present: path_value_created.is_some(),
++    })
 +}
 +
-+pub(crate) fn set_arp_registration(
++pub(crate) fn set_arp_registration<F>(
 +    install_root: &Path,
 +    display_version: &str,
 +    numeric_version: &str,
 +    path_added: bool,
-+) -> io::Result<()> {
++    path_value_created: bool,
++    after_path_added: F,
++) -> io::Result<()>
++where
++    F: FnOnce() -> io::Result<()>,
++{
++    if path_value_created && !path_added {
++        return Err(invalid_data(
++            "PATH value ownership requires installer entry ownership",
++        ));
++    }
 +    assert_arp_ownership(install_root)?;
 +    assert_regular_file(&install_root.join("state").join(NATIVE_HELPER_NAME))?;
 +    let key = RegistryKey::create(HKEY_CURRENT_USER, ARP_SUBKEY)?;
@@ -59550,21 +60440,24 @@ index 0000000000000000000000000000000000000000..2310eed0ab437562121fc21060b0c3d4
 +    key.set_dword("NoModify", 1)?;
 +    key.set_dword("NoRepair", 1)?;
 +    key.set_dword("PathAdded", u32::from(path_added))?;
++    after_path_added()?;
++    key.set_dword("PathValueCreated", u32::from(path_value_created))?;
 +    drop(key);
 +    assert_arp_ownership(install_root)
 +}
 +
-+pub(crate) fn remove_arp_registration(install_root: &Path) -> io::Result<()> {
++pub(crate) fn remove_arp_registration(install_root: &Path) -> io::Result<bool> {
 +    assert_arp_ownership(install_root)?;
 +    if !arp_exists()? {
-+        return Ok(());
++        return Ok(false);
 +    }
 +    let subkey = wide(ARP_SUBKEY)?;
 +    // SAFETY: subkey is NUL-terminated and HKCU is a predefined handle.
 +    check_registry(
 +        unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, subkey.as_ptr()) },
 +        "remove Herdr ARP registration",
-+    )
++    )?;
++    Ok(true)
 +}
 +
 +#[cfg(test)]

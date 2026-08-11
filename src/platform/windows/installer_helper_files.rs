@@ -34,6 +34,10 @@ pub(crate) const INSTALL_MANIFEST_HEADER: &str = "herdr-install-manifest-v1";
 pub(crate) const RUNTIME_MANIFEST_HEADER: &str = "herdr-runtime-manifest-v1";
 pub(crate) const MANAGED_BIN_MARKER: &[u8] = b"herdr-managed-bin-v1\n";
 pub(crate) const PACKAGE_MANAGER_MARKER: &[u8] = b"herdr-package-manager-v1\nmanager=winget\n";
+pub(crate) const PATH_ADD_PENDING_EXISTING_VALUE: &[u8] =
+    b"herdr-path-add-pending-v1\nvalue_created=0\n";
+pub(crate) const PATH_ADD_PENDING_CREATED_VALUE: &[u8] =
+    b"herdr-path-add-pending-v1\nvalue_created=1\n";
 pub(crate) const UNINSTALL_MARKER: &[u8] = b"herdr-uninstall-v1\n";
 pub(crate) const NATIVE_HELPER_NAME: &str = "installer-helper.exe";
 pub(crate) const QUIET_UNINSTALL_PENDING: &[u8] = b"herdr-quiet-uninstall-v1\nstatus=pending\n";
@@ -269,6 +273,12 @@ pub(crate) fn sha256(path: &Path) -> io::Result<String> {
         digest.update(&buffer[..count]);
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    format!("{:x}", digest.finalize())
 }
 
 pub(crate) fn normalized_text_sha256(path: &Path) -> io::Result<String> {

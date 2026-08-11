@@ -67,16 +67,33 @@ tests remain the detailed implementation truth.
   that narrow repair, setup directly rebuilds the dedicated managed root from its
   validated embedded payload after proving that no managed process or lease is
   active. Reparse points and active installed files remain preserved blockers;
-  user configuration and projects remain outside this root.
+  user configuration and projects remain outside this root. A current managed root
+  remains updateable when its Installed Apps registration is absent or uses the
+  immediately preceding current value set; setup safely defaults a missing PATH
+  value-ownership fact to unowned and rewrites the complete current registration.
+  Before setup adds its exact PATH entry it persists one ownership-intent marker;
+  Installed Apps registration finalizes that ownership. An interrupted setup
+  therefore claims and later removes only the exact entry it was about to add,
+  while pre-existing equivalent user entries remain unowned. The intent also
+  records whether setup created the user `PATH` value itself, so uninstall restores
+  an originally absent value as absent instead of leaving an empty registry value.
 - Installed/current after setup and absent after uninstall are the terminal product
   outcomes. Fresh/update sibling directories are private disposable staging, not a
   second ownership or recovery authority; stale or malformed staging is removed
   when safe and otherwise preserved with a warning without blocking the requested
   operation. Uninstall uses the existing lifecycle and launcher locks plus one
-  `uninstall.pending` launch gate, then removes `bin` and immutable runtimes directly
-  before final metadata/self-cleanup. A retry resumes from the remaining root rather
-  than parsing a separate uninstall journal. While the marker is present, the stable
-  launcher refuses to start a new managed session.
+  `uninstall.pending` launch gate, then atomically moves `bin` and immutable runtimes
+  into disposable same-parent staging before final metadata/self-cleanup. A stopped
+  removal therefore leaves either the complete owned directory or no directory in
+  the managed root, never a partially deleted tree. The marker remains the final
+  filesystem ownership sentinel until residual enumeration succeeds. Final cleanup
+  removes it before the retry executables, so an interruption either retains a
+  complete retry root or leaves an exact cleanup residual that the next setup can
+  finish. Any reported filesystem, PATH, or Installed Apps failure restores exact
+  retry commands and installer-owned registration, so direct and silent retries may
+  resume from the remaining root without parsing a separate uninstall journal.
+  While the marker is present, the stable launcher refuses to start a new managed
+  session.
 - Direct setup and portable installs update through only the fork-owned immutable
   setup asset and verified digest through the fork-owned update feed. Existing
   managed sessions continue on their current runtime; a newer runtime may remain

@@ -176,6 +176,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             "RegDeleteTreeW",
             "REG_EXPAND_SZ",
             '"PathAdded"',
+            '"PathValueCreated"',
             '"QuietUninstallString"',
             "ExpandEnvironmentStringsW",
         ):
@@ -262,6 +263,8 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertIn("/NATIVE_QUIET_TOKEN=", nsi)
         self.assertIn("--quiet-runner-process-id", nsi)
         self.assertIn("--quiet-token", nsi)
+        self.assertIn("APP_INSTALL_FAULT_ARGS", nsi)
+        self.assertIn("--install-fault", nsi)
         self.assertIn("/TIMEOUT=180000", nsi)
         self.assertIn("/TIMEOUT=30000", nsi)
         self.assertIn('StrCmp $HelperExitCode "error"', nsi)
@@ -304,6 +307,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
     def test_packager_validates_three_distinct_x64_binaries(self) -> None:
         packager = text(PACKAGER)
         self.assertIn("[string]$InstallerHelperExe", packager)
+        self.assertIn("[string]$TestInstallFault", packager)
         self.assertIn("$InstallerHelperExe = (Resolve-Path", packager)
         self.assertEqual(packager.count("Assert-X64Pe -Path"), 3)
         self.assertIn("separately built native installer helper", packager)
@@ -328,12 +332,16 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         fault = text(FAULT_TEST)
         self.assertIn("[string]$InstallerHelperExe", fault)
         for stage in (
+            "after-bin-directory",
             "after-uninstall-pending",
             "after-launcher-lock",
             "after-installer-helper",
             "after-state-directory",
             "before-uninstaller",
             "after-uninstaller",
+            "after-user-path",
+            "after-arp-registration",
+            "terminate-after-installer-helper",
         ):
             self.assertIn(f'"{stage}"', fault)
         for contract in (
@@ -343,6 +351,12 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             "Reparse settings residual remained nonblocking",
             "Native missing-helper repair passed",
             "Native pending-update activation passed",
+            "Cross-mode uninstall retry passed",
+            "Setup retry ownership passed",
+            "Interrupted PATH ownership recovery passed",
+            "Interrupted ARP ownership publication recovery passed",
+            "Hard-termination cleanup recovery passed",
+            "Incomplete current ARP update repair passed",
             "Malformed pending-launcher state did not fail closed",
             "Malformed ARP display identity did not fail closed",
             "Assert-TestUserPathRestored",
@@ -352,9 +366,11 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             '"runtime\\$BuildId"',
             '"quiet-uninstall"',
             '"state\\installer-helper.exe"',
+            '"state\\path-add.pending"',
         ):
             self.assertIn(contract, fault)
         self.assertIn("WaitForExit", fault)
+        self.assertIn("taskkill.exe", fault)
         self.assertNotIn("Wait-Process", fault)
 
     def test_native_helper_owns_terminal_quiet_uninstall(self) -> None:
@@ -364,7 +380,14 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertIn("QUIET_UNINSTALL_TIMEOUT", lifecycle)
         self.assertIn("ProcessJob::new", lifecycle)
         self.assertIn("wait_for_runner_and_remove_helper", lifecycle)
-        self.assertIn("restore_quiet_uninstall_retry", lifecycle)
+        self.assertIn("RetryOwnership", lifecycle)
+        self.assertIn("restore_user_path", lifecycle)
+        self.assertIn("restore_arp_registration", lifecycle)
+        self.assertIn("uninstall.pending", lifecycle)
+        self.assertIn("path-add.pending", lifecycle)
+        self.assertIn("PATH_ADD_PENDING_CREATED_VALUE", text(HELPER_FILES))
+        self.assertIn("PATH_ADD_PENDING_EXISTING_VALUE", text(HELPER_FILES))
+        self.assertIn("stage_managed_directory_for_uninstall", lifecycle)
         self.assertIn("quiet-uninstall --install-root", registry)
         self.assertNotIn("powershell", registry.lower())
 

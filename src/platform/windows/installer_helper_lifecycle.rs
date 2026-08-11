@@ -67,6 +67,8 @@ pub(crate) struct InstallOptions {
     pub(crate) display_version: String,
     pub(crate) numeric_version: String,
     pub(crate) install_manager: InstallManager,
+    pub(crate) fault: Option<String>,
+    pub(crate) fault_marker_prefix: String,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +139,20 @@ struct QuietSession {
     process_id: u32,
     result_path: PathBuf,
     moved_helper_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct FileSnapshot {
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+#[derive(Clone, Debug)]
+struct RetryOwnership {
+    helper: FileSnapshot,
+    launcher_lock: FileSnapshot,
+    path_add_pending: Option<FileSnapshot>,
+    uninstaller: FileSnapshot,
 }
 
 impl Drop for ProcessHandle {
@@ -255,6 +271,112 @@ impl QuietSession {
     }
 }
 
+impl FileSnapshot {
+    fn capture(path: &Path) -> io::Result<Self> {
+        files::assert_regular_file(path)?;
+        let bytes = fs::read(path)?;
+        Ok(Self {
+            sha256: files::sha256_bytes(&bytes),
+            bytes,
+        })
+    }
+
+    fn empty() -> Self {
+        Self {
+            bytes: Vec::new(),
+            sha256: files::sha256_bytes(&[]),
+        }
+    }
+
+    fn restore(&self, path: &Path) -> io::Result<()> {
+        if files::path_exists(path)? {
+            files::assert_regular_file(path)?;
+            if files::sha256(path)? != self.sha256 {
+                return Err(files::invalid_data(format!(
+                    "retry ownership file changed before restoration: {}",
+                    path.display()
+                )));
+            }
+        } else {
+            files::write_durable(path, &self.bytes)?;
+        }
+        if files::sha256(path)? != self.sha256 {
+            return Err(files::invalid_data(format!(
+                "restored retry ownership file differs from its snapshot: {}",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl RetryOwnership {
+    fn capture(install_root: &Path) -> io::Result<Self> {
+        let state = install_root.join("state");
+        let installed_helper = state.join(files::NATIVE_HELPER_NAME);
+        let helper_source = if files::path_exists(&installed_helper)? {
+            installed_helper
+        } else {
+            std::env::current_exe()?
+        };
+        let launcher_lock = state.join("launcher.lock");
+        let path_add_pending = state.join("path-add.pending");
+        Ok(Self {
+            helper: FileSnapshot::capture(&helper_source)?,
+            launcher_lock: if files::path_exists(&launcher_lock)? {
+                FileSnapshot::capture(&launcher_lock)?
+            } else {
+                FileSnapshot::empty()
+            },
+            path_add_pending: if registry::path_add_pending_value_created(&path_add_pending)?
+                .is_some()
+            {
+                Some(FileSnapshot::capture(&path_add_pending)?)
+            } else {
+                None
+            },
+            uninstaller: FileSnapshot::capture(&install_root.join("uninstall.exe"))?,
+        })
+    }
+
+    fn restore(&self, install_root: &Path) -> io::Result<()> {
+        if files::path_exists(install_root)? {
+            files::assert_regular_dir(install_root)?;
+        } else {
+            let parent = install_root
+                .parent()
+                .ok_or_else(|| files::invalid_data("install root has no parent"))?;
+            files::assert_regular_dir(parent)?;
+            fs::create_dir(install_root)?;
+        }
+        let state = install_root.join("state");
+        if files::path_exists(&state)? {
+            files::assert_regular_dir(&state)?;
+        } else {
+            fs::create_dir(&state)?;
+        }
+        self.helper
+            .restore(&state.join(files::NATIVE_HELPER_NAME))?;
+        self.launcher_lock.restore(&state.join("launcher.lock"))?;
+        if let Some(path_add_pending) = &self.path_add_pending {
+            path_add_pending.restore(&state.join("path-add.pending"))?;
+        }
+        let marker = state.join("uninstall.pending");
+        if files::path_exists(&marker)? {
+            files::assert_regular_file(&marker)?;
+            if fs::read(&marker)? != files::UNINSTALL_MARKER {
+                return Err(files::invalid_data(
+                    "uninstall retry ownership marker changed before restoration",
+                ));
+            }
+        } else {
+            files::write_durable(&marker, files::UNINSTALL_MARKER)?;
+        }
+        self.uninstaller
+            .restore(&install_root.join("uninstall.exe"))
+    }
+}
+
 fn validate_quiet_token(token: &str) -> io::Result<()> {
     if token.len() != 32
         || !token
@@ -288,7 +410,8 @@ pub(crate) fn install(options: InstallOptions) -> io::Result<String> {
     let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
     registry::assert_arp_ownership(&install_root)?;
     let allow_convergence = registry::arp_exists()?;
-    let previous_path_owned = registry::arp_path_owned(&install_root)?;
+    let path_add_pending = install_root.join("state").join("path-add.pending");
+    let previous_path_ownership = current_path_ownership(&install_root, &path_add_pending)?;
     let agent_root = skills::agent_skills_root(&profile)?;
     let claude_root = if skills::claude_installed(&profile)? {
         Some(skills::claude_skills_root(
@@ -309,13 +432,31 @@ pub(crate) fn install(options: InstallOptions) -> io::Result<String> {
         claude_root.as_deref(),
         allow_convergence,
     )?;
-    let path_update = registry::add_user_path(&install_root.join("bin"), previous_path_owned)?;
+    let path_update = registry::add_user_path(
+        &install_root.join("bin"),
+        previous_path_ownership,
+        &path_add_pending,
+    )?;
+    inject_fault(
+        "install-after-user-path",
+        options.fault.as_deref(),
+        &options.fault_marker_prefix,
+    )?;
     registry::set_arp_registration(
         &install_root,
         &options.display_version,
         &options.numeric_version,
         path_update.owned,
+        path_update.value_created,
+        || {
+            inject_fault(
+                "install-after-arp-path-added",
+                options.fault.as_deref(),
+                &options.fault_marker_prefix,
+            )
+        },
     )?;
+    remove_file_if_exists(&path_add_pending)?;
     Ok(result)
 }
 
@@ -326,13 +467,23 @@ pub(crate) fn uninstall(options: UninstallOptions) -> io::Result<String> {
         .as_ref()
         .map(|value| QuietSession::new(&install_root, value))
         .transpose()?;
+    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
+    let retry_ownership = if files::path_exists(&install_root)? {
+        Some(RetryOwnership::capture(&install_root)?)
+    } else {
+        None
+    };
+    let arp_snapshot = registry::snapshot_arp_registration(&install_root)?;
+    let mut path_rollback = None;
+    let mut arp_removed = false;
+    let mut residual_ready = false;
     let result = (|| {
         let profile = skills::user_profile_root(&options.user_profile_root)?;
         let known = skills::read_managed_skill_hashes(&options.skill_hash_manifest, None)?;
-        let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
         registry::assert_arp_ownership(&install_root)?;
         let allow_convergence = registry::arp_exists()?;
-        let path_owned = registry::arp_path_owned(&install_root)?;
+        let path_add_pending = install_root.join("state").join("path-add.pending");
+        let path_ownership = current_path_ownership(&install_root, &path_add_pending)?;
         let agent_root = skills::agent_skills_root(&profile)?;
         let claude_roots = skills::claude_roots_for_removal(&profile)?;
         let mut warnings = Vec::new();
@@ -343,15 +494,33 @@ pub(crate) fn uninstall(options: UninstallOptions) -> io::Result<String> {
             &known,
             options.skill_disposition,
             allow_convergence,
+            quiet.as_ref(),
             options.fault.as_deref(),
             &options.fault_marker_prefix,
-            quiet.as_ref(),
         )?;
         if let Some(warning) = warning {
             warnings.push(warning);
         }
-        let _ = registry::remove_user_path(&install_root.join("bin"), path_owned)?;
-        registry::remove_arp_registration(&install_root)?;
+        residual_ready = true;
+        let (_, rollback) = registry::remove_user_path(&install_root.join("bin"), path_ownership)?;
+        path_rollback = rollback;
+        inject_fault(
+            "after-user-path",
+            options.fault.as_deref(),
+            &options.fault_marker_prefix,
+        )?;
+        arp_removed = registry::remove_arp_registration(&install_root)?;
+        inject_fault(
+            "after-arp-registration",
+            options.fault.as_deref(),
+            &options.fault_marker_prefix,
+        )?;
+        remove_uninstall_residual(
+            &install_root,
+            options.fault.as_deref(),
+            &options.fault_marker_prefix,
+            quiet.as_ref(),
+        )?;
         if options.settings_disposition == SettingsDisposition::Remove {
             if let Err(err) = skills::remove_user_settings(&profile) {
                 warnings.push(format!(
@@ -369,6 +538,40 @@ pub(crate) fn uninstall(options: UninstallOptions) -> io::Result<String> {
         }
         Ok(output)
     })();
+    let result = if let Err(original) = result {
+        if residual_ready {
+            let mut restore_errors = Vec::new();
+            if let Some(retry_ownership) = &retry_ownership {
+                if let Err(err) = retry_ownership.restore(&install_root) {
+                    restore_errors.push(format!("filesystem ownership: {err}"));
+                }
+            }
+            if let Some(rollback) = &path_rollback {
+                if let Err(err) = registry::restore_user_path(rollback) {
+                    restore_errors.push(format!("PATH ownership: {err}"));
+                }
+            }
+            if arp_removed {
+                if let Some(snapshot) = &arp_snapshot {
+                    if let Err(err) = registry::restore_arp_registration(snapshot) {
+                        restore_errors.push(format!("ARP ownership: {err}"));
+                    }
+                }
+            }
+            if restore_errors.is_empty() {
+                Err(original)
+            } else {
+                Err(io::Error::other(format!(
+                    "{original}; uninstall retry restoration failed: {}",
+                    restore_errors.join("; ")
+                )))
+            }
+        } else {
+            Err(original)
+        }
+    } else {
+        result
+    };
     if let Some(quiet) = &quiet {
         let success = result.is_ok();
         let publish_result = quiet.publish_result(success);
@@ -437,9 +640,7 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
     }
     let deadline = Instant::now() + QUIET_UNINSTALL_TIMEOUT;
     loop {
-        if files::path_exists(&result_path)? {
-            files::assert_regular_file(&result_path)?;
-            let status = fs::read(&result_path)?;
+        if let Some(status) = read_quiet_result(&result_path)? {
             if status != files::QUIET_UNINSTALL_PENDING {
                 remove_file_if_exists(&result_path)?;
                 return match status.as_slice() {
@@ -474,6 +675,27 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
             ));
         }
         thread::sleep(LOCK_RETRY);
+    }
+}
+
+fn read_quiet_result(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    if !files::path_exists(path)? {
+        return Ok(None);
+    }
+    if let Err(err) = files::assert_regular_file(path) {
+        return if err.kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(err)
+        };
+    }
+    match fs::read(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(files::contextual(
+            err,
+            format!("failed to read quiet-uninstall result: {}", path.display()),
+        )),
     }
 }
 
@@ -557,20 +779,32 @@ fn install_layout(
         Err(err) => return Err(err),
     };
     if kind == RootKind::UninstallRetry {
-        let _ = uninstall_layout(
-            install_root,
-            agent_skills_root,
-            &claude_skills_root
-                .into_iter()
-                .map(Path::to_path_buf)
-                .collect::<Vec<_>>(),
-            &known,
-            SkillDisposition::Keep,
-            true,
-            None,
-            "herdr",
-            None,
-        )?;
+        let retry_ownership = RetryOwnership::capture(install_root)?;
+        let cleanup = (|| {
+            let _ = uninstall_layout(
+                install_root,
+                agent_skills_root,
+                &claude_skills_root
+                    .into_iter()
+                    .map(Path::to_path_buf)
+                    .collect::<Vec<_>>(),
+                &known,
+                SkillDisposition::Keep,
+                true,
+                None,
+                None,
+                "herdr",
+            )?;
+            remove_uninstall_residual(install_root, None, "herdr", None)
+        })();
+        if let Err(original) = cleanup {
+            return match retry_ownership.restore(install_root) {
+                Ok(()) => Err(original),
+                Err(restore) => Err(io::Error::other(format!(
+                    "{original}; setup could not restore uninstall retry ownership: {restore}"
+                ))),
+            };
+        }
         kind = RootKind::New;
     } else if kind == RootKind::UninstallResidual {
         remove_uninstall_residual(install_root, None, "herdr", None)?;
@@ -995,9 +1229,9 @@ fn uninstall_layout(
     known: &BTreeSet<String>,
     skill_disposition: SkillDisposition,
     allow_convergence: bool,
-    fault: Option<&str>,
-    marker_prefix: &str,
     quiet: Option<&QuietSession>,
+    fault: Option<&str>,
+    fault_prefix: &str,
 ) -> io::Result<(Vec<PathBuf>, Option<String>)> {
     remove_stale_staging(install_root);
     if !files::path_exists(install_root)? {
@@ -1034,7 +1268,6 @@ fn uninstall_layout(
             known,
             skill_disposition,
         );
-        remove_uninstall_residual(install_root, fault, marker_prefix, quiet)?;
         return Ok(result);
     }
     if !matches!(kind, RootKind::ManagedNative | RootKind::UninstallRetry) {
@@ -1081,9 +1314,9 @@ fn uninstall_layout(
         files::assert_regular_file(&marker)?;
     }
     for name in ["bin", "runtime"] {
-        let path = install_root.join(name);
-        if files::path_exists(&path)? {
-            files::remove_validated_directory(&path)?;
+        stage_managed_directory_for_uninstall(install_root, name)?;
+        if name == "bin" {
+            inject_fault("after-bin-directory", fault, fault_prefix)?;
         }
     }
     if let Some(pending) = files::pending_launcher(&state)? {
@@ -1097,8 +1330,25 @@ fn uninstall_layout(
     }
     drop(_coordination);
     validate_uninstall_residual(install_root)?;
-    remove_uninstall_residual(install_root, fault, marker_prefix, quiet)?;
     Ok((preserved, warning))
+}
+
+fn stage_managed_directory_for_uninstall(install_root: &Path, name: &str) -> io::Result<()> {
+    let source = install_root.join(name);
+    if !files::path_exists(&source)? {
+        return Ok(());
+    }
+    files::assert_regular_dir(&source)?;
+    let staging = new_staging("uninstall", install_root)?;
+    if let Err(err) = fs::rename(&source, staging.path.join(name)) {
+        cleanup_staging(&staging);
+        return Err(files::contextual(
+            err,
+            format!("failed to stage managed {name} for uninstall"),
+        ));
+    }
+    cleanup_staging(&staging);
+    Ok(())
 }
 
 fn remove_current_root_for_convergence(install_root: &Path) -> io::Result<()> {
@@ -1192,6 +1442,7 @@ fn validate_managed_root(install_root: &Path, allow_missing_helper: bool) -> io:
         files::NATIVE_HELPER_NAME,
         "install.manifest",
         "package-manager",
+        "path-add.pending",
     ];
     for entry in fs::read_dir(&state)? {
         let entry = entry?;
@@ -1229,6 +1480,7 @@ fn validate_managed_root(install_root: &Path, allow_missing_helper: bool) -> io:
     }
     validate_leases_dir(&state.join("leases"))?;
     validate_package_manager_marker(&state.join("package-manager"))?;
+    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
     let manifest = files::read_install_manifest(&state.join("install.manifest"))?;
     validate_managed_bin(&install_root.join("bin"), &manifest.bootstrap_sha256)?;
     let _ = files::pending_launcher(&state)?;
@@ -1330,6 +1582,7 @@ fn validate_uninstall_retry_root(install_root: &Path) -> io::Result<()> {
         files::NATIVE_HELPER_NAME,
         "install.manifest",
         "package-manager",
+        "path-add.pending",
         "uninstall.pending",
     ];
     for entry in fs::read_dir(&state)? {
@@ -1364,6 +1617,7 @@ fn validate_uninstall_retry_root(install_root: &Path) -> io::Result<()> {
         validate_leases_dir(&state.join("leases"))?;
     }
     validate_package_manager_marker(&state.join("package-manager"))?;
+    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
     if files::path_exists(&state.join("install.manifest"))? {
         let _ = files::read_install_manifest(&state.join("install.manifest"))?;
     }
@@ -1412,6 +1666,7 @@ fn validate_uninstall_residual(install_root: &Path) -> io::Result<()> {
     let allowed = [
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
+        "path-add.pending",
         "uninstall.pending",
     ];
     for entry in fs::read_dir(&state)? {
@@ -1433,6 +1688,7 @@ fn validate_uninstall_residual(install_root: &Path) -> io::Result<()> {
     ] {
         files::assert_regular_file(&state.join(required))?;
     }
+    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
     Ok(())
 }
 
@@ -1461,9 +1717,10 @@ fn validate_uninstall_cleanup_root(install_root: &Path) -> io::Result<()> {
     let allowed = [
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
+        "path-add.pending",
         "uninstall.pending",
     ];
-    for entry in fs::read_dir(state)? {
+    for entry in fs::read_dir(&state)? {
         let entry = entry?;
         if !allowed
             .iter()
@@ -1475,6 +1732,7 @@ fn validate_uninstall_cleanup_root(install_root: &Path) -> io::Result<()> {
         }
         files::assert_regular_file(&entry.path())?;
     }
+    let _ = registry::path_add_pending_value_created(&state.join("path-add.pending"))?;
     Ok(())
 }
 
@@ -1815,6 +2073,33 @@ fn validate_package_manager_marker(path: &Path) -> io::Result<bool> {
     Ok(true)
 }
 
+fn current_path_ownership(
+    install_root: &Path,
+    pending_marker: &Path,
+) -> io::Result<registry::PathOwnership> {
+    let arp = registry::arp_path_ownership(install_root)?;
+    let pending_value_created = registry::path_add_pending_value_created(pending_marker)?;
+    let pending_owned = pending_value_created.is_some()
+        && registry::exact_user_path_entry_exists(&install_root.join("bin"))?;
+    if !pending_owned {
+        return Ok(arp.ownership);
+    }
+    let pending = registry::PathOwnership {
+        owned: true,
+        value_created: pending_value_created.unwrap_or(false),
+    };
+    if arp.ownership.owned && arp.value_created_present && arp.ownership != pending {
+        return Err(files::invalid_data(
+            "PATH ownership intent differs from Installed Apps ownership",
+        ));
+    }
+    Ok(if arp.ownership.owned && arp.value_created_present {
+        arp.ownership
+    } else {
+        pending
+    })
+}
+
 fn set_package_manager_marker(state: &Path, manager: InstallManager) -> io::Result<()> {
     let path = state.join("package-manager");
     if files::path_exists(&path)? {
@@ -1838,17 +2123,24 @@ fn fault_marker(point: &str, prefix: &str) -> io::Result<PathBuf> {
 }
 
 fn inject_fault(point: &str, fault: Option<&str>, prefix: &str) -> io::Result<()> {
-    if fault != Some(point) {
+    let Some(selected) = fault else {
+        return Ok(());
+    };
+    let terminate = selected.strip_prefix("terminate-") == Some(point);
+    if selected != point && !terminate {
         return Ok(());
     }
-    let marker = fault_marker(point, prefix)?;
+    let marker = fault_marker(selected, prefix)?;
     if files::path_exists(&marker)? {
         files::assert_regular_file(&marker)?;
         return Ok(());
     }
     files::write_durable(&marker, &[])?;
+    if terminate {
+        std::process::exit(86);
+    }
     Err(files::invalid_data(format!(
-        "injected uninstall cleanup fault after {point}"
+        "injected installer lifecycle fault after {point}"
     )))
 }
 
@@ -1869,9 +2161,11 @@ fn remove_uninstall_residual(
         return Ok(());
     }
     validate_uninstall_cleanup_root(install_root)?;
-    let result = (|| {
+    (|| {
         let state = install_root.join("state");
         if files::path_exists(&state)? {
+            remove_file_if_exists(&state.join("path-add.pending"))?;
+            validate_uninstall_cleanup_root(install_root)?;
             remove_file_if_exists(&state.join("uninstall.pending"))?;
             inject_fault("after-uninstall-pending", fault, prefix)?;
             remove_file_if_exists(&state.join("launcher.lock"))?;
@@ -1889,44 +2183,12 @@ fn remove_uninstall_residual(
                 remove_file_if_exists(&helper)?;
             }
             inject_fault("after-installer-helper", fault, prefix)?;
+            validate_uninstall_cleanup_root(install_root)?;
             fs::remove_dir(&state)?;
             inject_fault("after-state-directory", fault, prefix)?;
         }
         remove_terminal_uninstall_files(install_root, fault, prefix)
-    })();
-    if result.is_err() {
-        if let Some(quiet) = quiet {
-            restore_quiet_uninstall_retry(install_root, quiet)?;
-        }
-    }
-    result
-}
-
-fn restore_quiet_uninstall_retry(install_root: &Path, quiet: &QuietSession) -> io::Result<()> {
-    if !files::path_exists(install_root)? || !files::path_exists(&quiet.moved_helper_path)? {
-        return Ok(());
-    }
-    files::assert_regular_dir(install_root)?;
-    let state = install_root.join("state");
-    if files::path_exists(&state)? {
-        files::assert_regular_dir(&state)?;
-    } else {
-        fs::create_dir(&state)?;
-    }
-    let helper = state.join(files::NATIVE_HELPER_NAME);
-    if files::path_exists(&helper)? {
-        return Err(files::invalid_data(
-            "quiet-uninstall retry helper destination already exists",
-        ));
-    }
-    fs::rename(&quiet.moved_helper_path, &helper)?;
-    if !files::path_exists(&state.join("launcher.lock"))? {
-        files::write_durable(&state.join("launcher.lock"), &[])?;
-    }
-    if !files::path_exists(&state.join("uninstall.pending"))? {
-        files::write_durable(&state.join("uninstall.pending"), files::UNINSTALL_MARKER)?;
-    }
-    validate_uninstall_retry_root(install_root)
+    })()
 }
 
 fn remove_terminal_uninstall_files(

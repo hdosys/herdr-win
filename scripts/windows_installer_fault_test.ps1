@@ -11,12 +11,15 @@ param(
     [string]$PackageName = "Herdr Win",
     [string]$AgentUserProfileRoot,
     [string[]]$Faults = @(
+        "after-bin-directory",
         "after-uninstall-pending",
         "after-launcher-lock",
         "after-installer-helper",
         "after-state-directory",
         "before-uninstaller",
-        "after-uninstaller"
+        "after-uninstaller",
+        "after-user-path",
+        "after-arp-registration"
     )
 )
 
@@ -93,15 +96,15 @@ function Restore-TestUserPath {
     }
 }
 
-function Assert-TestUserPathRestored {
+function Test-TestUserPathRestored {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
     if ($null -eq $key) {
-        throw "HKCU\Environment is unavailable while verifying PATH restoration."
+        return $false
     }
     try {
         $actualExists = @($key.GetValueNames()) -contains "Path"
         if ($actualExists -ne $originalUserPathExists) {
-            throw "Uninstall did not restore whether the user PATH value exists."
+            return $false
         }
         if ($actualExists) {
             $actualValue = $key.GetValue(
@@ -111,11 +114,56 @@ function Assert-TestUserPathRestored {
             )
             $actualKind = $key.GetValueKind("Path")
             if ([string]$actualValue -cne [string]$originalUserPath -or $actualKind -ne $originalUserPathKind) {
-                throw "Uninstall did not restore the exact user PATH value and registry kind. Expected '$originalUserPath' ($originalUserPathKind), got '$actualValue' ($actualKind)."
+                return $false
             }
         }
+        return $true
     } finally {
         $key.Dispose()
+    }
+}
+
+function Assert-TestUserPathRestored {
+    if (-not (Test-TestUserPathRestored)) {
+        throw "Uninstall did not restore the exact user PATH value and registry kind."
+    }
+}
+
+function Test-TestUserPathRetryOwned {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+    if ($null -eq $key) {
+        return $false
+    }
+    try {
+        if (@($key.GetValueNames()) -notcontains "Path") {
+            return $false
+        }
+        $actualValue = [string]$key.GetValue(
+            "Path",
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        $actualKind = $key.GetValueKind("Path")
+        $managedBin = Join-Path $installRoot "bin"
+        $expectedValue = if ($originalUserPathExists -and -not [string]::IsNullOrEmpty([string]$originalUserPath)) {
+            "$managedBin;$originalUserPath"
+        } else {
+            $managedBin
+        }
+        $expectedKind = if ($originalUserPathExists) {
+            $originalUserPathKind
+        } else {
+            [Microsoft.Win32.RegistryValueKind]::ExpandString
+        }
+        return $actualValue -ceq $expectedValue -and $actualKind -eq $expectedKind
+    } finally {
+        $key.Dispose()
+    }
+}
+
+function Assert-TestUserPathRetryOwned {
+    if (-not (Test-TestUserPathRetryOwned)) {
+        throw "Failed uninstall did not restore the exact installer-owned PATH state."
     }
 }
 
@@ -158,13 +206,18 @@ $inheritedUserProfileDecoy = Join-Path $AgentUserProfileRoot "inherited-userprof
 New-Item -ItemType Directory -Path $inheritedUserProfileDecoy | Out-Null
 $env:USERPROFILE = $inheritedUserProfileDecoy
 $allowedFaults = @(
+    "after-bin-directory",
     "after-uninstall-pending",
     "after-launcher-lock",
     "after-installer-helper",
     "after-state-directory",
     "before-uninstaller",
-    "after-uninstaller"
+    "after-uninstaller",
+    "after-user-path",
+    "after-arp-registration"
 )
+$hardTerminationFault = "terminate-after-installer-helper"
+$cleanupFaults = @($allowedFaults) + @($hardTerminationFault)
 if ($ProductName -cnotmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$') {
     throw "Invalid product name '$ProductName'."
 }
@@ -196,8 +249,22 @@ function Start-TestProcess {
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
     try {
         if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-            $process.Kill()
-            [void]$process.WaitForExit(5000)
+            $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+            $cleanup = Start-Process -FilePath $taskkill -ArgumentList @(
+                "/PID", $process.Id, "/T", "/F"
+            ) -PassThru -NoNewWindow
+            try {
+                if (-not $cleanup.WaitForExit(10000)) {
+                    $cleanup.Kill()
+                    [void]$cleanup.WaitForExit(5000)
+                }
+            } finally {
+                $cleanup.Dispose()
+            }
+            if (-not $process.WaitForExit(10000)) {
+                $process.Kill()
+                [void]$process.WaitForExit(5000)
+            }
             throw "$FilePath exceeded its $TimeoutMilliseconds ms process deadline."
         }
         return $process.ExitCode
@@ -317,7 +384,7 @@ function Remove-TestInstallIfPresent {
     if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
         throw "Cannot safely clean unexpected test install root: $installRoot"
     }
-    foreach ($fault in $allowedFaults) {
+    foreach ($fault in $cleanupFaults) {
         [IO.File]::WriteAllText(
             (Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"),
             "cleanup"
@@ -381,6 +448,7 @@ if (-not (Test-Path -LiteralPath $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
+$testFailure = $null
 try {
     foreach ($fault in $Faults) {
         $faultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"
@@ -436,12 +504,26 @@ try {
         [IO.File]::WriteAllText((Join-Path $settingsRoot "settings.toml"), "preserve-by-default")
 
         $uninstaller = Join-Path $installRoot "uninstall.exe"
-        $firstQuietExit = Invoke-TestQuietUninstall
-        if ($firstQuietExit -eq 0) {
-            throw "Quiet uninstall reported success after injected failure $fault."
+        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper") {
+            $firstDirectExit = Start-TestProcess -FilePath $uninstaller -Arguments @("/S")
+            if ($firstDirectExit -ne 0) {
+                throw "Direct uninstall bootstrap for $fault exited with $firstDirectExit."
+            }
+        } else {
+            $firstQuietExit = Invoke-TestQuietUninstall
+            if ($firstQuietExit -eq 0) {
+                throw "Quiet uninstall reported success after injected failure $fault."
+            }
         }
         Wait-TestCondition -Description "first injected uninstall for $fault" -Condition {
             Test-Path -LiteralPath $faultMarker
+        }
+        Wait-TestCondition -Description "restored uninstall retry ownership for $fault" -Condition {
+            (Test-Path -LiteralPath $uninstaller -PathType Leaf) -and
+                (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf) -and
+                (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending") -PathType Leaf) -and
+                (Test-Path -LiteralPath $arpKey) -and
+                (Test-TestUserPathRetryOwned)
         }
         Wait-TestUninstallerIdle
         if (Test-Path -LiteralPath $skillPath) {
@@ -463,22 +545,202 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf)) {
             throw "Injected uninstall $fault removed its native quiet retry helper."
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending") -PathType Leaf)) {
+            throw "Injected uninstall $fault removed its final ownership sentinel."
+        }
+        Assert-TestUserPathRetryOwned
 
-        $retryQuietExit = Invoke-TestQuietUninstall
-        if ($retryQuietExit -ne 0) {
-            throw "Quiet uninstall retry $fault exited with $retryQuietExit."
+        if ($fault -eq "after-state-directory") {
+            $setupRetryExit = Start-TestProcess -FilePath $installer -Arguments @("/S")
+            if ($setupRetryExit -ne 0) {
+                throw "Setup retry $fault exited with $setupRetryExit."
+            }
+            Wait-TestCondition -Description "setup retry for $fault" -Condition {
+                (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
+                    (Test-Path -LiteralPath $arpKey)
+            }
+            $retryQuietExit = Invoke-TestQuietUninstall
+            if ($retryQuietExit -ne 0) {
+                throw "Quiet uninstall after setup retry $fault exited with $retryQuietExit."
+            }
+        } elseif ($fault -eq "after-uninstaller") {
+            $retryDirectExit = Start-TestProcess -FilePath $uninstaller -Arguments @("/S")
+            if ($retryDirectExit -ne 0) {
+                throw "Direct uninstall retry $fault exited with $retryDirectExit."
+            }
+        } else {
+            $retryQuietExit = Invoke-TestQuietUninstall
+            if ($retryQuietExit -ne 0) {
+                throw "Quiet uninstall retry $fault exited with $retryQuietExit."
+            }
         }
         Wait-TestCondition -Description "retry uninstall for $fault" -Condition {
             -not (Test-Path -LiteralPath $installRoot) -and
                 -not (Test-Path -LiteralPath $arpKey) -and
                 -not (Test-Path -LiteralPath $faultMarker)
         }
+        Assert-TestUserPathRestored
         if ([IO.File]::ReadAllText((Join-Path $settingsRoot "settings.toml")) -cne "preserve-by-default") {
             throw "Retry uninstall $fault did not preserve settings by default."
         }
         Remove-Item -LiteralPath $settingsRoot -Recurse -Force
+        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper" -or $fault -eq "after-uninstaller") {
+            Write-Host "Cross-mode uninstall retry passed: $fault"
+        }
+        if ($fault -eq "after-state-directory") {
+            Write-Host "Setup retry ownership passed: $fault"
+        }
         Write-Host "Uninstall fault retry passed: $fault"
     }
+
+    $savedOriginalUserPathExists = $originalUserPathExists
+    $savedOriginalUserPath = $originalUserPath
+    $savedOriginalUserPathKind = $originalUserPathKind
+    $originalUserPathExists = $false
+    $originalUserPath = $null
+    $originalUserPathKind = $null
+    try {
+    Restore-TestUserPath
+    $installFaults = @(
+        [pscustomobject]@{ Name = "after-user-path"; PartialArp = $false },
+        [pscustomobject]@{ Name = "after-arp-path-added"; PartialArp = $true }
+    )
+    foreach ($installFaultCase in $installFaults) {
+        $installFault = $installFaultCase.Name
+        $installFaultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-install-$installFault.once"
+        $installFaultInstaller = Join-Path $OutputDir "herdr-installer-fault-install-$installFault.exe"
+        foreach ($path in @($installFaultMarker, $installFaultInstaller)) {
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force
+            }
+        }
+        & $packager `
+            -StageDir $StageDir `
+            -LauncherExe $LauncherExe `
+            -InstallerHelperExe $InstallerHelperExe `
+            -BuildId $BuildId `
+            -DisplayVersion $DisplayVersion `
+            -NumericVersion $NumericVersion `
+            -ProductName $ProductName `
+            -OutputPath $installFaultInstaller `
+            -TestInstallFault $installFault `
+            -TestUserProfileRoot $AgentUserProfileRoot
+        $firstInstallFaultExit = Start-TestProcess -FilePath $installFaultInstaller -Arguments @("/S")
+        if ($firstInstallFaultExit -eq 0) {
+            throw "Setup reported success after injected ownership failure $installFault."
+        }
+        Wait-TestCondition -Description "interrupted ownership publication at $installFault" -Condition {
+            $arpReady = if ($installFaultCase.PartialArp) {
+                if (-not (Test-Path -LiteralPath $arpKey)) {
+                    $false
+                } else {
+                    $partialArp = Get-ItemProperty -LiteralPath $arpKey
+                    $partialNames = @((Get-Item -LiteralPath $arpKey).Property)
+                    [int]$partialArp.PathAdded -eq 1 -and $partialNames -notcontains "PathValueCreated"
+                }
+            } else {
+                -not (Test-Path -LiteralPath $arpKey)
+            }
+            (Test-Path -LiteralPath (Join-Path $installRoot "state\path-add.pending") -PathType Leaf) -and
+                (Test-Path -LiteralPath $installFaultMarker -PathType Leaf) -and
+                $arpReady -and
+                (Test-TestUserPathRetryOwned)
+        }
+        $retryInstallFaultExit = Start-TestProcess -FilePath $installFaultInstaller -Arguments @("/S")
+        if ($retryInstallFaultExit -ne 0) {
+            throw "Setup ownership retry $installFault exited with $retryInstallFaultExit."
+        }
+        Wait-TestCondition -Description "recovered ownership publication at $installFault" -Condition {
+            (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
+                -not (Test-Path -LiteralPath (Join-Path $installRoot "state\path-add.pending")) -and
+                (Test-Path -LiteralPath $arpKey)
+        }
+        $recoveredArp = Get-ItemProperty -LiteralPath $arpKey
+        if ([int]$recoveredArp.PathAdded -ne 1) {
+            throw "Recovered setup did not retain ownership of its pending PATH entry."
+        }
+        if ([int]$recoveredArp.PathValueCreated -ne 1) {
+            throw "Recovered setup did not retain ownership of its newly created PATH value."
+        }
+        $installFaultUninstallExit = Invoke-TestQuietUninstall
+        if ($installFaultUninstallExit -ne 0) {
+            throw "Uninstall after ownership recovery $installFault exited with $installFaultUninstallExit."
+        }
+        Wait-TestCondition -Description "ownership recovery uninstall at $installFault" -Condition {
+            -not (Test-Path -LiteralPath $installRoot) -and
+                -not (Test-Path -LiteralPath $arpKey)
+        }
+        Assert-TestUserPathRestored
+        Remove-Item -LiteralPath $installFaultMarker -Force
+        if ($installFaultCase.PartialArp) {
+            Write-Host "Interrupted ARP ownership publication recovery passed."
+        } else {
+            Write-Host "Interrupted PATH ownership recovery passed."
+        }
+    }
+    } finally {
+        $originalUserPathExists = $savedOriginalUserPathExists
+        $originalUserPath = $savedOriginalUserPath
+        $originalUserPathKind = $savedOriginalUserPathKind
+        Restore-TestUserPath
+    }
+
+    $hardTerminationMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$hardTerminationFault.once"
+    $hardTerminationInstaller = Join-Path $OutputDir "herdr-installer-fault-$hardTerminationFault.exe"
+    foreach ($path in @($hardTerminationMarker, $hardTerminationInstaller)) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+    & $packager `
+        -StageDir $StageDir `
+        -LauncherExe $LauncherExe `
+        -InstallerHelperExe $InstallerHelperExe `
+        -BuildId $BuildId `
+        -DisplayVersion $DisplayVersion `
+        -NumericVersion $NumericVersion `
+        -ProductName $ProductName `
+        -OutputPath $hardTerminationInstaller `
+        -TestUninstallFault $hardTerminationFault `
+        -TestUserProfileRoot $AgentUserProfileRoot
+    $hardInstallExit = Start-TestProcess -FilePath $hardTerminationInstaller -Arguments @("/S")
+    if ($hardInstallExit -ne 0) {
+        throw "Hard-termination fixture setup exited with $hardInstallExit."
+    }
+    $hardUninstaller = Join-Path $installRoot "uninstall.exe"
+    [void](Start-TestProcess -FilePath $hardUninstaller -Arguments @("/S"))
+    Wait-TestCondition -Description "hard-termination cleanup fault" -Condition {
+        Test-Path -LiteralPath $hardTerminationMarker -PathType Leaf
+    }
+    Wait-TestUninstallerIdle
+    if (-not (Test-Path -LiteralPath $hardUninstaller -PathType Leaf) -or
+        (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending")) -or
+        (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe")) -or
+        (Test-Path -LiteralPath (Join-Path $installRoot "state\launcher.lock")) -or
+        (Test-Path -LiteralPath $arpKey)) {
+        throw "Hard-terminated cleanup did not leave the exact classifiable residual."
+    }
+    Assert-TestUserPathRestored
+    $hardRecoveryExit = Start-TestProcess -FilePath $hardTerminationInstaller -Arguments @("/S")
+    if ($hardRecoveryExit -ne 0) {
+        throw "Setup recovery from hard-terminated cleanup exited with $hardRecoveryExit."
+    }
+    Wait-TestCondition -Description "hard-termination setup recovery" -Condition {
+        (Test-Path -LiteralPath (Join-Path $installRoot "state\active") -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe") -PathType Leaf) -and
+            (Test-Path -LiteralPath $arpKey)
+    }
+    $hardCleanupExit = Invoke-TestQuietUninstall
+    if ($hardCleanupExit -ne 0) {
+        throw "Quiet uninstall after hard-termination recovery exited with $hardCleanupExit."
+    }
+    Wait-TestCondition -Description "hard-termination recovery uninstall" -Condition {
+        -not (Test-Path -LiteralPath $installRoot) -and
+            -not (Test-Path -LiteralPath $arpKey) -and
+            -not (Test-Path -LiteralPath $hardTerminationMarker)
+    }
+    Assert-TestUserPathRestored
+    Write-Host "Hard-termination cleanup recovery passed."
 
     $modifiedInstaller = Join-Path $OutputDir "herdr-installer-modified-skill-tree.exe"
     if (Test-Path -LiteralPath $modifiedInstaller) {
@@ -512,6 +774,16 @@ try {
     if (Test-Path -LiteralPath (Join-Path $installRoot "state\package-manager")) {
         throw "Setup accepted /WINGETjunk as package-manager ownership."
     }
+    Remove-ItemProperty -LiteralPath $arpKey -Name PathValueCreated
+    $incompleteArpUpdateExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S")
+    if ($incompleteArpUpdateExit -ne 0) {
+        throw "Update from the preceding current ARP registration exited with $incompleteArpUpdateExit."
+    }
+    $repairedArp = Get-ItemProperty -LiteralPath $arpKey
+    if ([int]$repairedArp.PathAdded -ne 1 -or [int]$repairedArp.PathValueCreated -ne 0) {
+        throw "Update did not repair the current ARP registration without losing PATH ownership."
+    }
+    Write-Host "Incomplete current ARP update repair passed."
     $wingetInstallExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S", "/WINGET")
     if ($wingetInstallExit -ne 0) {
         throw "Exact /WINGET setup exited with $wingetInstallExit."
@@ -809,8 +1081,18 @@ try {
     }
     Assert-TestUserPathRestored
     Write-Host "Native pending-update activation passed."
+} catch {
+    $testFailure = $_
+    throw
 } finally {
-    Remove-TestInstallIfPresent
+    try {
+        Remove-TestInstallIfPresent
+    } catch {
+        if ($null -eq $testFailure) {
+            throw
+        }
+        Write-Warning "Test cleanup also failed after the original error: $_"
+    }
     if (Test-Path -LiteralPath $skillRoot) {
         Remove-Item -LiteralPath $skillRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -820,7 +1102,7 @@ try {
     if (Test-Path -LiteralPath $settingsRoot) {
         Remove-Item -LiteralPath $settingsRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    foreach ($fault in $allowedFaults) {
+    foreach ($fault in $cleanupFaults) {
         $faultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-$fault.once"
         if (Test-Path -LiteralPath $faultMarker) {
             Remove-Item -LiteralPath $faultMarker -Force -ErrorAction SilentlyContinue
@@ -828,6 +1110,12 @@ try {
         $installFailure = Join-Path $env:TEMP "herdr-install-failure-$fault.txt"
         if (Test-Path -LiteralPath $installFailure) {
             Remove-Item -LiteralPath $installFailure -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($installFault in @("after-user-path", "after-arp-path-added")) {
+        $installFaultMarker = Join-Path $env:TEMP "herdr-uninstall-fault-install-$installFault.once"
+        if (Test-Path -LiteralPath $installFaultMarker) {
+            Remove-Item -LiteralPath $installFaultMarker -Force
         }
     }
 }

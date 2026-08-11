@@ -158,6 +158,11 @@ LangString AppDetailRemoveSettings ${LANG_ENGLISH} "Removing ${INFO_PRODUCTNAME}
 !else
   !define APP_UNINSTALL_FAULT_ARGS ""
 !endif
+!ifdef TEST_INSTALL_FAULT
+  !define APP_INSTALL_FAULT_ARGS '--install-fault "install-${TEST_INSTALL_FAULT}" --fault-marker-prefix "${APP_TEST_MARKER_PREFIX}"'
+!else
+  !define APP_INSTALL_FAULT_ARGS ""
+!endif
 !ifdef TEST_USER_PROFILE_ROOT
   !define APP_USER_PROFILE_ROOT "${TEST_USER_PROFILE_ROOT}"
 !else
@@ -432,7 +437,7 @@ Section "${INFO_DISTRIBUTIONNAME}" SEC_APP
 
 installer_inputs_ready:
   DetailPrint "Validating and activating ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}..."
-  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" install --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --package-root "$PLUGINSDIR" --build-id "${APP_BUILD_ID}" --display-version "${INFO_PRODUCTVERSION_DISPLAY}" --numeric-version "${INFO_PRODUCTVERSION_FIXED}" --install-manager "$InstallManager"'
+  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" install --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --package-root "$PLUGINSDIR" --build-id "${APP_BUILD_ID}" --display-version "${INFO_PRODUCTVERSION_DISPLAY}" --numeric-version "${INFO_PRODUCTVERSION_FIXED}" --install-manager "$InstallManager" ${APP_INSTALL_FAULT_ARGS}'
   Pop $HelperExitCode
   Pop $HelperOutput
   StrCmp $HelperExitCode "error" installer_helper_start_failed

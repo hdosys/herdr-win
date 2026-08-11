@@ -27,14 +27,21 @@ param(
     [string]$NsisCacheDir,
 
     [ValidateSet(
+        "after-bin-directory",
         "after-uninstall-pending",
         "after-launcher-lock",
         "after-installer-helper",
         "after-state-directory",
         "before-uninstaller",
-        "after-uninstaller"
+        "after-uninstaller",
+        "after-user-path",
+        "after-arp-registration",
+        "terminate-after-installer-helper"
     )]
     [string]$TestUninstallFault,
+
+    [ValidateSet("after-user-path", "after-arp-path-added")]
+    [string]$TestInstallFault,
 
     [string]$TestUserProfileRoot
 )
@@ -508,6 +515,11 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($TestUninstallFault)) {
         $makensisArguments = @(
             "/DTEST_UNINSTALL_FAULT=$TestUninstallFault"
+        ) + $makensisArguments
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TestInstallFault)) {
+        $makensisArguments = @(
+            "/DTEST_INSTALL_FAULT=$TestInstallFault"
         ) + $makensisArguments
     }
     if (-not [string]::IsNullOrWhiteSpace($TestUserProfileRoot)) {

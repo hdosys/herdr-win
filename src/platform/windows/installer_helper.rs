@@ -48,6 +48,9 @@ pub(crate) fn run() -> io::Result<String> {
                     )))
                 }
             },
+            fault: optional_utf8(&values, "--install-fault")?,
+            fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
+                .unwrap_or_else(|| "herdr".to_string()),
         }),
         "uninstall" => installer_helper_lifecycle::uninstall(UninstallOptions {
             install_root: required_path(&values, "--install-root")?,

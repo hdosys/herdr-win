@@ -95,20 +95,25 @@ behavior; code and tests remain the detailed implementation truth.
   asset.
 - NSIS forces its embedded CRC check and recognizes package-manager and destructive
   custom flags only as exact tokens.
-- The helper validates the complete managed Installed Apps value set, registry
-  kinds, and content before mutation or key removal; unknown values or subkeys are
-  preserved and rejected. Setup, uninstall, and registration removal accept only
-  the current native-helper quiet-uninstall command. There is no prior command,
-  script helper, or bridge acceptance path.
+- The helper validates managed Installed Apps registry kinds and content before
+  mutation or key removal; unknown values or subkeys are preserved and rejected.
+  Setup accepts the complete current value set plus the exact preceding current
+  sets that omit `PathValueCreated` or both PATH ownership values. Missing values
+  mean unowned, and successful setup rewrites the complete current set. Uninstall
+  and registration removal accept only those validated identities and the current
+  native-helper quiet-uninstall command. There is no prior command, script helper,
+  or bridge acceptance path.
 - Installed Apps quiet uninstall invokes `state/installer-helper.exe` directly.
   That process creates one random strict sibling rendezvous, starts the NSIS
   uninstaller in a bounded native job, and waits for the embedded helper's terminal
   result. The embedded helper accepts only that exact installed-helper process,
-  moves its locked image to the validated sibling handoff path, removes the managed
-  root and registration, publishes the result, then deletes the handoff after the
-  waiting process exits. A nonterminal cleanup fault restores the helper and exact
-  retry markers before reporting failure. Fresh installs, updates, quiet uninstall,
-  and post-exit maintenance therefore ship and invoke no PowerShell payload.
+  moves its locked image to the validated sibling handoff path, removes payload and
+  installer-owned registration, then finalizes the managed root. A nonterminal
+  cleanup fault restores the actual helper and uninstaller bytes, final ownership
+  marker, exact installer-owned PATH bytes, and exact Installed Apps values before
+  reporting failure. The helper publishes the result and deletes its handoff after
+  the waiting process exits. Fresh installs, updates, quiet uninstall, and post-exit
+  maintenance therefore ship and invoke no PowerShell payload.
 - NSIS accepts `/WINGET` as the sole explicit package-manager origin signal and
   passes a bounded Direct/WinGet value into the helper. The helper owns the optional
   strict UTF-8 `state/package-manager` record; only the exact
@@ -131,10 +136,17 @@ behavior; code and tests remain the detailed implementation truth.
   is acquired, any stale regular staging tree is disposable and its grammar never
   decides whether the user's requested operation may continue. Cleanup failure
   preserves that private staging with a warning. Uninstall has no sibling
-  transaction, cleanup manifest, or rollback parser: under the launcher gate it
-  validates active processes and leases, publishes `state/uninstall.pending`, and
-  removes `bin` plus immutable runtimes directly. The remaining exact residual owns
-  idempotent metadata and self-cleanup.
+  transaction, cleanup manifest, or rollback parser. Under the launcher gate it
+  validates active processes and leases, publishes `state/uninstall.pending`, then
+  atomically renames each validated `bin` and immutable runtime directory into
+  disposable same-parent uninstall staging before best-effort deletion. Interruption
+  therefore cannot leave a partially deleted managed directory. The remaining exact
+  residual keeps that marker as its final filesystem ownership sentinel while PATH
+  and Installed Apps cleanup runs with both retry commands still present. Final
+  cleanup enumerates the residual again before removing the marker. Bounded
+  in-memory snapshots restore only the actual control bytes and exact registry state
+  changed by this attempt; they add no persistent journal or second recovery
+  authority.
 - Payload launch independently acquires `state/launcher.lock`, validates the stable
   launcher, and rejects any present `state/uninstall.pending` marker before runtime
   selection or `CreateProcess`. Thus a killed uninstaller cannot admit a new session
@@ -160,8 +172,15 @@ behavior; code and tests remain the detailed implementation truth.
 - Install/update preserves the raw user-PATH registry kind and bytes. It adds the
   literal managed `bin` path first only when no effective equivalent exists, records
   that exact ownership in ARP, and never claims or rewrites an equivalent user-owned
-  spelling. Uninstall removes at most one exact literal entry only when ARP proves
-  this installer added it, preserving every other entry and its order.
+  spelling. Immediately before the registry write it publishes the strict
+  `state/path-add.pending` ownership intent, including whether the `PATH` value was
+  absent and had to be created. Successful ARP publication removes the
+  marker; if publication stops after `PathAdded` but before `PathValueCreated`, the
+  exact pending marker completes only that missing fact on retry. Setup or uninstall
+  recovery may claim only an exact literal entry while that marker remains.
+  Uninstall removes at most one exact owned entry, preserving every other entry and
+  its order, and deletes the value only when setup created it and no concurrent
+  entries remain.
 - Interactive and silent uninstall both preserve `%USERPROFILE%\.herdr` by
   default; the interactive checkbox or `/REMOVE_SETTINGS` explicitly authorizes
   deletion. Settings cleanup stays in the helper's validated filesystem boundary

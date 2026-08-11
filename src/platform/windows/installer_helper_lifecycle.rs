@@ -3,13 +3,15 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{self, Write as _},
+    marker::PhantomData,
     os::windows::{
-        ffi::OsStringExt as _,
+        ffi::{OsStrExt as _, OsStringExt as _},
         fs::{MetadataExt as _, OpenOptionsExt as _},
         io::AsRawHandle as _,
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    rc::Rc,
     thread,
     time::{Duration, Instant},
 };
@@ -17,6 +19,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
+        WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT},
     System::{
@@ -26,8 +29,8 @@ use windows_sys::Win32::{
         },
         JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
         Threading::{
-            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-            PROCESS_QUERY_LIMITED_INFORMATION,
+            CreateMutexW, OpenProcess, QueryFullProcessImageNameW, ReleaseMutex,
+            WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
         },
     },
 };
@@ -45,6 +48,7 @@ use super::{
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_RETRY: Duration = Duration::from_millis(50);
 const QUIET_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InstallManager {
@@ -141,6 +145,11 @@ struct QuietSession {
     moved_helper_path: PathBuf,
 }
 
+struct LifecycleMutex {
+    handle: HANDLE,
+    _same_thread: PhantomData<Rc<()>>,
+}
+
 #[derive(Clone, Debug)]
 struct FileSnapshot {
     bytes: Vec<u8>,
@@ -160,6 +169,18 @@ impl Drop for ProcessHandle {
         if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
             // SAFETY: this wrapper owns the process or snapshot handle.
             unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
+impl Drop for LifecycleMutex {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: successful acquisition is retained on this same thread until drop.
+            let _ = unsafe { ReleaseMutex(self.handle) };
+            // SAFETY: this guard exclusively owns the non-null mutex handle.
+            unsafe { CloseHandle(self.handle) };
+            self.handle = std::ptr::null_mut();
         }
     }
 }
@@ -407,7 +428,7 @@ fn quiet_paths(install_root: &Path, token: &str) -> io::Result<(PathBuf, PathBuf
 pub(crate) fn install(options: InstallOptions) -> io::Result<String> {
     let install_root = files::full_path(&options.install_root)?;
     let profile = skills::user_profile_root(&options.user_profile_root)?;
-    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
+    let _lifecycle = acquire_lifecycle_lock()?;
     registry::assert_arp_ownership(&install_root)?;
     let allow_convergence = registry::arp_exists()?;
     let path_add_pending = install_root.join("state").join("path-add.pending");
@@ -467,7 +488,7 @@ pub(crate) fn uninstall(options: UninstallOptions) -> io::Result<String> {
         .as_ref()
         .map(|value| QuietSession::new(&install_root, value))
         .transpose()?;
-    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
+    let _lifecycle = acquire_lifecycle_lock()?;
     let retry_ownership = if files::path_exists(&install_root)? {
         Some(RetryOwnership::capture(&install_root)?)
     } else {
@@ -712,7 +733,7 @@ pub(crate) fn complete_maintenance(options: MaintenanceOptions) -> io::Result<St
         return Ok("Herdr Win maintenance: Deferred".to_string());
     }
     let install_root = files::full_path(&options.install_root)?;
-    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
+    let _lifecycle = acquire_lifecycle_lock()?;
     if !files::path_exists(&install_root)? {
         return Ok("Herdr Win maintenance: Missing".to_string());
     }
@@ -1776,26 +1797,63 @@ fn unsupported_launcher_hop(install_root: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-fn acquire_lifecycle_lock(install_root: &Path, timeout: Duration) -> io::Result<File> {
-    let parent = install_root
-        .parent()
-        .ok_or_else(|| files::invalid_data("install root has no parent"))?;
-    if !files::path_exists(parent)? {
-        fs::create_dir_all(parent)?;
+fn acquire_lifecycle_lock() -> io::Result<LifecycleMutex> {
+    acquire_named_lifecycle_mutex(LIFECYCLE_MUTEX_NAME).map(|(guard, _)| guard)
+}
+
+fn acquire_named_lifecycle_mutex(name: &str) -> io::Result<(LifecycleMutex, bool)> {
+    if name.is_empty() || name.encode_utf16().any(|value| value == 0) {
+        return Err(files::invalid_data("lifecycle mutex name is invalid"));
     }
-    files::assert_regular_dir(parent)?;
-    let leaf = install_root
-        .file_name()
-        .ok_or_else(|| files::invalid_data("install root has no leaf"))?
-        .to_string_lossy();
-    let path = parent.join(format!("{leaf}.installer-lifecycle.lock"));
-    let lock = acquire_file_lock(&path, timeout)?;
-    if lock.metadata()?.len() != 0 {
-        return Err(files::invalid_data(
-            "persistent lifecycle lock contains data",
+    let wide = OsStr::new(name)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: the name is a valid NUL-terminated UTF-16 buffer and the default
+    // security descriptor remains owned by the current process token.
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
+    if handle.is_null() {
+        return Err(files::contextual(
+            io::Error::last_os_error(),
+            "failed to create or open the Herdr installer lifecycle mutex",
         ));
     }
-    Ok(lock)
+    // SAFETY: handle is a valid mutex handle. A zero timeout performs one
+    // ownership attempt and never polls object existence or stale state.
+    let wait = unsafe { WaitForSingleObject(handle, 0) };
+    match wait {
+        WAIT_OBJECT_0 | WAIT_ABANDONED => Ok((
+            LifecycleMutex {
+                handle,
+                _same_thread: PhantomData,
+            },
+            wait == WAIT_ABANDONED,
+        )),
+        WAIT_TIMEOUT => {
+            // SAFETY: ownership was not acquired, and this process owns the handle.
+            unsafe { CloseHandle(handle) };
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "another Herdr setup, update, or uninstall is already running",
+            ))
+        }
+        WAIT_FAILED => {
+            let err = io::Error::last_os_error();
+            // SAFETY: this process owns the handle even though the wait failed.
+            unsafe { CloseHandle(handle) };
+            Err(files::contextual(
+                err,
+                "failed to acquire the Herdr installer lifecycle mutex",
+            ))
+        }
+        value => {
+            // SAFETY: this process owns the handle for the unexpected wait result.
+            unsafe { CloseHandle(handle) };
+            Err(files::invalid_data(format!(
+                "unexpected lifecycle mutex wait result 0x{value:08x}"
+            )))
+        }
+    }
 }
 
 fn acquire_file_lock(path: &Path, timeout: Duration) -> io::Result<File> {
@@ -2246,6 +2304,25 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+
+    fn test_mutex_name(label: &str) -> String {
+        format!(
+            r"Local\HerdrWinInstallerLifecycleTest-{label}-{}",
+            files::unique_hex()
+        )
+    }
+
+    fn open_unowned_mutex(name: &str) -> HANDLE {
+        let wide = OsStr::new(name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: the test supplies a valid NUL-terminated UTF-16 name.
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
+        assert!(!handle.is_null());
+        handle
+    }
 
     #[test]
     fn fault_marker_prefix_is_narrow() {
@@ -2263,5 +2340,75 @@ mod tests {
         ] {
             assert!(validate_quiet_token(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn lifecycle_mutex_acquires_an_existing_unowned_object() {
+        let name = test_mutex_name("unowned");
+        let existing = open_unowned_mutex(&name);
+        let (guard, abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
+        assert!(!abandoned);
+        drop(guard);
+        // SAFETY: this test owns the original non-null handle.
+        unsafe { CloseHandle(existing) };
+    }
+
+    #[test]
+    fn lifecycle_mutex_releases_for_the_next_owner() {
+        let name = test_mutex_name("release");
+        let (first, first_abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
+        assert!(!first_abandoned);
+        drop(first);
+        let (second, second_abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
+        assert!(!second_abandoned);
+        drop(second);
+    }
+
+    #[test]
+    fn lifecycle_mutex_rejects_a_live_owner() {
+        let name = test_mutex_name("live");
+        let worker_name = name.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let (guard, abandoned) = acquire_named_lifecycle_mutex(&worker_name).unwrap();
+            assert!(!abandoned);
+            ready_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(guard);
+        });
+        let ready = ready_rx.recv_timeout(Duration::from_secs(5));
+        if ready.is_err() {
+            let _ = release_tx.send(());
+            let _ = holder.join();
+            panic!("lifecycle mutex holder did not become ready");
+        }
+        let err = match acquire_named_lifecycle_mutex(&name) {
+            Ok(_) => panic!("acquired lifecycle mutex while another thread owned it"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn lifecycle_mutex_recovers_a_hard_terminated_owner() {
+        let name = test_mutex_name("abandoned");
+        let worker_name = name.clone();
+        let original_handle = thread::spawn(move || {
+            let (guard, abandoned) = acquire_named_lifecycle_mutex(&worker_name).unwrap();
+            assert!(!abandoned);
+            let handle = guard.handle as usize;
+            std::mem::forget(guard);
+            handle
+        })
+        .join()
+        .unwrap();
+        let (recovered, abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
+        assert!(abandoned);
+        drop(recovered);
+        // SAFETY: the worker deliberately transferred its leaked handle value.
+        unsafe { CloseHandle(original_handle as HANDLE) };
     }
 }

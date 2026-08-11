@@ -16,9 +16,12 @@ tests remain the detailed implementation truth.
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
   `herdr` and stay compatible with upstream.
-- `herdr --version` begins with `herdr-win` followed by the canonical runtime
-  version, so integrations can require fork-specific features without changing the
-  executable, command, state, or protocol identity.
+- A published `herdr --version` reports `herdr-win <CalVer> (Herdr
+  <upstream-version>)`. A separately built local binary instead reports
+  `herdr-win local (Herdr <upstream-version>, build <build-id>)` when build
+  provenance is available, and omits the build clause otherwise. Integrations can
+  require the stable `herdr-win ` prefix without changing the executable, command,
+  state, or protocol identity.
 - herdr-win snapshots currently target Windows x86_64. General CLI, TUI,
   configuration, integration, and issue behavior remains documented and owned
   upstream unless a maintained Windows delta explicitly changes it.
@@ -84,7 +87,9 @@ tests remain the detailed implementation truth.
   outcomes. Fresh/update sibling directories are private disposable staging, not a
   second ownership or recovery authority; stale or malformed staging is removed
   when safe and otherwise preserved with a warning without blocking the requested
-  operation. Uninstall uses the existing lifecycle and launcher locks plus one
+  operation. One stable Windows named mutex serializes setup, update, and uninstall
+  by acquired ownership, including recovery from an abandoned owner. Uninstall uses
+  that lifecycle mutex and the existing launcher lock plus one
   `uninstall.pending` launch gate, then atomically moves `bin` and immutable runtimes
   into disposable same-parent staging before final metadata/self-cleanup. A stopped
   removal therefore leaves either the complete owned directory or no directory in

@@ -735,26 +735,72 @@ fn parse_version_components<const N: usize>(
     Ok(parsed)
 }
 
-pub(crate) fn parse_display_version(display: &str) -> io::Result<([u16; 3], BuildId)> {
-    let (semver, build) = display
-        .split_once("-preview.")
-        .ok_or_else(|| invalid_data(format!("invalid display version {display:?}")))?;
-    let build_id = BuildId::parse(build)?;
-    Ok((
-        parse_version_components::<3>(semver, "display semantic version")?,
-        build_id,
-    ))
+fn parse_release_calver(display: &str) -> io::Result<[u16; 4]> {
+    let components = display.split('.').collect::<Vec<_>>();
+    if components.len() != 4
+        || components[0].len() != 4
+        || components[1].len() != 2
+        || components[2].len() != 2
+        || components[3].is_empty()
+        || components
+            .iter()
+            .any(|component| component.bytes().any(|byte| !byte.is_ascii_digit()))
+        || components[3].starts_with('0')
+    {
+        return Err(invalid_data(format!(
+            "invalid herdr-win release version {display:?}"
+        )));
+    }
+    let year = components[0]
+        .parse::<u16>()
+        .map_err(|_| invalid_data("invalid herdr-win release year"))?;
+    let month = components[1]
+        .parse::<u16>()
+        .map_err(|_| invalid_data("invalid herdr-win release month"))?;
+    let day = components[2]
+        .parse::<u16>()
+        .map_err(|_| invalid_data("invalid herdr-win release day"))?;
+    let sequence = components[3]
+        .parse::<u16>()
+        .map_err(|_| invalid_data("invalid herdr-win release sequence"))?;
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if year == 0 || day == 0 || day > max_day || sequence == 0 {
+        return Err(invalid_data(format!(
+            "invalid herdr-win release version {display:?}"
+        )));
+    }
+    Ok([year, month, day, sequence])
 }
 
-pub(crate) fn validate_version_identity(display: &str, numeric: &str) -> io::Result<BuildId> {
-    let (display_parts, build_id) = parse_display_version(display)?;
+pub(crate) fn parse_display_version(display: &str) -> io::Result<[u16; 4]> {
+    if let Some(build) = display.strip_prefix("local.") {
+        BuildId::parse(build)?;
+        return Ok([0, 0, 0, 0]);
+    }
+    if let Some((semver, build)) = display.split_once("-preview.") {
+        BuildId::parse(build)?;
+        let parts = parse_version_components::<3>(semver, "display semantic version")?;
+        return Ok([parts[0], parts[1], parts[2], 0]);
+    }
+    parse_release_calver(display)
+}
+
+pub(crate) fn validate_version_identity(display: &str, numeric: &str) -> io::Result<()> {
+    let display_parts = parse_display_version(display)?;
     let numeric_parts = parse_version_components::<4>(numeric, "numeric version")?;
-    if display_parts != numeric_parts[..3] {
+    if display_parts != numeric_parts {
         return Err(invalid_data(format!(
             "numeric version {numeric:?} does not match display version {display:?}"
         )));
     }
-    Ok(build_id)
+    Ok(())
 }
 
 pub(crate) fn query_launcher_build_id(path: &Path, timeout: Duration) -> io::Result<BuildId> {
@@ -907,15 +953,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_identity_requires_matching_build_and_semver() {
-        let build = validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.8.0.0")
-            .unwrap();
-        assert_eq!(build.as_str(), "0123456789ab.cdef01234567");
+    fn version_identity_accepts_release_local_and_predecessor_forms() {
+        validate_version_identity("2026.08.11.1", "2026.8.11.1").unwrap();
+        validate_version_identity("local.0123456789ab.cdef01234567", "0.0.0.0").unwrap();
+        validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.8.0.0").unwrap();
         assert!(
             validate_version_identity("0.8.1-preview.0123456789ab.cdef01234567", "0.8.0.0")
                 .is_err()
         );
         for invalid in [
+            "2026.8.11.1",
+            "2026.02.29.1",
+            "2026.08.11.0",
+            "local.0123456789ab.cdef01234567.extra",
             "00.8.0-preview.0123456789ab.cdef01234567",
             "0.8.0-preview.0123456789ab.cdef01234567.extra",
             "0.8-preview.0123456789ab.cdef01234567",
@@ -929,6 +979,7 @@ mod tests {
             validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.08.0.0")
                 .is_err()
         );
+        assert!(validate_version_identity("2026.08.11.1", "2026.8.11.2").is_err());
     }
 
     #[test]

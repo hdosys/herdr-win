@@ -82,7 +82,7 @@ herdr --version
 herdr
 ```
 
-`herdr --version` begins with `herdr-win` so integrations can identify this distribution and its Windows-specific features.
+Published builds report `herdr-win <CalVer> (Herdr <upstream-version>)`. Local test builds include their build ID when available, as in `herdr-win local (Herdr <upstream-version>, build <build-id>)`, and omit that clause otherwise. Integrations can use the stable `herdr-win ` prefix to identify this distribution and its Windows-specific features.
 
 Running a newer setup over a current managed installation updates it in place and repairs incomplete current installer registration.
 

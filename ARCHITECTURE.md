@@ -88,7 +88,7 @@ behavior; code and tests remain the detailed implementation truth.
   launcher, and the internal installer helper. NSIS owns the setup/uninstall shell,
   embedded inputs, and user-visible progress/error boundary. It runs the embedded
   temporary native helper and never mutates the installed root directly. The helper
-  owns final root cleanup while holding the persistent lifecycle lock, filesystem
+  owns final root cleanup while holding the lifecycle mutex, filesystem
   validation, launcher publication, runtime pruning, PATH/Installed Apps integration,
   optional user-settings removal, and recoverable install/uninstall state. Rust also
   owns runtime selection and downloading/verifying/launching the immutable installer
@@ -131,7 +131,12 @@ behavior; code and tests remain the detailed implementation truth.
   an update event; package/version absence is pending, while launch, source, timeout,
   containment, and other failures suppress the action and are logged. No polling,
   second availability feed, or package-manager state is added.
-- The persistent sibling lifecycle lock serializes every installer generation.
+- One stable Windows named mutex serializes every installer generation.
+  The helper calls `CreateMutexW` without initial ownership and attempts ownership
+  once with `WaitForSingleObject(0)`. A live owner blocks the operation, an abandoned
+  owner is recovered, and the owning thread releases the mutex before closing its
+  handle. Object existence, PID-qualified names, polling, and stale-file deletion
+  never establish lifecycle ownership.
   Fresh and update work uses uniquely named same-parent staging only; once the lock
   is acquired, any stale regular staging tree is disposable and its grammar never
   decides whether the user's requested operation may continue. Cleanup failure
@@ -154,13 +159,15 @@ behavior; code and tests remain the detailed implementation truth.
   launcher is reused and no service or second launch path is added.
 - The packager owns installer-facing product identity inputs and validates the
   runtime, launcher, and native helper as three distinct x64 executables. It passes
-  one runtime product name, one title-cased human distribution display name, a
-  derived short UI version, and the fork and official-upstream URLs into NSIS. The
+  one runtime product name, one title-cased human distribution display name, the
+  release CalVer or explicit local identity, the upstream Herdr version, and the
+  fork and official-upstream URLs into NSIS. The
   runtime/install-root identity remains Herdr, while executable
   metadata and Installed Apps consistently present **Herdr Win**. The NSIS presentation
   uses standard MUI2 Welcome/License/Files/Finish pages plus the existing custom
   uninstall choice. Window, Welcome, progress, and Finish presentation reuse that
-  one display name; Welcome and Finish titles reuse the same derived base version.
+  one display name; Welcome and Finish titles reuse the same short herdr-win
+  release identity or explicit local marker.
   Welcome identifies the unofficial stable-plus-patches distribution without
   displaying its fixed path. Finish exposes separate user-invoked fork and upstream
   links and never launches Herdr or a browser automatically. Root `LICENSE` is
@@ -293,6 +300,11 @@ behavior; code and tests remain the detailed implementation truth.
   compatibility. The GitHub release title is `herdr-win v<CalVer> (Herdr
   v<upstream-version>)`; release notes and installer metadata expose that same
   stable upstream version alongside the CalVer-bearing original filename.
+- Every published binary receives that same CalVer as compile-time release identity.
+  `herdr --version` renders `herdr-win <CalVer> (Herdr <upstream-version>)`, and
+  Windows setup, executable resources, and Installed Apps use the CalVer as their
+  primary display version. Local builds carry no CalVer and render `herdr-win local
+  (Herdr <upstream-version>, build <build-id>)` when build provenance is available.
 - The runtime build ID remains two lowercase 12-hex components because it owns
   managed-runtime identity: the upstream prefix plus the candidate identity hash.
   Full upstream/control hashes and run/attempt metadata remain the exact provenance

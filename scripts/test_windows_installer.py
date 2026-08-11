@@ -133,6 +133,11 @@ class WindowsInstallerStaticTests(unittest.TestCase):
 
         for contract in (
             "acquire_lifecycle_lock",
+            "CreateMutexW",
+            "WaitForSingleObject(handle, 0)",
+            "WAIT_ABANDONED",
+            "WAIT_TIMEOUT",
+            "ReleaseMutex",
             "acquire_coordination",
             "lease_status",
             "process_paths",
@@ -150,6 +155,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             self.assertIn(contract, lifecycle)
         self.assertNotIn("ManagedLegacy", lifecycle)
         self.assertNotIn("installer-helper.ps1", lifecycle)
+        self.assertNotIn("installer-lifecycle.lock", lifecycle)
         self.assertLess(
             lifecycle.index("acquire_lifecycle_lock", lifecycle.index("pub(crate) fn install")),
             lifecycle.index("registry::assert_arp_ownership", lifecycle.index("pub(crate) fn install")),
@@ -244,6 +250,7 @@ class WindowsInstallerStaticTests(unittest.TestCase):
             "INFO_PRODUCTVERSION_DISPLAY",
             "INFO_PRODUCTVERSION_FIXED",
             "INFO_PRODUCTVERSION_UI",
+            "INFO_UPSTREAMVERSION",
         ):
             self.assertIn(f"!ifndef {required}", nsi)
         self.assertNotRegex(nsi, re.compile(r"herdr", re.IGNORECASE))
@@ -330,7 +337,11 @@ class WindowsInstallerStaticTests(unittest.TestCase):
         self.assertIn('"/WX"', packager)
         self.assertIn("Invoke-HerdrIdentityQuery", packager)
         self.assertIn('"--herdr-private-launcher-build-id-v1"', packager)
-        self.assertIn('ExpectedOutput "herdr-win $DisplayVersion"', packager)
+        self.assertIn("[string]$ReleaseVersion", packager)
+        self.assertIn("[string]$BaseVersion", packager)
+        self.assertIn('$ReleaseVersion -ceq "local"', packager)
+        self.assertIn('ExpectedCli = "herdr-win $ReleaseVersion (Herdr $BaseVersion)"', packager)
+        self.assertIn("-ExpectedOutput $ExpectedCliVersion", packager)
 
     def test_real_fault_matrix_covers_retries_and_pending_activation(self) -> None:
         fault = text(FAULT_TEST)

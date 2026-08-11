@@ -29,6 +29,9 @@
 !ifndef INFO_PRODUCTVERSION_UI
   !error "INFO_PRODUCTVERSION_UI is required"
 !endif
+!ifndef INFO_UPSTREAMVERSION
+  !error "INFO_UPSTREAMVERSION is required"
+!endif
 !ifndef APP_OUTPUT_PATH
   !error "APP_OUTPUT_PATH is required"
 !endif
@@ -90,6 +93,7 @@ VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "LegalCopyright" "${INFO_COPYRIGHT}"
 VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "FileDescription" "${INFO_DISTRIBUTIONNAME} per-user installer"
 VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "FileVersion" "${INFO_PRODUCTVERSION_DISPLAY}"
 VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "ProductVersion" "${INFO_PRODUCTVERSION_DISPLAY}"
+VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "UpstreamVersion" "${INFO_UPSTREAMVERSION}"
 VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "OriginalFilename" "${INFO_ORIGINALFILENAME}"
 
 !include "MUI2.nsh"
@@ -128,7 +132,7 @@ Var QuietHelperArgs
 !pragma verifyloadimage "${INSTALLER_WELCOME_BITMAP_175}"
 !pragma verifyloadimage "${INSTALLER_WELCOME_BITMAP_200}"
 !define MUI_WELCOMEPAGE_TITLE "Install ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}"
-!define MUI_WELCOMEPAGE_TEXT "This setup installs ${INFO_DISTRIBUTIONNAME}, an unofficial Windows distribution of ${INFO_PRODUCTNAME}. It advances Windows support by applying this fork's patches to the latest reviewed stable ${INFO_PRODUCTNAME} release.$\r$\n$\r$\nNo administrator access is required. Open a new terminal after setup so it can find ${INFO_COMMANDNAME} on PATH."
+!define MUI_WELCOMEPAGE_TEXT "This setup installs ${INFO_DISTRIBUTIONNAME}, an unofficial Windows distribution of ${INFO_PRODUCTNAME}. It advances Windows support by applying this fork's patches to the latest reviewed stable ${INFO_PRODUCTNAME} ${INFO_UPSTREAMVERSION} release.$\r$\n$\r$\nNo administrator access is required. Open a new terminal after setup so it can find ${INFO_COMMANDNAME} on PATH."
 !define MUI_FINISHPAGE_NOREBOOTSUPPORT
 !define MUI_FINISHPAGE_TITLE "${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI} is installed"
 !define MUI_FINISHPAGE_TEXT "Setup completed successfully.$\r$\n$\r$\n${INFO_DISTRIBUTIONNAME} is an unofficial distribution; the command remains ${INFO_COMMANDNAME} and no application window opens.$\r$\n$\r$\nOpen a new terminal, then run:$\r$\n${INFO_COMMANDNAME}"

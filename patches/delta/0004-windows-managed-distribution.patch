@@ -1,4 +1,4 @@
-From 81087a9282c6ff6646840d6b3fce8f7ffeafbe33 Mon Sep 17 00:00:00 2001
+From 6f99011e7d27390ebd8942cb2fb51382b8d081a0 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 23:02:52 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -6,7 +6,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
 Refs herdrdev/herdr#1947
 ---
  Cargo.toml                                    |   13 +
- build.rs                                      |    1 -
+ build.rs                                      |   60 +-
  justfile                                      |    6 +-
  packaging/windows/installer/artwork/README.md |   28 +
  .../installer-welcome-finish-164x314.bmp      |  Bin 0 -> 154542 bytes
@@ -15,24 +15,24 @@ Refs herdrdev/herdr#1947
  .../installer-welcome-finish-287x550.bmp      |  Bin 0 -> 475254 bytes
  .../installer-welcome-finish-328x628.bmp      |  Bin 0 -> 618006 bytes
  .../installer-welcome-finish-source.png       |  Bin 0 -> 1698169 bytes
- packaging/windows/installer/project.nsi       |  494 ++++
+ packaging/windows/installer/project.nsi       |  498 ++++
  packaging/windows/managed-skill-hashes.txt    |    3 +
  scripts/package_windows_conpty.py             |   39 +-
- scripts/package_windows_installer.ps1         |  537 ++++
+ scripts/package_windows_installer.ps1         |  559 ++++
  scripts/preview.py                            |  120 +-
  scripts/test_package_windows_conpty.py        |   36 +-
  scripts/test_preview.py                       |  199 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  456 ++++
+ scripts/test_windows_installer.py             |  467 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1133 ++++++++
+ scripts/windows_installer_fault_test.ps1      | 1152 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
  src/bin/herdr-installer-helper.rs             |   41 +
  src/bin/herdr-launcher.rs                     |   36 +
- src/build_info.rs                             |   15 +-
+ src/build_info.rs                             |   54 +-
  src/cli.rs                                    |   17 +-
  src/cli/status.rs                             |   12 +-
  src/config.rs                                 |    2 +-
@@ -43,17 +43,17 @@ Refs herdrdev/herdr#1947
  src/platform/mod.rs                           |   25 +
  src/platform/windows.rs                       |  158 +-
  src/platform/windows/installer_helper.rs      |  215 ++
- .../windows/installer_helper_files.rs         |  963 +++++++
- .../windows/installer_helper_lifecycle.rs     | 2267 +++++++++++++++++
- .../windows/installer_helper_registry.rs      |  878 +++++++
+ .../windows/installer_helper_files.rs         | 1014 +++++++
+ .../windows/installer_helper_lifecycle.rs     | 2414 +++++++++++++++++
+ .../windows/installer_helper_registry.rs      |  878 ++++++
  .../windows/installer_helper_skills.rs        |  408 +++
  src/platform/windows/launcher.rs              | 1084 ++++++++
  src/platform/windows/managed_install.rs       |  689 +++++
  src/remote/attach.rs                          |   16 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
- src/update.rs                                 |  878 ++++++-
- 48 files changed, 10999 insertions(+), 390 deletions(-)
+ src/update.rs                                 |  878 +++++-
+ 48 files changed, 11351 insertions(+), 390 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -126,17 +126,87 @@ index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe0
      "Win32_UI_Input_Ime",
      "Win32_UI_Input_KeyboardAndMouse",
 diff --git a/build.rs b/build.rs
-index 66ed262012bbc648b98adf9e5489a8c85dda6353..b09fd7c814f71b72a49ba1ce6b949ea492373c6f 100644
+index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517ea7444cf 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -41,7 +41,6 @@ fn main() {
+@@ -29,6 +29,43 @@ fn env_bool(name: &str) -> Option<bool> {
+     }
+ }
+ 
++fn valid_release_version(value: &str) -> bool {
++    let parts = value.split('.').collect::<Vec<_>>();
++    if parts.len() != 4
++        || parts[0].len() != 4
++        || parts[1].len() != 2
++        || parts[2].len() != 2
++        || parts[3].is_empty()
++        || parts
++            .iter()
++            .any(|part| part.bytes().any(|byte| !byte.is_ascii_digit()))
++        || parts[3].starts_with('0')
++    {
++        return false;
++    }
++    let Ok(year) = parts[0].parse::<u16>() else {
++        return false;
++    };
++    let Ok(month) = parts[1].parse::<u8>() else {
++        return false;
++    };
++    let Ok(day) = parts[2].parse::<u8>() else {
++        return false;
++    };
++    let Ok(sequence) = parts[3].parse::<u16>() else {
++        return false;
++    };
++    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
++    let max_day = match month {
++        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
++        4 | 6 | 9 | 11 => 30,
++        2 if leap => 29,
++        2 => 28,
++        _ => return false,
++    };
++    day > 0 && day <= max_day && sequence > 0
++}
++
+ fn main() {
+     println!("cargo:rerun-if-changed=build.rs");
+     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
+@@ -41,11 +78,32 @@ fn main() {
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
 -    println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
      println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
      println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
++    println!("cargo:rerun-if-env-changed=HERDR_RELEASE_VERSION");
      println!("cargo:rerun-if-env-changed=ZIG");
+ 
++    if let Ok(release_version) = env::var("HERDR_RELEASE_VERSION") {
++        assert!(
++            valid_release_version(&release_version),
++            "HERDR_RELEASE_VERSION must be a real YYYY.MM.DD.N CalVer with a 1-65535 sequence"
++        );
++        let build_id = env::var("HERDR_BUILD_ID")
++            .expect("HERDR_RELEASE_VERSION requires HERDR_BUILD_ID provenance");
++        let (upstream, control) = build_id
++            .split_once('.')
++            .expect("HERDR_BUILD_ID must contain two components");
++        assert!(
++            upstream.len() == 12
++                && control.len() == 12
++                && upstream
++                    .bytes()
++                    .chain(control.bytes())
++                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
++            "HERDR_BUILD_ID must contain two 12-character lowercase hexadecimal components"
++        );
++    }
++
+     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+     let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
+     let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
 diff --git a/justfile b/justfile
 index e5f9e1b21702c141d1d90e77e30d39e720a1b2fa..a2a6e2bd4e07cccb8b339813126784dbe71fa51f 100644
 --- a/justfile
@@ -51622,10 +51692,10 @@ HcmV?d00001
 
 diff --git a/packaging/windows/installer/project.nsi b/packaging/windows/installer/project.nsi
 new file mode 100644
-index 0000000000000000000000000000000000000000..75bacad970390168cec2db082289a030d99dde4a
+index 0000000000000000000000000000000000000000..e2854ed3d25a98b4c4e212dab8d19b0a5ed843b0
 --- /dev/null
 +++ b/packaging/windows/installer/project.nsi
-@@ -0,0 +1,494 @@
+@@ -0,0 +1,498 @@
 +; Product identity, payloads, and runtime protocol names are build inputs.
 +!ifndef ARG_STAGE_DIR
 +  !error "ARG_STAGE_DIR is required"
@@ -51656,6 +51726,9 @@ index 0000000000000000000000000000000000000000..75bacad970390168cec2db082289a030
 +!endif
 +!ifndef INFO_PRODUCTVERSION_UI
 +  !error "INFO_PRODUCTVERSION_UI is required"
++!endif
++!ifndef INFO_UPSTREAMVERSION
++  !error "INFO_UPSTREAMVERSION is required"
 +!endif
 +!ifndef APP_OUTPUT_PATH
 +  !error "APP_OUTPUT_PATH is required"
@@ -51718,6 +51791,7 @@ index 0000000000000000000000000000000000000000..75bacad970390168cec2db082289a030
 +VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "FileDescription" "${INFO_DISTRIBUTIONNAME} per-user installer"
 +VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "FileVersion" "${INFO_PRODUCTVERSION_DISPLAY}"
 +VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "ProductVersion" "${INFO_PRODUCTVERSION_DISPLAY}"
++VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "UpstreamVersion" "${INFO_UPSTREAMVERSION}"
 +VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "OriginalFilename" "${INFO_ORIGINALFILENAME}"
 +
 +!include "MUI2.nsh"
@@ -51756,7 +51830,7 @@ index 0000000000000000000000000000000000000000..75bacad970390168cec2db082289a030
 +!pragma verifyloadimage "${INSTALLER_WELCOME_BITMAP_175}"
 +!pragma verifyloadimage "${INSTALLER_WELCOME_BITMAP_200}"
 +!define MUI_WELCOMEPAGE_TITLE "Install ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}"
-+!define MUI_WELCOMEPAGE_TEXT "This setup installs ${INFO_DISTRIBUTIONNAME}, an unofficial Windows distribution of ${INFO_PRODUCTNAME}. It advances Windows support by applying this fork's patches to the latest reviewed stable ${INFO_PRODUCTNAME} release.$\r$\n$\r$\nNo administrator access is required. Open a new terminal after setup so it can find ${INFO_COMMANDNAME} on PATH."
++!define MUI_WELCOMEPAGE_TEXT "This setup installs ${INFO_DISTRIBUTIONNAME}, an unofficial Windows distribution of ${INFO_PRODUCTNAME}. It advances Windows support by applying this fork's patches to the latest reviewed stable ${INFO_PRODUCTNAME} ${INFO_UPSTREAMVERSION} release.$\r$\n$\r$\nNo administrator access is required. Open a new terminal after setup so it can find ${INFO_COMMANDNAME} on PATH."
 +!define MUI_FINISHPAGE_NOREBOOTSUPPORT
 +!define MUI_FINISHPAGE_TITLE "${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI} is installed"
 +!define MUI_FINISHPAGE_TEXT "Setup completed successfully.$\r$\n$\r$\n${INFO_DISTRIBUTIONNAME} is an unofficial distribution; the command remains ${INFO_COMMANDNAME} and no application window opens.$\r$\n$\r$\nOpen a new terminal, then run:$\r$\n${INFO_COMMANDNAME}"
@@ -52239,10 +52313,10 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  if __name__ == "__main__":
 diff --git a/scripts/package_windows_installer.ps1 b/scripts/package_windows_installer.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e26f77a76
+index 0000000000000000000000000000000000000000..a8df73b28dd7cf5cf15ed679e7e7ffb563745fc2
 --- /dev/null
 +++ b/scripts/package_windows_installer.ps1
-@@ -0,0 +1,537 @@
+@@ -0,0 +1,559 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)]
@@ -52258,10 +52332,10 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +    [string]$BuildId,
 +
 +    [Parameter(Mandatory = $true)]
-+    [string]$DisplayVersion,
++    [string]$ReleaseVersion,
 +
 +    [Parameter(Mandatory = $true)]
-+    [string]$NumericVersion,
++    [string]$BaseVersion,
 +
 +    [Parameter(Mandatory = $true)]
 +    [string]$OutputPath,
@@ -52309,8 +52383,8 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +$InstallerTestMarkerPrefix = "herdr"
 +$ProductNamePattern = '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$'
 +$BuildIdPattern = '^[0-9a-f]{12}\.[0-9a-f]{12}$'
-+$DisplayVersionPattern = '^((?:0|[1-9][0-9]{0,4}))\.((?:0|[1-9][0-9]{0,4}))\.((?:0|[1-9][0-9]{0,4}))-preview\.([0-9a-f]{12}\.[0-9a-f]{12})$'
-+$NumericVersionPattern = '^([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})$'
++$BaseVersionPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$'
++$ReleaseVersionPattern = '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<sequence>[1-9][0-9]*)$'
 +$LauncherBuildIdArgument = "--herdr-private-launcher-build-id-v1"
 +
 +function ConvertTo-WindowsCommandLineArgument {
@@ -52475,26 +52549,43 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +    }
 +}
 +
-+function Assert-VersionIdentity {
-+    $displayMatch = [regex]::Match($DisplayVersion, $DisplayVersionPattern)
-+    if (-not $displayMatch.Success -or $displayMatch.Groups[4].Value -cne $BuildId) {
-+        throw "DisplayVersion must be <major>.<minor>.<patch>-preview.$BuildId."
++function Get-VersionIdentity {
++    if ($BaseVersion -cnotmatch $BaseVersionPattern) {
++        throw "BaseVersion must be the upstream Herdr semantic version without v."
 +    }
-+    $match = [regex]::Match($NumericVersion, $NumericVersionPattern)
++    if ($ReleaseVersion -ceq "local") {
++        return [PSCustomObject]@{
++            Display = "local.$BuildId"
++            Numeric = "0.0.0.0"
++            Ui = "local"
++            ExpectedCli = "herdr-win local (Herdr $BaseVersion, build $BuildId)"
++        }
++    }
++    $match = [regex]::Match($ReleaseVersion, $ReleaseVersionPattern)
 +    if (-not $match.Success) {
-+        throw "NumericVersion must contain four dot-separated 0-65535 components."
++        throw "ReleaseVersion must be 'local' or YYYY.MM.DD.N CalVer."
 +    }
-+    for ($index = 1; $index -le 4; $index++) {
-+        if ([int]$match.Groups[$index].Value -gt 65535) {
-+            throw "NumericVersion contains a component greater than 65535."
-+        }
++    $date = [DateTime]::MinValue
++    $dateText = "$($match.Groups['year'].Value)-$($match.Groups['month'].Value)-$($match.Groups['day'].Value)"
++    if (-not [DateTime]::TryParseExact(
++        $dateText,
++        "yyyy-MM-dd",
++        [Globalization.CultureInfo]::InvariantCulture,
++        [Globalization.DateTimeStyles]::None,
++        [ref]$date
++    )) {
++        throw "ReleaseVersion must contain a real calendar date."
 +    }
-+    for ($index = 1; $index -le 3; $index++) {
-+        if ([int]$displayMatch.Groups[$index].Value -ne [int]$match.Groups[$index].Value) {
-+            throw "NumericVersion must match DisplayVersion's major, minor, and patch components."
-+        }
++    $sequence = [uint64]$match.Groups['sequence'].Value
++    if ($sequence -gt 65535) {
++        throw "ReleaseVersion sequence must fit the Windows 0-65535 version component."
 +    }
-+    return "$($displayMatch.Groups[1].Value).$($displayMatch.Groups[2].Value).$($displayMatch.Groups[3].Value)"
++    return [PSCustomObject]@{
++        Display = $ReleaseVersion
++        Numeric = "$([int]$match.Groups['year'].Value).$([int]$match.Groups['month'].Value).$([int]$match.Groups['day'].Value).$sequence"
++        Ui = $ReleaseVersion
++        ExpectedCli = "herdr-win $ReleaseVersion (Herdr $BaseVersion)"
++    }
 +}
 +
 +function Invoke-HerdrIdentityQuery {
@@ -52595,7 +52686,11 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +        throw "TestUserProfileRoot must be a regular NSIS-safe directory: $TestUserProfileRoot"
 +    }
 +}
-+$UiVersion = Assert-VersionIdentity
++$versionIdentity = Get-VersionIdentity
++$DisplayVersion = [string]$versionIdentity.Display
++$NumericVersion = [string]$versionIdentity.Numeric
++$UiVersion = [string]$versionIdentity.Ui
++$ExpectedCliVersion = [string]$versionIdentity.ExpectedCli
 +
 +$projectRoot = Split-Path -Parent $PSScriptRoot
 +$packager = Join-Path $PSScriptRoot "package_windows_conpty.py"
@@ -52687,7 +52782,7 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +[void](Invoke-HerdrIdentityQuery `
 +    -Executable $payloadExe `
 +    -Arguments @("--version") `
-+    -ExpectedOutput "herdr-win $DisplayVersion" `
++    -ExpectedOutput $ExpectedCliVersion `
 +    -Description "Staged Herdr --version")
 +[void](Invoke-HerdrIdentityQuery `
 +    -Executable $LauncherExe `
@@ -52752,6 +52847,7 @@ index 0000000000000000000000000000000000000000..8c97d317ca9e2e5ff9e36bbede8f8a7e
 +        "/DINFO_PRODUCTVERSION_DISPLAY=$DisplayVersion",
 +        "/DINFO_PRODUCTVERSION_FIXED=$NumericVersion",
 +        "/DINFO_PRODUCTVERSION_UI=$UiVersion",
++        "/DINFO_UPSTREAMVERSION=$BaseVersion",
 +        "/DAPP_OUTPUT_PATH=$temporaryOutput",
 +        "/DAPP_START_GATE_ENV=$InstallerStartGateEnvironmentVariable",
 +        "/DAPP_TEST_MARKER_PREFIX=$InstallerTestMarkerPrefix",
@@ -53366,10 +53462,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f2753603c
+index 0000000000000000000000000000000000000000..c097dc09cde59936b58b9a4c6df8cb696cf81eb7
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,467 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -53505,6 +53601,11 @@ index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f
 +
 +        for contract in (
 +            "acquire_lifecycle_lock",
++            "CreateMutexW",
++            "WaitForSingleObject(handle, 0)",
++            "WAIT_ABANDONED",
++            "WAIT_TIMEOUT",
++            "ReleaseMutex",
 +            "acquire_coordination",
 +            "lease_status",
 +            "process_paths",
@@ -53522,6 +53623,7 @@ index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f
 +            self.assertIn(contract, lifecycle)
 +        self.assertNotIn("ManagedLegacy", lifecycle)
 +        self.assertNotIn("installer-helper.ps1", lifecycle)
++        self.assertNotIn("installer-lifecycle.lock", lifecycle)
 +        self.assertLess(
 +            lifecycle.index("acquire_lifecycle_lock", lifecycle.index("pub(crate) fn install")),
 +            lifecycle.index("registry::assert_arp_ownership", lifecycle.index("pub(crate) fn install")),
@@ -53616,6 +53718,7 @@ index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f
 +            "INFO_PRODUCTVERSION_DISPLAY",
 +            "INFO_PRODUCTVERSION_FIXED",
 +            "INFO_PRODUCTVERSION_UI",
++            "INFO_UPSTREAMVERSION",
 +        ):
 +            self.assertIn(f"!ifndef {required}", nsi)
 +        self.assertNotRegex(nsi, re.compile(r"herdr", re.IGNORECASE))
@@ -53702,7 +53805,11 @@ index 0000000000000000000000000000000000000000..8ec3fb39575eccb40d1ea38e60ac149f
 +        self.assertIn('"/WX"', packager)
 +        self.assertIn("Invoke-HerdrIdentityQuery", packager)
 +        self.assertIn('"--herdr-private-launcher-build-id-v1"', packager)
-+        self.assertIn('ExpectedOutput "herdr-win $DisplayVersion"', packager)
++        self.assertIn("[string]$ReleaseVersion", packager)
++        self.assertIn("[string]$BaseVersion", packager)
++        self.assertIn('$ReleaseVersion -ceq "local"', packager)
++        self.assertIn('ExpectedCli = "herdr-win $ReleaseVersion (Herdr $BaseVersion)"', packager)
++        self.assertIn("-ExpectedOutput $ExpectedCliVersion", packager)
 +
 +    def test_real_fault_matrix_covers_retries_and_pending_activation(self) -> None:
 +        fault = text(FAULT_TEST)
@@ -54049,18 +54156,18 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68ab7c0dbc8
+index 0000000000000000000000000000000000000000..d2d8794acedcdda8ca1b9d406cb9543fbeb16b66
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1133 @@
+@@ -0,0 +1,1152 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
 +    [Parameter(Mandatory = $true)][string]$LauncherExe,
 +    [Parameter(Mandatory = $true)][string]$InstallerHelperExe,
 +    [Parameter(Mandatory = $true)][string]$BuildId,
-+    [Parameter(Mandatory = $true)][string]$DisplayVersion,
-+    [Parameter(Mandatory = $true)][string]$NumericVersion,
++    [Parameter(Mandatory = $true)][string]$ReleaseVersion,
++    [Parameter(Mandatory = $true)][string]$BaseVersion,
 +    [Parameter(Mandatory = $true)][string]$OutputDir,
 +    [string]$ProductName = "Herdr",
 +    [string]$PackageName = "Herdr Win",
@@ -54080,6 +54187,21 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +
 +Set-StrictMode -Version Latest
 +$ErrorActionPreference = "Stop"
++
++if ($ReleaseVersion -ceq "local") {
++    $DisplayVersion = "local.$BuildId"
++    $NumericVersion = "0.0.0.0"
++} else {
++    $releaseMatch = [regex]::Match(
++        $ReleaseVersion,
++        '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<sequence>[1-9][0-9]*)$'
++    )
++    if (-not $releaseMatch.Success -or [uint64]$releaseMatch.Groups['sequence'].Value -gt 65535) {
++        throw "ReleaseVersion must be 'local' or a Windows-compatible YYYY.MM.DD.N CalVer."
++    }
++    $DisplayVersion = $ReleaseVersion
++    $NumericVersion = "$([int]$releaseMatch.Groups['year'].Value).$([int]$releaseMatch.Groups['month'].Value).$([int]$releaseMatch.Groups['day'].Value).$([int]$releaseMatch.Groups['sequence'].Value)"
++}
 +
 +$projectRoot = Split-Path -Parent $PSScriptRoot
 +$packager = Join-Path $PSScriptRoot "package_windows_installer.ps1"
@@ -54530,8 +54652,8 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +            -LauncherExe $LauncherExe `
 +            -InstallerHelperExe $InstallerHelperExe `
 +            -BuildId $BuildId `
-+            -DisplayVersion $DisplayVersion `
-+            -NumericVersion $NumericVersion `
++            -ReleaseVersion $ReleaseVersion `
++            -BaseVersion $BaseVersion `
 +            -ProductName $ProductName `
 +            -OutputPath $installer `
 +            -TestUninstallFault $fault `
@@ -54674,8 +54796,8 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +            -LauncherExe $LauncherExe `
 +            -InstallerHelperExe $InstallerHelperExe `
 +            -BuildId $BuildId `
-+            -DisplayVersion $DisplayVersion `
-+            -NumericVersion $NumericVersion `
++            -ReleaseVersion $ReleaseVersion `
++            -BaseVersion $BaseVersion `
 +            -ProductName $ProductName `
 +            -OutputPath $installFaultInstaller `
 +            -TestInstallFault $installFault `
@@ -54752,8 +54874,8 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +        -LauncherExe $LauncherExe `
 +        -InstallerHelperExe $InstallerHelperExe `
 +        -BuildId $BuildId `
-+        -DisplayVersion $DisplayVersion `
-+        -NumericVersion $NumericVersion `
++        -ReleaseVersion $ReleaseVersion `
++        -BaseVersion $BaseVersion `
 +        -ProductName $ProductName `
 +        -OutputPath $hardTerminationInstaller `
 +        -TestUninstallFault $hardTerminationFault `
@@ -54812,8 +54934,8 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +        -LauncherExe $LauncherExe `
 +        -InstallerHelperExe $InstallerHelperExe `
 +        -BuildId $BuildId `
-+        -DisplayVersion $DisplayVersion `
-+        -NumericVersion $NumericVersion `
++        -ReleaseVersion $ReleaseVersion `
++        -BaseVersion $BaseVersion `
 +        -ProductName $ProductName `
 +        -OutputPath $modifiedInstaller `
 +        -TestUserProfileRoot $AgentUserProfileRoot
@@ -55010,7 +55132,11 @@ index 0000000000000000000000000000000000000000..7345fdc79521d9cb2e9267c4a606a68a
 +    $oldPackage = Join-Path $pendingRoot "old-package"
 +    $newPackage = Join-Path $pendingRoot "new-package"
 +    $newBuildId = "fedcba987654.3210fedcba98"
-+    $newDisplayVersion = $DisplayVersion.Substring(0, $DisplayVersion.Length - $BuildId.Length) + $newBuildId
++    $newDisplayVersion = if ($ReleaseVersion -ceq "local") {
++        "local.$newBuildId"
++    } else {
++        $DisplayVersion
++    }
 +    $newLauncher = Join-Path $pendingRoot "new-launcher\app-launcher.exe"
 +    New-TestIdentityLauncher -Path $newLauncher -Identity $newBuildId
 +    New-TestHelperPackage -Root $oldPackage -AppLauncher $LauncherExe -Uninstaller $modifiedInstaller
@@ -55315,10 +55441,10 @@ index 0000000000000000000000000000000000000000..ddc4aa888719ebd71b62bf8a9aecb456
 +#[cfg(not(windows))]
 +fn main() {}
 diff --git a/src/build_info.rs b/src/build_info.rs
-index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..6eaf5cd2c33c2b7e250d6e023c866e1665941820 100644
+index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e96b7ea8f 100644
 --- a/src/build_info.rs
 +++ b/src/build_info.rs
-@@ -3,7 +3,7 @@
+@@ -3,13 +3,17 @@
  pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
  
  pub fn channel() -> &'static str {
@@ -55327,18 +55453,43 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..6eaf5cd2c33c2b7e250d6e023c866e16
  }
  
  pub fn build_id() -> Option<&'static str> {
-@@ -20,6 +20,10 @@ pub fn version() -> String {
+     non_empty(option_env!("HERDR_BUILD_ID"))
+ }
+ 
++pub fn release_version() -> Option<&'static str> {
++    non_empty(option_env!("HERDR_RELEASE_VERSION"))
++}
++
+ pub fn version() -> String {
+     match channel() {
+         "stable" => BASE_VERSION.to_string(),
+@@ -20,6 +24,25 @@ pub fn version() -> String {
      }
  }
  
 +pub fn cli_version() -> String {
-+    format!("{} {}", crate::distribution::CLI_VERSION_NAME, version())
++    cli_version_for(release_version(), BASE_VERSION, build_id())
++}
++
++fn cli_version_for(
++    release_version: Option<&str>,
++    herdr_version: &str,
++    build_id: Option<&str>,
++) -> String {
++    let name = crate::distribution::CLI_VERSION_NAME;
++    match (release_version, build_id) {
++        (Some(release), _) => format!("{name} {release} (Herdr {herdr_version})"),
++        (None, Some(build)) => {
++            format!("{name} local (Herdr {herdr_version}, build {build})")
++        }
++        (None, None) => format!("{name} local (Herdr {herdr_version})"),
++    }
 +}
 +
  pub fn is_preview() -> bool {
      channel() == "preview"
  }
-@@ -38,7 +42,12 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
+@@ -38,7 +61,32 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
  #[cfg(test)]
  mod tests {
      #[test]
@@ -55349,7 +55500,27 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..6eaf5cd2c33c2b7e250d6e023c866e16
 +        assert!(super::version().starts_with(&format!("{}-preview", super::BASE_VERSION)));
 +        assert_eq!(
 +            super::cli_version(),
-+            format!("herdr-win {}", super::version())
++            format!("herdr-win local (Herdr {})", super::BASE_VERSION)
++        );
++    }
++
++    #[test]
++    fn published_cli_version_leads_with_calver() {
++        assert_eq!(
++            super::cli_version_for(
++                Some("2026.08.11.1"),
++                "0.8.0",
++                Some("0123456789ab.cdef01234567")
++            ),
++            "herdr-win 2026.08.11.1 (Herdr 0.8.0)"
++        );
++    }
++
++    #[test]
++    fn local_cli_version_retains_build_provenance() {
++        assert_eq!(
++            super::cli_version_for(None, "0.8.0", Some("0123456789ab.cdef01234567")),
++            "herdr-win local (Herdr 0.8.0, build 0123456789ab.cdef01234567)"
 +        );
      }
  }
@@ -56393,10 +56564,10 @@ index 0000000000000000000000000000000000000000..368586be9ff394f7cf8bac71488ccf22
 +}
 diff --git a/src/platform/windows/installer_helper_files.rs b/src/platform/windows/installer_helper_files.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4cffcf7c81
+index 0000000000000000000000000000000000000000..81359270df805796f8d44ad32f1c56a89cbe456f
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_files.rs
-@@ -0,0 +1,963 @@
+@@ -0,0 +1,1014 @@
 +use std::{
 +    collections::{BTreeMap, BTreeSet},
 +    ffi::{OsStr, OsString},
@@ -57134,26 +57305,72 @@ index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4c
 +    Ok(parsed)
 +}
 +
-+pub(crate) fn parse_display_version(display: &str) -> io::Result<([u16; 3], BuildId)> {
-+    let (semver, build) = display
-+        .split_once("-preview.")
-+        .ok_or_else(|| invalid_data(format!("invalid display version {display:?}")))?;
-+    let build_id = BuildId::parse(build)?;
-+    Ok((
-+        parse_version_components::<3>(semver, "display semantic version")?,
-+        build_id,
-+    ))
++fn parse_release_calver(display: &str) -> io::Result<[u16; 4]> {
++    let components = display.split('.').collect::<Vec<_>>();
++    if components.len() != 4
++        || components[0].len() != 4
++        || components[1].len() != 2
++        || components[2].len() != 2
++        || components[3].is_empty()
++        || components
++            .iter()
++            .any(|component| component.bytes().any(|byte| !byte.is_ascii_digit()))
++        || components[3].starts_with('0')
++    {
++        return Err(invalid_data(format!(
++            "invalid herdr-win release version {display:?}"
++        )));
++    }
++    let year = components[0]
++        .parse::<u16>()
++        .map_err(|_| invalid_data("invalid herdr-win release year"))?;
++    let month = components[1]
++        .parse::<u16>()
++        .map_err(|_| invalid_data("invalid herdr-win release month"))?;
++    let day = components[2]
++        .parse::<u16>()
++        .map_err(|_| invalid_data("invalid herdr-win release day"))?;
++    let sequence = components[3]
++        .parse::<u16>()
++        .map_err(|_| invalid_data("invalid herdr-win release sequence"))?;
++    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
++    let max_day = match month {
++        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
++        4 | 6 | 9 | 11 => 30,
++        2 if leap => 29,
++        2 => 28,
++        _ => 0,
++    };
++    if year == 0 || day == 0 || day > max_day || sequence == 0 {
++        return Err(invalid_data(format!(
++            "invalid herdr-win release version {display:?}"
++        )));
++    }
++    Ok([year, month, day, sequence])
 +}
 +
-+pub(crate) fn validate_version_identity(display: &str, numeric: &str) -> io::Result<BuildId> {
-+    let (display_parts, build_id) = parse_display_version(display)?;
++pub(crate) fn parse_display_version(display: &str) -> io::Result<[u16; 4]> {
++    if let Some(build) = display.strip_prefix("local.") {
++        BuildId::parse(build)?;
++        return Ok([0, 0, 0, 0]);
++    }
++    if let Some((semver, build)) = display.split_once("-preview.") {
++        BuildId::parse(build)?;
++        let parts = parse_version_components::<3>(semver, "display semantic version")?;
++        return Ok([parts[0], parts[1], parts[2], 0]);
++    }
++    parse_release_calver(display)
++}
++
++pub(crate) fn validate_version_identity(display: &str, numeric: &str) -> io::Result<()> {
++    let display_parts = parse_display_version(display)?;
 +    let numeric_parts = parse_version_components::<4>(numeric, "numeric version")?;
-+    if display_parts != numeric_parts[..3] {
++    if display_parts != numeric_parts {
 +        return Err(invalid_data(format!(
 +            "numeric version {numeric:?} does not match display version {display:?}"
 +        )));
 +    }
-+    Ok(build_id)
++    Ok(())
 +}
 +
 +pub(crate) fn query_launcher_build_id(path: &Path, timeout: Duration) -> io::Result<BuildId> {
@@ -57306,15 +57523,19 @@ index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4c
 +    use super::*;
 +
 +    #[test]
-+    fn version_identity_requires_matching_build_and_semver() {
-+        let build = validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.8.0.0")
-+            .unwrap();
-+        assert_eq!(build.as_str(), "0123456789ab.cdef01234567");
++    fn version_identity_accepts_release_local_and_predecessor_forms() {
++        validate_version_identity("2026.08.11.1", "2026.8.11.1").unwrap();
++        validate_version_identity("local.0123456789ab.cdef01234567", "0.0.0.0").unwrap();
++        validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.8.0.0").unwrap();
 +        assert!(
 +            validate_version_identity("0.8.1-preview.0123456789ab.cdef01234567", "0.8.0.0")
 +                .is_err()
 +        );
 +        for invalid in [
++            "2026.8.11.1",
++            "2026.02.29.1",
++            "2026.08.11.0",
++            "local.0123456789ab.cdef01234567.extra",
 +            "00.8.0-preview.0123456789ab.cdef01234567",
 +            "0.8.0-preview.0123456789ab.cdef01234567.extra",
 +            "0.8-preview.0123456789ab.cdef01234567",
@@ -57328,6 +57549,7 @@ index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4c
 +            validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.08.0.0")
 +                .is_err()
 +        );
++        assert!(validate_version_identity("2026.08.11.1", "2026.8.11.2").is_err());
 +    }
 +
 +    #[test]
@@ -57362,22 +57584,24 @@ index 0000000000000000000000000000000000000000..05c2f1a11c6b45e49317bd6e97b53b4c
 +}
 diff --git a/src/platform/windows/installer_helper_lifecycle.rs b/src/platform/windows/installer_helper_lifecycle.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660a630ae26
+index 0000000000000000000000000000000000000000..7eb1a64073627463e662b3a8c588cbf7411a4e81
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_lifecycle.rs
-@@ -0,0 +1,2267 @@
+@@ -0,0 +1,2414 @@
 +use std::{
 +    collections::BTreeSet,
 +    ffi::{OsStr, OsString},
 +    fs::{self, File, OpenOptions},
 +    io::{self, Write as _},
++    marker::PhantomData,
 +    os::windows::{
-+        ffi::OsStringExt as _,
++        ffi::{OsStrExt as _, OsStringExt as _},
 +        fs::{MetadataExt as _, OpenOptionsExt as _},
 +        io::AsRawHandle as _,
 +    },
 +    path::{Path, PathBuf},
 +    process::{Child, Command, Stdio},
++    rc::Rc,
 +    thread,
 +    time::{Duration, Instant},
 +};
@@ -57385,6 +57609,7 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +use windows_sys::Win32::{
 +    Foundation::{
 +        CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
++        WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 +    },
 +    Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT},
 +    System::{
@@ -57394,8 +57619,8 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +        },
 +        JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
 +        Threading::{
-+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-+            PROCESS_QUERY_LIMITED_INFORMATION,
++            CreateMutexW, OpenProcess, QueryFullProcessImageNameW, ReleaseMutex,
++            WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 +        },
 +    },
 +};
@@ -57413,6 +57638,7 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 +const LOCK_RETRY: Duration = Duration::from_millis(50);
 +const QUIET_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(180);
++const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle-v1";
 +
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub(crate) enum InstallManager {
@@ -57509,6 +57735,11 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +    moved_helper_path: PathBuf,
 +}
 +
++struct LifecycleMutex {
++    handle: HANDLE,
++    _same_thread: PhantomData<Rc<()>>,
++}
++
 +#[derive(Clone, Debug)]
 +struct FileSnapshot {
 +    bytes: Vec<u8>,
@@ -57528,6 +57759,18 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +        if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
 +            // SAFETY: this wrapper owns the process or snapshot handle.
 +            unsafe { CloseHandle(self.0) };
++        }
++    }
++}
++
++impl Drop for LifecycleMutex {
++    fn drop(&mut self) {
++        if !self.handle.is_null() {
++            // SAFETY: successful acquisition is retained on this same thread until drop.
++            let _ = unsafe { ReleaseMutex(self.handle) };
++            // SAFETY: this guard exclusively owns the non-null mutex handle.
++            unsafe { CloseHandle(self.handle) };
++            self.handle = std::ptr::null_mut();
 +        }
 +    }
 +}
@@ -57775,7 +58018,7 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +pub(crate) fn install(options: InstallOptions) -> io::Result<String> {
 +    let install_root = files::full_path(&options.install_root)?;
 +    let profile = skills::user_profile_root(&options.user_profile_root)?;
-+    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
++    let _lifecycle = acquire_lifecycle_lock()?;
 +    registry::assert_arp_ownership(&install_root)?;
 +    let allow_convergence = registry::arp_exists()?;
 +    let path_add_pending = install_root.join("state").join("path-add.pending");
@@ -57835,7 +58078,7 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +        .as_ref()
 +        .map(|value| QuietSession::new(&install_root, value))
 +        .transpose()?;
-+    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
++    let _lifecycle = acquire_lifecycle_lock()?;
 +    let retry_ownership = if files::path_exists(&install_root)? {
 +        Some(RetryOwnership::capture(&install_root)?)
 +    } else {
@@ -58080,7 +58323,7 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +        return Ok("Herdr Win maintenance: Deferred".to_string());
 +    }
 +    let install_root = files::full_path(&options.install_root)?;
-+    let _lifecycle = acquire_lifecycle_lock(&install_root, LOCK_TIMEOUT)?;
++    let _lifecycle = acquire_lifecycle_lock()?;
 +    if !files::path_exists(&install_root)? {
 +        return Ok("Herdr Win maintenance: Missing".to_string());
 +    }
@@ -59144,26 +59387,63 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +    Ok(false)
 +}
 +
-+fn acquire_lifecycle_lock(install_root: &Path, timeout: Duration) -> io::Result<File> {
-+    let parent = install_root
-+        .parent()
-+        .ok_or_else(|| files::invalid_data("install root has no parent"))?;
-+    if !files::path_exists(parent)? {
-+        fs::create_dir_all(parent)?;
++fn acquire_lifecycle_lock() -> io::Result<LifecycleMutex> {
++    acquire_named_lifecycle_mutex(LIFECYCLE_MUTEX_NAME).map(|(guard, _)| guard)
++}
++
++fn acquire_named_lifecycle_mutex(name: &str) -> io::Result<(LifecycleMutex, bool)> {
++    if name.is_empty() || name.encode_utf16().any(|value| value == 0) {
++        return Err(files::invalid_data("lifecycle mutex name is invalid"));
 +    }
-+    files::assert_regular_dir(parent)?;
-+    let leaf = install_root
-+        .file_name()
-+        .ok_or_else(|| files::invalid_data("install root has no leaf"))?
-+        .to_string_lossy();
-+    let path = parent.join(format!("{leaf}.installer-lifecycle.lock"));
-+    let lock = acquire_file_lock(&path, timeout)?;
-+    if lock.metadata()?.len() != 0 {
-+        return Err(files::invalid_data(
-+            "persistent lifecycle lock contains data",
++    let wide = OsStr::new(name)
++        .encode_wide()
++        .chain(std::iter::once(0))
++        .collect::<Vec<_>>();
++    // SAFETY: the name is a valid NUL-terminated UTF-16 buffer and the default
++    // security descriptor remains owned by the current process token.
++    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
++    if handle.is_null() {
++        return Err(files::contextual(
++            io::Error::last_os_error(),
++            "failed to create or open the Herdr installer lifecycle mutex",
 +        ));
 +    }
-+    Ok(lock)
++    // SAFETY: handle is a valid mutex handle. A zero timeout performs one
++    // ownership attempt and never polls object existence or stale state.
++    let wait = unsafe { WaitForSingleObject(handle, 0) };
++    match wait {
++        WAIT_OBJECT_0 | WAIT_ABANDONED => Ok((
++            LifecycleMutex {
++                handle,
++                _same_thread: PhantomData,
++            },
++            wait == WAIT_ABANDONED,
++        )),
++        WAIT_TIMEOUT => {
++            // SAFETY: ownership was not acquired, and this process owns the handle.
++            unsafe { CloseHandle(handle) };
++            Err(io::Error::new(
++                io::ErrorKind::WouldBlock,
++                "another Herdr setup, update, or uninstall is already running",
++            ))
++        }
++        WAIT_FAILED => {
++            let err = io::Error::last_os_error();
++            // SAFETY: this process owns the handle even though the wait failed.
++            unsafe { CloseHandle(handle) };
++            Err(files::contextual(
++                err,
++                "failed to acquire the Herdr installer lifecycle mutex",
++            ))
++        }
++        value => {
++            // SAFETY: this process owns the handle for the unexpected wait result.
++            unsafe { CloseHandle(handle) };
++            Err(files::invalid_data(format!(
++                "unexpected lifecycle mutex wait result 0x{value:08x}"
++            )))
++        }
++    }
 +}
 +
 +fn acquire_file_lock(path: &Path, timeout: Duration) -> io::Result<File> {
@@ -59614,6 +59894,25 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    use std::sync::mpsc;
++
++    fn test_mutex_name(label: &str) -> String {
++        format!(
++            r"Local\HerdrWinInstallerLifecycleTest-{label}-{}",
++            files::unique_hex()
++        )
++    }
++
++    fn open_unowned_mutex(name: &str) -> HANDLE {
++        let wide = OsStr::new(name)
++            .encode_wide()
++            .chain(std::iter::once(0))
++            .collect::<Vec<_>>();
++        // SAFETY: the test supplies a valid NUL-terminated UTF-16 name.
++        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
++        assert!(!handle.is_null());
++        handle
++    }
 +
 +    #[test]
 +    fn fault_marker_prefix_is_narrow() {
@@ -59632,10 +59931,80 @@ index 0000000000000000000000000000000000000000..7b71986d6cb591b5c05c541a67c64660
 +            assert!(validate_quiet_token(invalid).is_err(), "accepted {invalid}");
 +        }
 +    }
++
++    #[test]
++    fn lifecycle_mutex_acquires_an_existing_unowned_object() {
++        let name = test_mutex_name("unowned");
++        let existing = open_unowned_mutex(&name);
++        let (guard, abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
++        assert!(!abandoned);
++        drop(guard);
++        // SAFETY: this test owns the original non-null handle.
++        unsafe { CloseHandle(existing) };
++    }
++
++    #[test]
++    fn lifecycle_mutex_releases_for_the_next_owner() {
++        let name = test_mutex_name("release");
++        let (first, first_abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
++        assert!(!first_abandoned);
++        drop(first);
++        let (second, second_abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
++        assert!(!second_abandoned);
++        drop(second);
++    }
++
++    #[test]
++    fn lifecycle_mutex_rejects_a_live_owner() {
++        let name = test_mutex_name("live");
++        let worker_name = name.clone();
++        let (ready_tx, ready_rx) = mpsc::channel();
++        let (release_tx, release_rx) = mpsc::channel();
++        let holder = thread::spawn(move || {
++            let (guard, abandoned) = acquire_named_lifecycle_mutex(&worker_name).unwrap();
++            assert!(!abandoned);
++            ready_tx.send(()).unwrap();
++            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++            drop(guard);
++        });
++        let ready = ready_rx.recv_timeout(Duration::from_secs(5));
++        if ready.is_err() {
++            let _ = release_tx.send(());
++            let _ = holder.join();
++            panic!("lifecycle mutex holder did not become ready");
++        }
++        let err = match acquire_named_lifecycle_mutex(&name) {
++            Ok(_) => panic!("acquired lifecycle mutex while another thread owned it"),
++            Err(err) => err,
++        };
++        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
++        release_tx.send(()).unwrap();
++        holder.join().unwrap();
++    }
++
++    #[test]
++    fn lifecycle_mutex_recovers_a_hard_terminated_owner() {
++        let name = test_mutex_name("abandoned");
++        let worker_name = name.clone();
++        let original_handle = thread::spawn(move || {
++            let (guard, abandoned) = acquire_named_lifecycle_mutex(&worker_name).unwrap();
++            assert!(!abandoned);
++            let handle = guard.handle as usize;
++            std::mem::forget(guard);
++            handle
++        })
++        .join()
++        .unwrap();
++        let (recovered, abandoned) = acquire_named_lifecycle_mutex(&name).unwrap();
++        assert!(abandoned);
++        drop(recovered);
++        // SAFETY: the worker deliberately transferred its leaked handle value.
++        unsafe { CloseHandle(original_handle as HANDLE) };
++    }
 +}
 diff --git a/src/platform/windows/installer_helper_registry.rs b/src/platform/windows/installer_helper_registry.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..50a2f24d83b519c64f54a74c9c9247578908e083
+index 0000000000000000000000000000000000000000..f89161a452ad0287137627f892db0d75043ab72c
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_registry.rs
 @@ -0,0 +1,878 @@
@@ -60369,7 +60738,7 @@ index 0000000000000000000000000000000000000000..50a2f24d83b519c64f54a74c9c924757
 +    let expected_uninstaller = install_root.join("uninstall.exe");
 +    let expected_launcher = install_root.join("bin").join("herdr.exe");
 +    let expected_quiet = quiet_uninstall_string(install_root)?;
-+    let (display_parts, _) = parse_display_version(&display_version)?;
++    let display_parts = parse_display_version(&display_version)?;
 +    let versions_match = u32::from(display_parts[0]) == dword("VersionMajor")?
 +        && u32::from(display_parts[1]) == dword("VersionMinor")?;
 +    if display_name != PRODUCT_NAME

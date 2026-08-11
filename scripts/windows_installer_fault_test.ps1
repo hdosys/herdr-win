@@ -4,8 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$LauncherExe,
     [Parameter(Mandatory = $true)][string]$InstallerHelperExe,
     [Parameter(Mandatory = $true)][string]$BuildId,
-    [Parameter(Mandatory = $true)][string]$DisplayVersion,
-    [Parameter(Mandatory = $true)][string]$NumericVersion,
+    [Parameter(Mandatory = $true)][string]$ReleaseVersion,
+    [Parameter(Mandatory = $true)][string]$BaseVersion,
     [Parameter(Mandatory = $true)][string]$OutputDir,
     [string]$ProductName = "Herdr",
     [string]$PackageName = "Herdr Win",
@@ -25,6 +25,21 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($ReleaseVersion -ceq "local") {
+    $DisplayVersion = "local.$BuildId"
+    $NumericVersion = "0.0.0.0"
+} else {
+    $releaseMatch = [regex]::Match(
+        $ReleaseVersion,
+        '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<sequence>[1-9][0-9]*)$'
+    )
+    if (-not $releaseMatch.Success -or [uint64]$releaseMatch.Groups['sequence'].Value -gt 65535) {
+        throw "ReleaseVersion must be 'local' or a Windows-compatible YYYY.MM.DD.N CalVer."
+    }
+    $DisplayVersion = $ReleaseVersion
+    $NumericVersion = "$([int]$releaseMatch.Groups['year'].Value).$([int]$releaseMatch.Groups['month'].Value).$([int]$releaseMatch.Groups['day'].Value).$([int]$releaseMatch.Groups['sequence'].Value)"
+}
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packager = Join-Path $PSScriptRoot "package_windows_installer.ps1"
@@ -475,8 +490,8 @@ try {
             -LauncherExe $LauncherExe `
             -InstallerHelperExe $InstallerHelperExe `
             -BuildId $BuildId `
-            -DisplayVersion $DisplayVersion `
-            -NumericVersion $NumericVersion `
+            -ReleaseVersion $ReleaseVersion `
+            -BaseVersion $BaseVersion `
             -ProductName $ProductName `
             -OutputPath $installer `
             -TestUninstallFault $fault `
@@ -619,8 +634,8 @@ try {
             -LauncherExe $LauncherExe `
             -InstallerHelperExe $InstallerHelperExe `
             -BuildId $BuildId `
-            -DisplayVersion $DisplayVersion `
-            -NumericVersion $NumericVersion `
+            -ReleaseVersion $ReleaseVersion `
+            -BaseVersion $BaseVersion `
             -ProductName $ProductName `
             -OutputPath $installFaultInstaller `
             -TestInstallFault $installFault `
@@ -697,8 +712,8 @@ try {
         -LauncherExe $LauncherExe `
         -InstallerHelperExe $InstallerHelperExe `
         -BuildId $BuildId `
-        -DisplayVersion $DisplayVersion `
-        -NumericVersion $NumericVersion `
+        -ReleaseVersion $ReleaseVersion `
+        -BaseVersion $BaseVersion `
         -ProductName $ProductName `
         -OutputPath $hardTerminationInstaller `
         -TestUninstallFault $hardTerminationFault `
@@ -757,8 +772,8 @@ try {
         -LauncherExe $LauncherExe `
         -InstallerHelperExe $InstallerHelperExe `
         -BuildId $BuildId `
-        -DisplayVersion $DisplayVersion `
-        -NumericVersion $NumericVersion `
+        -ReleaseVersion $ReleaseVersion `
+        -BaseVersion $BaseVersion `
         -ProductName $ProductName `
         -OutputPath $modifiedInstaller `
         -TestUserProfileRoot $AgentUserProfileRoot
@@ -955,7 +970,11 @@ try {
     $oldPackage = Join-Path $pendingRoot "old-package"
     $newPackage = Join-Path $pendingRoot "new-package"
     $newBuildId = "fedcba987654.3210fedcba98"
-    $newDisplayVersion = $DisplayVersion.Substring(0, $DisplayVersion.Length - $BuildId.Length) + $newBuildId
+    $newDisplayVersion = if ($ReleaseVersion -ceq "local") {
+        "local.$newBuildId"
+    } else {
+        $DisplayVersion
+    }
     $newLauncher = Join-Path $pendingRoot "new-launcher\app-launcher.exe"
     New-TestIdentityLauncher -Path $newLauncher -Identity $newBuildId
     New-TestHelperPackage -Root $oldPackage -AppLauncher $LauncherExe -Uninstaller $modifiedInstaller

@@ -728,7 +728,7 @@ pub(crate) fn assert_arp_ownership(install_root: &Path) -> io::Result<()> {
     let expected_uninstaller = install_root.join("uninstall.exe");
     let expected_launcher = install_root.join("bin").join("herdr.exe");
     let expected_quiet = quiet_uninstall_string(install_root)?;
-    let (display_parts, _) = parse_display_version(&display_version)?;
+    let display_parts = parse_display_version(&display_version)?;
     let versions_match = u32::from(display_parts[0]) == dword("VersionMajor")?
         && u32::from(display_parts[1]) == dword("VersionMinor")?;
     if display_name != PRODUCT_NAME

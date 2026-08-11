@@ -293,7 +293,8 @@ jobs:
           cargo clippy --bins --locked --target $env:WINDOWS_TARGET -- -D warnings
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr-launcher
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr distribution::tests
-          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr distribution_channel_owns_local_build_identity
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_cli_version_leads_with_calver
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr local_cli_version_retains_build_provenance
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr fork_distribution_locks_the_existing_preview_channel
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr winget_catalog
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr herdr_win_release_version
@@ -314,6 +315,8 @@ jobs:
 
       - name: Build release executable
         working-directory: source
+        env:
+          HERDR_RELEASE_VERSION: ${{ steps.release_identity.outputs.release_version }}
         run: cargo build --release --locked --target ${{ env.WINDOWS_TARGET }} --bins
 
       - name: Verify system ConPTY fallback
@@ -485,8 +488,6 @@ jobs:
             "-ArchivePath", $archive
           )
 
-          $displayVersion = "$env:HERDR_BASE_VERSION-preview.$env:HERDR_BUILD_ID"
-          $numericVersion = "$env:HERDR_BASE_VERSION.0"
           Invoke-BoundedProcess -FilePath "powershell.exe" -TimeoutMilliseconds 300000 -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             (Join-Path $PWD "source\scripts\package_windows_installer.ps1"),
@@ -494,8 +495,8 @@ jobs:
             "-LauncherExe", $launcher,
             "-InstallerHelperExe", $installerHelper,
             "-BuildId", $env:HERDR_BUILD_ID,
-            "-DisplayVersion", $displayVersion,
-            "-NumericVersion", $numericVersion,
+            "-ReleaseVersion", $env:RELEASE_VERSION,
+            "-BaseVersion", $env:HERDR_BASE_VERSION,
             "-OutputPath", $installer
           )
           Invoke-BoundedProcess -FilePath "powershell.exe" -TimeoutMilliseconds 900000 -Arguments @(
@@ -505,8 +506,8 @@ jobs:
             "-LauncherExe", $launcher,
             "-InstallerHelperExe", $installerHelper,
             "-BuildId", $env:HERDR_BUILD_ID,
-            "-DisplayVersion", $displayVersion,
-            "-NumericVersion", $numericVersion,
+            "-ReleaseVersion", $env:RELEASE_VERSION,
+            "-BaseVersion", $env:HERDR_BASE_VERSION,
             "-OutputDir", $faultRoot
           )
 
@@ -635,6 +636,7 @@ jobs:
       HERDR_BUILD_ID: ${{ needs.build.outputs.build_id }}
       HERDR_BUILD_COMMIT: ${{ needs.build.outputs.upstream_sha }}
       HERDR_REPLAY_TREE: ${{ needs.build.outputs.replay_tree }}
+      HERDR_RELEASE_VERSION: ${{ needs.build.outputs.release_version }}
       RELEASE_VERSION: ${{ needs.build.outputs.release_version }}
       LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
       LIBGHOSTTY_VT_SIMD: "true"
@@ -1757,7 +1759,7 @@ jobs:
             }
             $managed = Join-Path $installRoot "bin\herdr.exe"
             $version = Invoke-BoundedCaptured -FilePath $managed -Arguments @("--version")
-            if ($version -cne "herdr-win $env:BASE_VERSION-preview.$env:BUILD_ID") {
+            if ($version -cne "herdr-win $env:RELEASE_VERSION (Herdr $env:BASE_VERSION)") {
               throw "published installer returned unexpected managed version: $version"
             }
             $managedUpdate = Invoke-BoundedCaptured -FilePath $managed -Arguments @("update")

@@ -122,6 +122,12 @@ these machine-consumed names; show the stable Herdr version beside the CalVer in
 the GitHub release title, notes, and installer metadata instead of changing
 updater-facing filenames.
 
+The retained candidate compiles that CalVer into every platform binary.
+`herdr --version` must be `herdr-win <CalVer> (Herdr <upstream-version>)`; Windows
+setup and Installed Apps use the same CalVer as their primary display version.
+Separately built local artifacts use the literal `local` identity plus their build
+ID when one is available, and must never claim a release CalVer.
+
 The build fails closed on replay conflict, source drift, or a wrong installer pin.
 Promotion additionally validates the selected successful workflow run and attempt,
 source/control identities, expected file set, and every digest before publication;

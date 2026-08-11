@@ -275,6 +275,22 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertNotIn("repository: ogulcancelik/herdr", ci_workflow)
         self.assertIn(WINDOWS_INSTALLER_TARGET, workflow)
         self.assertIn("release_version:", workflow)
+        self.assertNotIn('"HERDR_RELEASE_VERSION=$releaseVersion"', workflow)
+        self.assertIn(
+            "Build release executable\n        working-directory: source\n"
+            "        env:\n          HERDR_RELEASE_VERSION: "
+            "${{ steps.release_identity.outputs.release_version }}",
+            workflow,
+        )
+        self.assertIn(
+            "HERDR_RELEASE_VERSION: ${{ needs.build.outputs.release_version }}",
+            workflow,
+        )
+        self.assertNotIn(
+            "--bin herdr distribution_channel_owns_local_build_identity", workflow
+        )
+        self.assertIn("--bin herdr published_cli_version_leads_with_calver", workflow)
+        self.assertIn("--bin herdr local_cli_version_retains_build_provenance", workflow)
         self.assertIn("herdr-win-asset-names", workflow)
         self.assertIn('tag="v${RELEASE_VERSION}"', workflow)
         preview_source = (PROJECT_ROOT / "scripts" / "preview.py").read_text(
@@ -401,6 +417,13 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertIn("cargo build --release", build_section)
         self.assertIn("herdr-installer-helper.exe", build_section)
         self.assertEqual(build_section.count('"-InstallerHelperExe", $installerHelper'), 2)
+        self.assertEqual(build_section.count('"-ReleaseVersion", $env:RELEASE_VERSION'), 2)
+        self.assertEqual(build_section.count('"-BaseVersion", $env:HERDR_BASE_VERSION'), 2)
+        self.assertIn(
+            '"herdr-win $env:RELEASE_VERSION (Herdr $env:BASE_VERSION)"',
+            promotion_section,
+        )
+        self.assertNotIn("HERDR_BASE_VERSION-preview.$env:HERDR_BUILD_ID", build_section)
         self.assertNotIn("cargo build", promotion_section)
         self.assertNotIn("package_windows_installer.ps1", promotion_section)
         self.assertEqual(workflow.count("[void] $descendant.Handle"), 2)

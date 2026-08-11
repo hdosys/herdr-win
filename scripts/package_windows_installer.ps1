@@ -13,10 +13,10 @@ param(
     [string]$BuildId,
 
     [Parameter(Mandatory = $true)]
-    [string]$DisplayVersion,
+    [string]$ReleaseVersion,
 
     [Parameter(Mandatory = $true)]
-    [string]$NumericVersion,
+    [string]$BaseVersion,
 
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
@@ -64,8 +64,8 @@ $InstallerStartGateEnvironmentVariable = "HERDR_INSTALLER_START_GATE_V1"
 $InstallerTestMarkerPrefix = "herdr"
 $ProductNamePattern = '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$'
 $BuildIdPattern = '^[0-9a-f]{12}\.[0-9a-f]{12}$'
-$DisplayVersionPattern = '^((?:0|[1-9][0-9]{0,4}))\.((?:0|[1-9][0-9]{0,4}))\.((?:0|[1-9][0-9]{0,4}))-preview\.([0-9a-f]{12}\.[0-9a-f]{12})$'
-$NumericVersionPattern = '^([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})$'
+$BaseVersionPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$'
+$ReleaseVersionPattern = '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<sequence>[1-9][0-9]*)$'
 $LauncherBuildIdArgument = "--herdr-private-launcher-build-id-v1"
 
 function ConvertTo-WindowsCommandLineArgument {
@@ -230,26 +230,43 @@ function Assert-X86Pe {
     }
 }
 
-function Assert-VersionIdentity {
-    $displayMatch = [regex]::Match($DisplayVersion, $DisplayVersionPattern)
-    if (-not $displayMatch.Success -or $displayMatch.Groups[4].Value -cne $BuildId) {
-        throw "DisplayVersion must be <major>.<minor>.<patch>-preview.$BuildId."
+function Get-VersionIdentity {
+    if ($BaseVersion -cnotmatch $BaseVersionPattern) {
+        throw "BaseVersion must be the upstream Herdr semantic version without v."
     }
-    $match = [regex]::Match($NumericVersion, $NumericVersionPattern)
+    if ($ReleaseVersion -ceq "local") {
+        return [PSCustomObject]@{
+            Display = "local.$BuildId"
+            Numeric = "0.0.0.0"
+            Ui = "local"
+            ExpectedCli = "herdr-win local (Herdr $BaseVersion, build $BuildId)"
+        }
+    }
+    $match = [regex]::Match($ReleaseVersion, $ReleaseVersionPattern)
     if (-not $match.Success) {
-        throw "NumericVersion must contain four dot-separated 0-65535 components."
+        throw "ReleaseVersion must be 'local' or YYYY.MM.DD.N CalVer."
     }
-    for ($index = 1; $index -le 4; $index++) {
-        if ([int]$match.Groups[$index].Value -gt 65535) {
-            throw "NumericVersion contains a component greater than 65535."
-        }
+    $date = [DateTime]::MinValue
+    $dateText = "$($match.Groups['year'].Value)-$($match.Groups['month'].Value)-$($match.Groups['day'].Value)"
+    if (-not [DateTime]::TryParseExact(
+        $dateText,
+        "yyyy-MM-dd",
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None,
+        [ref]$date
+    )) {
+        throw "ReleaseVersion must contain a real calendar date."
     }
-    for ($index = 1; $index -le 3; $index++) {
-        if ([int]$displayMatch.Groups[$index].Value -ne [int]$match.Groups[$index].Value) {
-            throw "NumericVersion must match DisplayVersion's major, minor, and patch components."
-        }
+    $sequence = [uint64]$match.Groups['sequence'].Value
+    if ($sequence -gt 65535) {
+        throw "ReleaseVersion sequence must fit the Windows 0-65535 version component."
     }
-    return "$($displayMatch.Groups[1].Value).$($displayMatch.Groups[2].Value).$($displayMatch.Groups[3].Value)"
+    return [PSCustomObject]@{
+        Display = $ReleaseVersion
+        Numeric = "$([int]$match.Groups['year'].Value).$([int]$match.Groups['month'].Value).$([int]$match.Groups['day'].Value).$sequence"
+        Ui = $ReleaseVersion
+        ExpectedCli = "herdr-win $ReleaseVersion (Herdr $BaseVersion)"
+    }
 }
 
 function Invoke-HerdrIdentityQuery {
@@ -350,7 +367,11 @@ if (-not [string]::IsNullOrWhiteSpace($TestUserProfileRoot)) {
         throw "TestUserProfileRoot must be a regular NSIS-safe directory: $TestUserProfileRoot"
     }
 }
-$UiVersion = Assert-VersionIdentity
+$versionIdentity = Get-VersionIdentity
+$DisplayVersion = [string]$versionIdentity.Display
+$NumericVersion = [string]$versionIdentity.Numeric
+$UiVersion = [string]$versionIdentity.Ui
+$ExpectedCliVersion = [string]$versionIdentity.ExpectedCli
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packager = Join-Path $PSScriptRoot "package_windows_conpty.py"
@@ -442,7 +463,7 @@ if ($InstallerHelperExe.Equals($payloadExe, [System.StringComparison]::OrdinalIg
 [void](Invoke-HerdrIdentityQuery `
     -Executable $payloadExe `
     -Arguments @("--version") `
-    -ExpectedOutput "herdr-win $DisplayVersion" `
+    -ExpectedOutput $ExpectedCliVersion `
     -Description "Staged Herdr --version")
 [void](Invoke-HerdrIdentityQuery `
     -Executable $LauncherExe `
@@ -507,6 +528,7 @@ try {
         "/DINFO_PRODUCTVERSION_DISPLAY=$DisplayVersion",
         "/DINFO_PRODUCTVERSION_FIXED=$NumericVersion",
         "/DINFO_PRODUCTVERSION_UI=$UiVersion",
+        "/DINFO_UPSTREAMVERSION=$BaseVersion",
         "/DAPP_OUTPUT_PATH=$temporaryOutput",
         "/DAPP_START_GATE_ENV=$InstallerStartGateEnvironmentVariable",
         "/DAPP_TEST_MARKER_PREFIX=$InstallerTestMarkerPrefix",

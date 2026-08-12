@@ -154,10 +154,13 @@ tests remain the detailed implementation truth.
 ## Interaction and Status
 
 - Keyboard-first terminal operation remains complete end to end.
-- A native Windows client attaches to a Windows SSH host only through
-  `herdr.exe` resolved from that SSH user's `PATH`. It launches that resolved
-  application without a fork- or Sandbox-specific path fallback and never
-  installs Herdr on the Windows host automatically.
+- Every supported client can attach to an x86_64 Windows SSH host. Herdr first
+  uses an exact version- and protocol-matching `herdr.exe` from that SSH user's
+  `PATH` or its versioned per-user sidecar. If neither matches, an interactive
+  attach offers to transfer the complete digest-verified Windows portable ZIP
+  into that user's profile without running the managed installer or changing
+  `PATH`; a non-interactive attach never modifies the host. Windows remote hosts
+  do not support live handoff.
 - User-visible state distinguishes waiting, active, mixed, complete, failed,
   cancelled, stopped, and no-op outcomes whenever they require different user
   understanding or action.

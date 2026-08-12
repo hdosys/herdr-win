@@ -43,12 +43,17 @@ behavior; code and tests remain the detailed implementation truth.
 - Mailbox 0001 owns Windows terminal appearance, color/cursor transport, rendering,
   and Windows VTI input behavior.
 - Mailbox 0003 owns shared remote orchestration, Windows SSH/named-pipe attach,
-  and bounded clipboard/drop image transport. For a Windows remote host, its
-  encoded PowerShell bridge resolves `herdr.exe` from the SSH user's `PATH` with
-  `Get-Command` restricted to `Application`, then invokes that exact result with
-  the optional session name and `remote-client-bridge`. This path has no
-  Sandbox-specific executable or status contract, compatibility fallback, live
-  handoff, or automatic Windows remote installation.
+  startup geometry gating, and bounded clipboard/drop image transport. Every
+  client probes a Windows SSH host through explicit PowerShell, accepts only
+  x86_64, and reuses the shared exact-version, protocol, named-session status,
+  stop, and restart policy. It prefers `herdr.exe` from the SSH user's `PATH`,
+  then a build-identity sidecar. Interactive bootstrap transfers the complete
+  digest-bearing portable ZIP with OpenSSH, validates its digest, layout,
+  version, and protocol, and atomically publishes it in a user-owned versioned
+  directory. A lease retains active payloads; inactive exact sidecars may be
+  pruned. The bridge propagates the PowerShell child exit code. This path never
+  runs the managed installer, changes remote `PATH`, adds compatibility layouts,
+  or enables Windows live handoff or OpenSSH control-socket reuse.
 - Mailbox 0004 owns deterministic ConPTY packaging, managed Windows distribution,
   fork update sources, and installer lifecycle.
 - Mailbox 0005 owns OpenCode retry/error lifecycle correlation. It must preserve

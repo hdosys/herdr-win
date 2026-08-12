@@ -1,9 +1,13 @@
-From 296bd9f06d8ffb15d5315c8a9622b51f54e78c6a Mon Sep 17 00:00:00 2001
+From 4128faa057f0312d3a568604fecb7ea3eed32c83 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
-Date: Sun, 26 Jul 2026 06:47:17 +0200
+Date: Wed, 12 Aug 2026 16:42:58 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
 
-Share remote attach orchestration across platforms, enable the Windows SSH bridge with bounded named-pipe handshakes, and transport clipboard or dropped images through the existing client protocol. Keep package-manager detection and automatic remote installation Unix-specific; Windows remote hosts resolve herdr.exe from the SSH user's PATH.
+Share remote orchestration across platforms, preserve startup geometry before shell launch, and transport clipboard or dropped images through the existing client protocol.
+
+Detect Windows SSH hosts from every client, require exact version and protocol identity, and offer an explicit complete portable ZIP sidecar without running an installer or changing remote PATH. Reuse the shared named-session server lifecycle while keeping Windows live handoff and SSH control-socket reuse unsupported.
+
+Refs herdrdev/herdr#2409
 
 Refs ogulcancelik/herdr#1947
 ---
@@ -11,48 +15,53 @@ Refs ogulcancelik/herdr#1947
  Cargo.toml                                    |    1 +
  .../src/content/docs/configuration.mdx        |    4 +-
  .../src/content/docs/ja/configuration.mdx     |    4 +-
- .../content/docs/ja/persistence-remote.mdx    |   10 +-
+ .../content/docs/ja/persistence-remote.mdx    |   12 +-
  .../src/content/docs/ja/windows-beta.mdx      |   14 +-
- .../src/content/docs/persistence-remote.mdx   |    8 +-
+ .../src/content/docs/persistence-remote.mdx   |   10 +-
  .../website/src/content/docs/windows-beta.mdx |   14 +-
  .../src/content/docs/zh-cn/configuration.mdx  |    4 +-
- .../content/docs/zh-cn/persistence-remote.mdx |   10 +-
+ .../content/docs/zh-cn/persistence-remote.mdx |   12 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   14 +-
  src/app/agent_resume.rs                       |   11 +-
  src/app/api.rs                                |    3 +-
  src/app/api/layouts.rs                        |    4 +-
  src/app/api/panes.rs                          |    2 +-
  src/app/api/tabs.rs                           |    2 +-
- src/app/creation.rs                           |  121 +-
+ src/app/api/workspaces.rs                     |   44 +-
+ src/app/creation.rs                           |  211 +-
  src/app/input/modal.rs                        |   22 +-
+ src/app/mod.rs                                |   42 +-
+ src/app/session.rs                            |   18 +-
  src/app/state.rs                              |   11 +-
  src/cli/status.rs                             |   12 +
  src/client/mod.rs                             |  294 +-
  src/ipc.rs                                    |  176 +-
- src/main.rs                                   |    1 -
+ src/main.rs                                   |    6 +-
  src/platform/fallback.rs                      |   54 +
  src/platform/linux.rs                         |    6 +
  src/platform/macos.rs                         |    6 +
  src/platform/mod.rs                           |   16 +-
  src/platform/unix_common.rs                   |  123 +
  src/platform/windows.rs                       |  192 +-
- src/platform/windows/clipboard_image.rs       |  535 +++
+ src/platform/windows/clipboard_image.rs       |  535 ++
  src/plugin_command.rs                         |    3 +-
- src/remote.rs                                 |  149 +-
- src/remote/attach.rs                          | 3622 +++++++++++++++++
- src/remote/unix.rs                            | 3091 +-------------
- src/remote/windows.rs                         |  124 +
+ src/remote.rs                                 |  171 +-
+ src/remote/attach.rs                          | 4307 +++++++++++++++++
+ src/remote/unix.rs                            | 3091 +-----------
+ src/remote/windows.rs                         |  268 +
+ src/remote/windows_bootstrap.ps1              |  169 +
  src/server/autodetect.rs                      |   48 +-
  src/server/client_transport.rs                |   51 +-
  src/server/clipboard_image.rs                 |   12 +-
- src/server/headless.rs                        |  248 +-
+ src/server/headless.rs                        |  515 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    5 +
- 41 files changed, 5660 insertions(+), 3437 deletions(-)
+ 45 files changed, 7149 insertions(+), 3440 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
  create mode 100644 src/remote/windows.rs
+ create mode 100644 src/remote/windows_bootstrap.ps1
 
 diff --git a/Cargo.lock b/Cargo.lock
 index 980fcb5d966bd6ce04bbe1445ff3a087636c5a7c..fbf3ebcfbea2f8cf905e5308780409f8ccefbef2 100644
@@ -121,7 +130,7 @@ index dda1629c537c6807c3a903cc22a5601c4dc9c2b0..137ed74cbcc199d65fb1cb64deca2fde
  ## キーバインド
  
 diff --git a/docs/next/website/src/content/docs/ja/persistence-remote.mdx b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
-index f8d3ff02f5be343971171672c9f1793384f3357d..8313d6c3ea082a2ef2009ee08bc6238757ecb604 100644
+index f8d3ff02f5be343971171672c9f1793384f3357d..57b7f02158ae21bf597ef1305a0ebd5b94fcd847 100644
 --- a/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 @@ -63,11 +63,15 @@ Host workbox
@@ -132,7 +141,7 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..8313d6c3ea082a2ef2009ee08bc62387
 +リモートアタッチは x86_64 と aarch64 の Linux および macOS ホストをサポートします。Herdr はリモートのプラットフォームを確認し、リモートの `PATH` 上にある一致する `herdr` を優先してから、一般的な直接インストール、Homebrew、mise、Nix プロファイルのパスを確認します。一致するバイナリがない場合、対話的な実行では `~/.local/bin/herdr` へのインストールを提案します。非対話的な実行はホストを変更せずに失敗します。`~/.local/bin` がリモートの `PATH` にない場合、Herdr はインストール後に警告します。
  
 -ネイティブ Windows の `herdr --remote` は Windows ベータの範囲外です。Windows からはサーバーに SSH してそこで `herdr` を実行してください。
-+ネイティブ Windows クライアントは、これらの Linux および macOS ホストに加えて Windows ホストにもアタッチできます。Windows ホストでは、SSH ユーザーの `PATH` で `herdr.exe` を解決できる必要があり、Herdr は解決したその実行ファイルを起動します。Windows ではリモートバイナリを自動インストールしません。ライブハンドオフは引き続き Unix ホスト専用です。
++すべての対応クライアントは x86_64 Windows ホストにもアタッチできます。Herdr は最初に、SSH ユーザーの `PATH` またはユーザー所有のバージョン付きサイドカーから、バージョンとプロトコルが完全に一致する `herdr.exe` を使います。どちらも一致しない場合、対話的な実行では、ダイジェスト検証済みの完全な Windows ポータブル ZIP を SSH ユーザーのプロファイルへ転送するか確認します。インストーラーの実行や `PATH` の変更は行いません。非対話的な実行はホストを変更せずに失敗します。ライブハンドオフは引き続き Unix ホスト専用です。
  
 -デフォルトでは、`herdr --remote` はあなたの SSH config を最初に include し、その後にフォールバックのキープアライブ設定を加えた一時的な SSH config を通してブリッジを実行します。既存のユーザーのキープアライブ設定が優先されます。Herdr が生成するブリッジ設定を使わず素の `ssh` を使うには `[remote].manage_ssh_config = false` を設定してください。
 +Windows からのリモートアタッチでは、既定の `ctrl+v` リモート画像バインドが登録済み PNG または DIB クリップボード画像を既存のクライアントプロトコルで送信し、リモートホストへステージして、そのリモートパスを貼り付けます。PNG、JPEG、GIF、WebP、BMP の絶対パスをひとつドラッグまたは貼り付けた場合も、同じサイズ制限付き転送を使います。対応するクリップボード画像がない場合、テキスト入力はそのまま送られます。ショートカットを変更または無効化するには `keys.remote_image_paste` を設定してください。
@@ -143,15 +152,24 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..8313d6c3ea082a2ef2009ee08bc62387
  
  デフォルトでは、実行中のリモートサーバーの置き換えや再起動が必要な場合、リモートアタッチは通常の再起動/停止フローを使います。対応する実行中リモートサーバーで実験的なライブハンドオフにオプトインするには `--handoff` を渡します:
  
+@@ -79,7 +83,7 @@ herdr --remote workbox --handoff
+ 
+ ローカルとリモートのプラットフォームが一致する場合、直接インストールでは Herdr は現在のローカルバイナリをコピーできます。Homebrew、mise、Nix のインストールの場合、またはプラットフォームが異なる場合は、`https://herdr.dev/latest.json` から現在のクライアントバージョンに一致するリリースアセットをダウンロードします。
+ 
+-ローカルビルドやカスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。
++ローカルビルドやカスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。Windows ホストでは完全なポータブル ZIP、Unix ホストでは単一の実行ファイルが必要です。
+ 
+ ```bash
+ HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-index ee0f85679b531a3cf8c470b603375dfb6bf86665..076e92bd7679c2ff4afbdeb32434e56d51ec8225 100644
+index ee0f85679b531a3cf8c470b603375dfb6bf86665..79475cf59e4996be6b1ea4226b30d896a95ab6a0 100644
 --- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows ベータビルドはプレビューチャンネルでのみ提供され
  | プラグイン | プレビュー |
  | ペイン画面履歴 | ベータ |
  | ネストされた起動のオーバーライド | ベータ |
-+| Linux/macOS と SSH ユーザーの `PATH` に `herdr.exe` がある Windows ホストへの `herdr --remote` | ベータ |
++| Linux/macOS と x86_64 Windows ホストへの `herdr --remote` | ベータ |
  
  Windows のエージェントプロセス検出は、ペインのシェルの子孫プロセスをスキャンし、直接のエージェントと一般的なコマンドラッパーを認識します。Codex、Claude などのエージェントには有用ですが、Unix のフォアグラウンドプロセスグループ検出と同じものではありません。
  
@@ -185,7 +203,7 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..076e92bd7679c2ff4afbdeb32434e56d
  | 署名済みバイナリ / SmartScreen 回避 | 未サポート |
  
 -Windows からのリモート作業は、サーバーに SSH してそこで `herdr` を実行してください:
-+ネイティブ Windows バイナリは、Linux と macOS の Herdr ホスト、および SSH ユーザーの `PATH` で `herdr.exe` を解決できる Windows ホストに対するシンクライアントとして動作できます:
++ネイティブ Windows バイナリは、Linux、macOS、x86_64 Windows の Herdr ホストに対するシンクライアントとして動作できます:
  
  ```powershell
 -ssh you@server
@@ -194,12 +212,12 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..076e92bd7679c2ff4afbdeb32434e56d
  ```
  
 -このモードでは Herdr はリモートホスト上で動きます。ネイティブ Windows の `herdr --remote` はベータの範囲外です。
-+Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Linux と macOS ホストでは検出と任意のインストールをサポートします。Windows ホストでは SSH ユーザーの `PATH` で解決した `herdr.exe` だけを起動し、リモートへの自動インストールやライブハンドオフは行いません。
++Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` またはユーザー所有のバージョン付きサイドカーから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチはダイジェスト検証済みの完全なポータブル ZIP を転送できますが、インストーラーの実行やリモート `PATH` の変更は行いません。非対話的なアタッチはインストールしません。Windows リモートホストではライブハンドオフをサポートしません。
  
  Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
  
 diff --git a/docs/next/website/src/content/docs/persistence-remote.mdx b/docs/next/website/src/content/docs/persistence-remote.mdx
-index a365ac8838673144952ce0b6dcf92d3125e27360..50b8f099a565180dc05996497c7391a2eadb3780 100644
+index a365ac8838673144952ce0b6dcf92d3125e27360..c633892cf07f6659c83bb9c0ebef05bea09e0ff2 100644
 --- a/docs/next/website/src/content/docs/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/persistence-remote.mdx
 @@ -65,9 +65,13 @@ herdr --remote workbox
@@ -207,7 +225,7 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..50b8f099a565180dc05996497c7391a2
  Remote attach supports Linux and macOS hosts on x86_64 and aarch64. Herdr checks the remote platform, prefers a matching `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no matching binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install.
  
 -Native Windows `herdr --remote` is not part of the Windows beta. From Windows, SSH into the server and run `herdr` there.
-+Native Windows clients can attach to those Linux and macOS hosts as well as Windows hosts. On a Windows host, the SSH user's `PATH` must resolve `herdr.exe`; Herdr starts that exact executable and never installs a remote binary automatically. Live handoff remains Unix-host-only.
++Every supported client can also attach to x86_64 Windows hosts. Herdr first uses an exact version- and protocol-matching `herdr.exe` from the SSH user's `PATH` or its versioned per-user sidecar. If neither matches, an interactive run offers to transfer the complete digest-verified Windows portable ZIP into the SSH user's profile without running an installer or changing `PATH`; a non-interactive run fails without modifying the host. Live handoff remains Unix-host-only.
  
 -By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings and a private per-attach control socket for connection reuse. Existing user keepalive settings win. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
 +On a remote attach from Windows, the default `ctrl+v` remote-image binding sends a registered PNG or DIB clipboard image through the existing client protocol, stages it on the remote host, and pastes the remote path. Dragging or pasting one absolute PNG, JPEG, GIF, WebP, or BMP path uses the same bounded transport. Text input falls through unchanged when the clipboard has no supported image. Change or disable the shortcut with `keys.remote_image_paste`.
@@ -218,15 +236,24 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..50b8f099a565180dc05996497c7391a2
  
  Remote attach uses your normal OpenSSH authentication. If the target uses a passphrase-protected key in a non-interactive shell, script, CI job, or mobile terminal that cannot show the passphrase prompt, load the key into ssh-agent first:
  
+@@ -88,7 +92,7 @@ If you SSH into the server first and run `herdr` there, Herdr runs entirely on t
+ 
+ When your local and remote platforms match, Herdr can copy the current local binary for direct installs. For Homebrew, mise, and Nix installs, or when the platforms differ, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
+ 
+-For local builds or custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach.
++For local builds or custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Windows hosts require the complete portable ZIP, while Unix hosts use a single executable.
+ 
+ ```bash
+ HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
-index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..d26db9a63fc8f406f4ae8eba07dc9d24b3e29de3 100644
+index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..ae8e0bf06fb0b25831495df06eefac2ace2e6593 100644
 --- a/docs/next/website/src/content/docs/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/windows-beta.mdx
 @@ -36,6 +36,7 @@ For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a cus
  | Plugins | preview |
  | Pane screen history | beta |
  | Nested launch override | beta |
-+| `herdr --remote` to Linux/macOS and Windows hosts with `herdr.exe` on the SSH user's `PATH` | beta |
++| `herdr --remote` to Linux/macOS and x86_64 Windows hosts | beta |
  
  Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers. It is useful for Codex, Claude, and similar agents, but it is not the same as Unix foreground process-group detection.
  
@@ -260,7 +287,7 @@ index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..d26db9a63fc8f406f4ae8eba07dc9d24
  | Signed binary / SmartScreen avoidance | unsupported |
  
 -For remote work from Windows, SSH into the server and run `herdr` there:
-+The native Windows binary can act as a thin client for Linux and macOS Herdr hosts and for Windows hosts where the SSH user's `PATH` resolves `herdr.exe`:
++The native Windows binary can act as a thin client for Linux, macOS, and x86_64 Windows Herdr hosts:
  
  ```powershell
 -ssh you@server
@@ -269,7 +296,7 @@ index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..d26db9a63fc8f406f4ae8eba07dc9d24
  ```
  
 -That mode runs Herdr on the remote host. Native Windows `herdr --remote` is not part of the beta.
-+Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Linux and macOS hosts support discovery and optional installation; Windows hosts start exactly the PATH-resolved `herdr.exe`, never install a remote binary automatically, and do not support live handoff.
++Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or a versioned per-user sidecar. When one is needed, an interactive attach can transfer the complete digest-verified portable ZIP without running an installer or changing remote `PATH`; non-interactive attach never installs it. Windows remote hosts do not support live handoff.
  
  Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
  
@@ -295,7 +322,7 @@ index 237c53b484abb82ecc21052ffc9e68291fbbf86b..15cfd738d0d39a302937d9875762c67c
  ## 按键绑定
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
-index a81a8469e54aba464c1daa01638ac651f31c7e73..c88a1a17f029a902bd4da7f7346f403359bc5312 100644
+index a81a8469e54aba464c1daa01638ac651f31c7e73..6117a816c724aabf9c84e2261c78be8c6e9a0d12 100644
 --- a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 @@ -63,11 +63,15 @@ Host workbox
@@ -306,7 +333,7 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..c88a1a17f029a902bd4da7f7346f4033
 +远程连接支持 x86_64 和 aarch64 的 Linux 与 macOS 主机。Herdr 会检查远程平台,优先使用远程 `PATH` 上已有的匹配 `herdr`,然后检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。如果没有匹配的二进制文件,交互式运行会询问是否安装到 `~/.local/bin/herdr`;非交互式运行则直接失败,不会修改主机。如果 `~/.local/bin` 不在远程 `PATH` 上,Herdr 会在安装后发出警告。
  
 -Windows 原生的 `herdr --remote` 不在 Windows 测试版范围内。在 Windows 上请 SSH 到服务器并在那里运行 `herdr`。
-+原生 Windows 客户端可以连接这些 Linux 和 macOS 主机，也可以连接 Windows 主机。在 Windows 主机上，SSH 用户的 `PATH` 必须能够解析 `herdr.exe`；Herdr 会启动该已解析的可执行文件。Windows 上不会自动安装远程二进制文件；实时交接仍仅支持 Unix 主机。
++所有受支持的客户端也可以连接 x86_64 Windows 主机。Herdr 会先使用 SSH 用户 `PATH` 中或用户自有的版本化 sidecar 中版本和协议完全匹配的 `herdr.exe`。如果两者都不匹配，交互式运行会询问是否把完整且经过摘要验证的 Windows 便携 ZIP 传输到 SSH 用户的配置文件中；它不会运行安装器或修改 `PATH`。非交互式运行会直接失败，不修改主机。实时交接仍仅支持 Unix 主机。
  
 -默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的桥接配置,而使用普通 `ssh`。
 +从 Windows 远程连接时,默认的 `ctrl+v` 远程图像按键会通过现有客户端协议发送已注册的 PNG 或 DIB 剪贴板图像,将其暂存在远程主机并粘贴远程路径。拖放或粘贴一个 PNG、JPEG、GIF、WebP 或 BMP 的绝对路径也会使用同样的受限传输。剪贴板中没有受支持的图像时,文本输入会原样发送。可通过 `keys.remote_image_paste` 更改或禁用此快捷键。
@@ -317,15 +344,24 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..c88a1a17f029a902bd4da7f7346f4033
  
  默认情况下,如果需要替换或重启运行中的远程服务器,远程连接使用常规的重启/停止流程。要对受支持的运行中远程服务器启用实验性实时交接,加上 `--handoff`:
  
+@@ -79,7 +83,7 @@ herdr --remote workbox --handoff
+ 
+ 当本地和远程平台一致时,对于直接安装,Herdr 可以直接复制当前本地二进制文件。对于 Homebrew、mise 和 Nix 安装,或平台不一致时,它会从 `https://herdr.dev/latest.json` 下载与当前客户端版本匹配的发布产物。
+ 
+-对于本地构建或自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。
++对于本地构建或自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。Windows 主机要求完整便携 ZIP，Unix 主机使用单个可执行文件。
+ 
+ ```bash
+ HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-index 781a6f969416873de8ca131f6fdb35600fe7615a..a9e09a1a6b5d4beb2b78f306b1725e8fad9162b7 100644
+index 781a6f969416873de8ca131f6fdb35600fe7615a..69ca4f5a3891c689bf9ad3d570770208381f0d74 100644
 --- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默
  | 插件 | 预览 |
  | 窗格屏幕历史 | 测试版 |
  | 嵌套启动覆盖 | 测试版 |
-+| 连接 Linux/macOS 和 SSH 用户 `PATH` 中有 `herdr.exe` 的 Windows 主机的 `herdr --remote` | 测试版 |
++| 连接 Linux/macOS 和 x86_64 Windows 主机的 `herdr --remote` | 测试版 |
  
  Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器。它对 Codex、Claude 等智能体很有用,但和 Unix 前台进程组检测不是一回事。
  
@@ -359,7 +395,7 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..a9e09a1a6b5d4beb2b78f306b1725e8f
  | 签名二进制 / 规避 SmartScreen | 不支持 |
  
 -在 Windows 上进行远程工作,请 SSH 到服务器并在那里运行 `herdr`:
-+原生 Windows 二进制可以作为 Linux 和 macOS Herdr 主机以及 SSH 用户的 `PATH` 能解析 `herdr.exe` 的 Windows 主机的瘦客户端:
++原生 Windows 二进制可以作为 Linux、macOS 和 x86_64 Windows Herdr 主机的瘦客户端:
  
  ```powershell
 -ssh you@server
@@ -368,7 +404,7 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..a9e09a1a6b5d4beb2b78f306b1725e8f
  ```
  
 -这种模式下 Herdr 运行在远程主机上。Windows 原生的 `herdr --remote` 不在测试版范围内。
-+Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Linux 和 macOS 主机支持检测和可选安装;Windows 主机只会启动从 SSH 用户 `PATH` 解析出的 `herdr.exe`,不会自动安装远程二进制文件,也不支持实时交接。
++Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或用户自有的版本化 sidecar 中完全匹配的 `herdr.exe`。需要时，交互式连接可以传输完整且经过摘要验证的便携 ZIP，但不会运行安装器或修改远程 `PATH`；非交互式连接不会安装。Windows 远程主机不支持实时交接。
  
  Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
  
@@ -472,8 +508,70 @@ index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..d3662071ddaa63a1b5a2d1c27b74b93f
          let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
          let host_terminal_theme = self.state.host_terminal_theme;
          let host_terminal_appearance = self.state.host_terminal_appearance;
+diff --git a/src/app/api/workspaces.rs b/src/app/api/workspaces.rs
+index cf50d3ad40b9692bdc6023d87099a4a102b9297e..40a63951e970e72c3cc8f1cb469c05e8afcda948 100644
+--- a/src/app/api/workspaces.rs
++++ b/src/app/api/workspaces.rs
+@@ -5,7 +5,7 @@ use crate::api::schema::{
+     WorkspaceMoveBlockParams, WorkspaceMoveParams, WorkspaceRenameParams,
+     WorkspaceReportMetadataParams, WorkspaceTarget,
+ };
+-use crate::app::App;
++use crate::app::{App, DeferredWorkspaceShell};
+ 
+ use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
+ use super::responses::{encode_error, encode_success};
+@@ -71,6 +71,48 @@ impl App {
+         }
+     }
+ 
++    pub(crate) fn handle_workspace_create_with_deferred_shell(
++        &mut self,
++        id: String,
++        params: WorkspaceCreateParams,
++    ) -> (String, Option<DeferredWorkspaceShell>) {
++        let cwd = params.cwd.map(PathBuf::from).unwrap_or_else(|| {
++            let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
++                self.focused_pane_cwd_in_workspace(ws_idx)
++                    .or_else(|| self.seed_cwd_from_workspace(ws_idx))
++            });
++            self.resolve_new_terminal_cwd(follow_cwd)
++        });
++        let extra_env = match super::env::normalize_launch_env(params.env) {
++            Ok(env) => env,
++            Err((code, message)) => return (encode_error(id, &code, message), None),
++        };
++        let (index, terminal_id) = self.create_workspace_with_deferred_shell(cwd, params.focus);
++        if let Some(label) = params.label {
++            if let Some(workspace) = self.state.workspaces.get_mut(index) {
++                workspace.set_custom_name(label);
++                crate::logging::workspace_renamed(&workspace.id);
++            }
++        }
++        self.emit_workspace_open_events(index);
++        let pending = DeferredWorkspaceShell {
++            terminal_id,
++            extra_env,
++        };
++        let Some(result) = self.workspace_created_result(index) else {
++            return (
++                encode_error(
++                    id,
++                    "internal_error",
++                    "created workspace response is incomplete".to_string(),
++                ),
++                Some(pending),
++            );
++        };
++        let response = encode_success(id, result);
++        (response, Some(pending))
++    }
++
+     pub(super) fn handle_workspace_focus(&mut self, id: String, target: WorkspaceTarget) -> String {
+         let Some(index) = self.parse_workspace_id(&target.workspace_id) else {
+             return workspace_not_found(id, &target.workspace_id);
 diff --git a/src/app/creation.rs b/src/app/creation.rs
-index d531e7337084c8fca2235ceb4b37da6990271773..a30f3cfbb24673e73e361eb44afdc967064a76d8 100644
+index d531e7337084c8fca2235ceb4b37da6990271773..8843a3bf0615910695b161b69565608018158ff7 100644
 --- a/src/app/creation.rs
 +++ b/src/app/creation.rs
 @@ -81,6 +81,75 @@ impl App {
@@ -607,7 +705,104 @@ index d531e7337084c8fca2235ceb4b37da6990271773..a30f3cfbb24673e73e361eb44afdc967
              self.event_tx.clone(),
              self.render_notify.clone(),
              self.render_dirty.clone(),
-@@ -517,6 +593,45 @@ impl App {
+@@ -274,6 +350,96 @@ impl App {
+         Ok(idx)
+     }
+ 
++    pub(crate) fn create_workspace_with_deferred_shell(
++        &mut self,
++        initial_cwd: PathBuf,
++        focus: bool,
++    ) -> (usize, crate::terminal::TerminalId) {
++        let pane_id = crate::layout::PaneId::alloc();
++        let terminal_id = crate::terminal::TerminalId::alloc();
++        let workspace = Workspace::from_existing_pane(
++            None,
++            None,
++            initial_cwd.clone(),
++            crate::workspace::MovedPane {
++                pane_id,
++                pane_state: crate::pane::PaneState::new(terminal_id.clone()),
++            },
++            self.event_tx.clone(),
++            self.render_notify.clone(),
++            self.render_dirty.clone(),
++        );
++        self.state.terminals.insert(
++            terminal_id.clone(),
++            crate::terminal::TerminalState::new(terminal_id.clone(), initial_cwd),
++        );
++        self.state.workspaces.push(workspace);
++        let idx = self.state.workspaces.len() - 1;
++        self.state.remove_alias_shadowed_by_new_pane(pane_id);
++        let workspace_id = self.state.workspaces[idx].id.clone();
++        crate::logging::workspace_created(&workspace_id, pane_id.raw());
++        if focus || self.state.active.is_none() {
++            self.state.switch_workspace(idx);
++            self.state.mode = Mode::Terminal;
++        }
++        (idx, terminal_id)
++    }
++
++    pub(crate) fn launch_deferred_workspace_shell(
++        &mut self,
++        terminal_id: &crate::terminal::TerminalId,
++        extra_env: Vec<(String, String)>,
++        rows: u16,
++        cols: u16,
++    ) -> std::io::Result<()> {
++        if self.terminal_runtimes.get(terminal_id).is_some() {
++            return Ok(());
++        }
++        let Some((ws_idx, pane_id)) =
++            self.state
++                .workspaces
++                .iter()
++                .enumerate()
++                .find_map(|(ws_idx, workspace)| {
++                    workspace.tabs.iter().find_map(|tab| {
++                        tab.panes.iter().find_map(|(pane_id, pane)| {
++                            (&pane.attached_terminal_id == terminal_id)
++                                .then_some((ws_idx, *pane_id))
++                        })
++                    })
++                })
++        else {
++            return Ok(());
++        };
++        let cwd = self
++            .state
++            .terminals
++            .get(terminal_id)
++            .map(|terminal| terminal.cwd.clone())
++            .ok_or_else(|| std::io::Error::other("deferred terminal state is missing"))?;
++        let launch_env = self
++            .pane_launch_env(ws_idx, pane_id, extra_env)
++            .ok_or_else(|| std::io::Error::other("deferred pane launch identity is missing"))?;
++        let default_shell = self.pane_shell_for_workspace(Some(ws_idx));
++        let runtime = crate::terminal::TerminalRuntime::spawn(
++            pane_id,
++            rows,
++            cols,
++            cwd,
++            self.state.pane_scrollback_limit_bytes,
++            self.state.host_terminal_theme,
++            self.state.host_terminal_appearance,
++            crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode),
++            &launch_env,
++            self.event_tx.clone(),
++            self.render_notify.clone(),
++            self.render_dirty.clone(),
++        )?;
++        self.terminal_runtimes.insert(terminal_id.clone(), runtime);
++        self.schedule_session_save();
++        Ok(())
++    }
++
+     pub(super) fn collect_panes_for_workspace(
+         &self,
+         workspace_id: Option<&str>,
+@@ -517,6 +683,45 @@ impl App {
      }
  }
  
@@ -709,6 +904,134 @@ index 0a5c13e56979ec2d61218be338d7d54e4f7985c6..4c859e6ba05bdddfcc498a44b1cba397
              }
              Mode::RenameTab if !new_name.is_empty() => {
                  let Some(ws_idx) = self.state.active else {
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 86757ad7a3964662434990cceb842f299620467e..34de42c584d768ee54f718b7b019cf74c1afb087 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -93,6 +93,11 @@ impl PaneClickState {
+     }
+ }
+ 
++pub(crate) struct DeferredWorkspaceShell {
++    pub(crate) terminal_id: crate::terminal::TerminalId,
++    pub(crate) extra_env: Vec<(String, String)>,
++}
++
+ pub struct App {
+     pub state: AppState,
+     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
+@@ -133,6 +138,7 @@ pub struct App {
+     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
+     pub(crate) session_save_deadline: Option<Instant>,
+     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
++    pub(crate) startup_session_save_blocked: bool,
+     pub(crate) detached_custom_command_children: Vec<std::process::Child>,
+     pub(crate) persist_pane_history: bool,
+     pub(crate) last_render_at: Option<Instant>,
+@@ -212,7 +218,7 @@ pub(crate) type InputSourceId = u64;
+ const LOCAL_INPUT_SOURCE: InputSourceId = 0;
+ 
+ fn auto_updates_enabled(no_session: bool) -> bool {
+-    !no_session && !cfg!(debug_assertions)
++    !no_session && !cfg!(debug_assertions) && !crate::remote::remote_sidecar_active()
+ }
+ 
+ fn background_update_check_enabled(no_session: bool, check_enabled: bool) -> bool {
+@@ -760,6 +766,7 @@ impl App {
+             pending_agent_resume_deadline: None,
+             session_save_deadline: None,
+             session_save_thread: None,
++            startup_session_save_blocked: false,
+             detached_custom_command_children: Vec::new(),
+             selection_autoscroll_deadline: None,
+             selection_highlight_clear_deadline: None,
+@@ -4903,6 +4910,39 @@ mod tests {
+         assert!(app.session_save_thread.is_none());
+     }
+ 
++    #[test]
++    fn startup_session_save_block_prevents_scheduled_and_forced_persistence() {
++        let _guard = crate::config::test_config_env_lock().lock().unwrap();
++        let config_home = unique_temp_path("blocked-startup-session-save");
++        std::env::set_var("XDG_CONFIG_HOME", &config_home);
++        std::env::remove_var(crate::session::SESSION_ENV_VAR);
++
++        let mut app = test_app();
++        app.no_session = false;
++        app.state.workspaces = vec![Workspace::test_new("pending")];
++        app.state.ensure_test_terminals();
++        app.block_startup_session_save();
++        app.state.session_dirty = true;
++        app.sync_session_save_schedule();
++        app.save_session_now();
++
++        assert!(app.session_save_deadline.is_none());
++        assert!(!crate::session::data_dir().join("session.json").exists());
++
++        app.unblock_startup_session_save();
++        assert!(app.session_save_deadline.is_some());
++        app.save_session_now();
++        assert!(crate::session::data_dir().join("session.json").exists());
++
++        std::env::remove_var("XDG_CONFIG_HOME");
++        let _ = std::fs::remove_dir_all(config_home);
++    }
++
++    #[test]
++    fn remote_windows_sidecar_suppresses_background_updates() {
++        assert!(!background_update_check_enabled(true, true));
++    }
++
+     #[test]
+     fn next_loop_deadline_includes_selection_autoscroll_deadline() {
+         let mut app = test_app();
+diff --git a/src/app/session.rs b/src/app/session.rs
+index 60d49d520722264535b14312c2339eb211344f4c..9a48101cc6dd3960c467834f70f0ddf7770e0cfb 100644
+--- a/src/app/session.rs
++++ b/src/app/session.rs
+@@ -12,11 +12,23 @@ enum SessionSaveJob {
+ 
+ impl App {
+     pub(super) fn schedule_session_save(&mut self) {
+-        if !self.no_session {
++        if !self.no_session && !self.startup_session_save_blocked {
+             self.session_save_deadline = Some(Instant::now() + SESSION_SAVE_DEBOUNCE);
+         }
+     }
+ 
++    pub(crate) fn block_startup_session_save(&mut self) {
++        self.startup_session_save_blocked = true;
++        self.session_save_deadline = None;
++    }
++
++    pub(crate) fn unblock_startup_session_save(&mut self) {
++        if self.startup_session_save_blocked {
++            self.startup_session_save_blocked = false;
++            self.schedule_session_save();
++        }
++    }
++
+     pub(crate) fn sync_session_save_schedule(&mut self) {
+         if self.state.session_dirty {
+             self.state.session_dirty = false;
+@@ -58,7 +70,7 @@ impl App {
+     }
+ 
+     pub(crate) fn start_background_session_save(&mut self) {
+-        if self.no_session {
++        if self.no_session || self.startup_session_save_blocked {
+             self.session_save_deadline = None;
+             return;
+         }
+@@ -88,7 +100,7 @@ impl App {
+             let _ = thread.join();
+         }
+ 
+-        if self.no_session {
++        if self.no_session || self.startup_session_save_blocked {
+             self.session_save_deadline = None;
+             return;
+         }
 diff --git a/src/app/state.rs b/src/app/state.rs
 index e6c23c4c09becdd279d4e970e73ddf16daf00b9d..dd7e1140a4e697d4b59bc94337457172bbaf4208 100644
 --- a/src/app/state.rs
@@ -1531,7 +1854,7 @@ index c293a2785130207740ab610c60998c607eb994bc..fc2f93b0c2bb8e369aac9ea7cdd0a5cc
      fn temp_socket_marker_path(name: &str) -> PathBuf {
          std::env::temp_dir().join(format!("herdr-{name}-{}.sock", std::process::id()))
 diff --git a/src/main.rs b/src/main.rs
-index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..dcb647cbdfb69a4babef6a2c0dd764b424c55f6f 100644
+index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..8f4c9c420379b90914b6e892ddd27cf9c7e6e787 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -58,7 +58,6 @@ mod agent_resume;
@@ -1542,6 +1865,18 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..dcb647cbdfb69a4babef6a2c0dd764b4
  mod checksum;
  mod cli;
  mod client;
+@@ -502,6 +501,11 @@ fn main() -> io::Result<()> {
+             std::process::exit(2);
+         }
+     };
++    let _remote_sidecar_lease = crate::remote::adopt_remote_sidecar_lease()?;
++    if let Err(err) = remote::reject_remote_sidecar_update_command(&args) {
++        eprintln!("{err}");
++        std::process::exit(1);
++    }
+ 
+     if remote_launch.is_some()
+         && args.get(1).is_some()
 diff --git a/src/platform/fallback.rs b/src/platform/fallback.rs
 index 30bea5ebc94bb83213ebbc0f6530903c5a19574a..abb5417dff289e371dbf127adbf3862216ee9d36 100644
 --- a/src/platform/fallback.rs
@@ -2655,15 +2990,18 @@ index 6b639f0de9bbce17beeefd4c5e8daf90aa49c278..b42da399dcf96093a61be2bd08a1843f
          return None;
      }
 diff --git a/src/remote.rs b/src/remote.rs
-index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86bb179369e 100644
+index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..243f7b342223a43fa136d499e810e131fe8a7d02 100644
 --- a/src/remote.rs
 +++ b/src/remote.rs
-@@ -1,151 +1,14 @@
+@@ -1,150 +1,30 @@
 +mod attach;
  #[cfg(unix)]
  mod unix;
--
--#[cfg(unix)]
++mod windows;
++pub(crate) use windows::{adopt_remote_sidecar_lease, remote_sidecar_active};
+ 
++pub(crate) use attach::*;
+ #[cfg(unix)]
 -pub(crate) use unix::*;
 -
 -#[cfg(windows)]
@@ -2678,7 +3016,7 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86b
 -    Server,
 -}
 -
- #[cfg(windows)]
+-#[cfg(windows)]
 -impl RemoteKeybindings {
 -    fn parse(value: &str) -> Result<Self, String> {
 -        match value {
@@ -2697,7 +3035,8 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86b
 -    pub(crate) live_handoff: bool,
 -}
 -
--#[cfg(windows)]
++pub(crate) use unix::run_remote_client_bridge;
+ #[cfg(windows)]
 -pub(crate) fn extract_remote_args(
 -    args: &[String],
 -) -> Result<(Vec<String>, Option<RemoteLaunch>), String> {
@@ -2778,7 +3117,8 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86b
 -    if remote.is_none() && live_handoff {
 -        cleaned.push("--handoff".to_string());
 -    }
--
++pub(crate) use windows::run_remote_client_bridge;
+ 
 -    Ok((cleaned, remote))
 -}
 -
@@ -2789,7 +3129,13 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86b
 -    }
 -    if target.starts_with('-') {
 -        return Err("--remote target must not start with '-'".to_string());
--    }
++pub(crate) fn reject_remote_sidecar_update_command(args: &[String]) -> Result<(), String> {
++    if remote_sidecar_active() && update_command_requested(args) {
++        return Err(
++            "self-update is disabled for a remote Windows sidecar; update it from the attaching Herdr client"
++                .into(),
++        );
+     }
 -    Ok(target)
 -}
 -
@@ -2799,29 +3145,51 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..1cea5e60657f2ecb5d0d4cd64ad3f86b
 -    Err(std::io::Error::other(
 -        "remote mode is not supported on Windows yet",
 -    ))
--}
-+mod windows;
++    Ok(())
+ }
  
-+pub(crate) use attach::*;
-+#[cfg(unix)]
-+pub(crate) use unix::run_remote_client_bridge;
- #[cfg(windows)]
+-#[cfg(windows)]
 -pub(crate) fn run_remote_client_bridge() -> std::io::Result<()> {
 -    debug_assert!(!crate::platform::capabilities().remote_attach);
 -    Err(std::io::Error::other(
 -        "remote client bridge is not supported on Windows yet",
 -    ))
--}
-+pub(crate) use windows::run_remote_client_bridge;
++fn update_command_requested(args: &[String]) -> bool {
++    args.get(1).is_some_and(|command| command == "update")
++        || args
++            .get(1..3)
++            .is_some_and(|commands| commands == ["channel", "set"])
+ }
  
  pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
-     if is_remote_auth_error(err) {
+@@ -191,6 +71,21 @@ fn shell_quote(value: &str) -> String {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn remote_sidecar_update_gate_matches_every_self_update_entry() {
++        assert!(update_command_requested(&["herdr".into(), "update".into()]));
++        assert!(update_command_requested(&[
++            "herdr".into(),
++            "channel".into(),
++            "set".into(),
++            "preview".into(),
++        ]));
++        assert!(!update_command_requested(&[
++            "herdr".into(),
++            "status".into(),
++        ]));
++    }
++
+     #[test]
+     fn remote_auth_error_matches_ssh_auth_denied() {
+         let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d1f2e07a5
+index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cefdd3efc58
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,3622 @@
+@@ -0,0 +1,4307 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::collections::BTreeMap;
@@ -2834,6 +3202,7 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +use interprocess::local_socket::ListenerNonblockingMode;
 +use interprocess::TryClone as _;
 +use serde::Deserialize;
++use sha2::{Digest as _, Sha256};
 +use std::sync::{
 +    atomic::{AtomicBool, Ordering},
 +    Arc,
@@ -3016,15 +3385,26 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            )?;
 +            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
 +        }
-+        #[cfg(windows)]
-+        RemoteHostPlatform::Windows => {
++        RemoteHostPlatform::Windows {
++            platform,
++            user_profile,
++        } => {
 +            if remote.live_handoff {
 +                return Err(io::Error::new(
 +                    io::ErrorKind::Unsupported,
 +                    "live handoff is not supported for Windows remote hosts",
 +                ));
 +            }
-+            super::windows::remote_bridge_command(&session_name)
++            let prepared_remote =
++                prepare_remote_windows_herdr(&remote_ssh, platform, &user_profile)?;
++            ensure_remote_server_ready(
++                &remote_ssh,
++                &prepared_remote.remote_herdr,
++                prepared_remote.installed_or_replaced,
++                prepared_remote.stop_after_install_approved,
++                false,
++            )?;
++            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
 +        }
 +    };
 +
@@ -3047,8 +3427,10 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +#[derive(Debug, Clone, PartialEq, Eq)]
 +enum RemoteHostPlatform {
 +    Unix(RemotePlatform),
-+    #[cfg(windows)]
-+    Windows,
++    Windows {
++        platform: RemotePlatform,
++        user_profile: String,
++    },
 +}
 +
 +impl RemotePlatform {
@@ -3064,6 +3446,17 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            _ => return None,
 +        };
 +        Some(Self { os, arch })
++    }
++
++    fn windows(arch: &str) -> Option<Self> {
++        let arch = match arch.trim().to_ascii_uppercase().as_str() {
++            "AMD64" | "X86_64" => "x86_64",
++            _ => return None,
++        };
++        Some(Self {
++            os: "windows",
++            arch,
++        })
 +    }
 +
 +    fn local() -> Self {
@@ -3096,6 +3489,14 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    install_suffix: String,
 +    shell_path: String,
 +    platform: RemotePlatform,
++    shell: RemoteShell,
++    remote_sidecar: bool,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum RemoteShell {
++    Posix,
++    WindowsPowerShell,
 +}
 +
 +impl RemoteHerdr {
@@ -3106,11 +3507,34 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            install_suffix,
 +            shell_path,
 +            platform,
++            shell: RemoteShell::Posix,
++            remote_sidecar: false,
++        }
++    }
++
++    fn for_windows(platform: RemotePlatform, user_profile: &str) -> Self {
++        let install_suffix = format!(".herdr\\remote\\{}\\herdr.exe", windows_sidecar_identity());
++        let executable = format!(
++            "{}\\{}",
++            user_profile.trim_end_matches(['\\', '/']),
++            install_suffix
++        );
++        Self {
++            install_suffix,
++            shell_path: executable,
++            platform,
++            shell: RemoteShell::WindowsPowerShell,
++            remote_sidecar: true,
 +        }
 +    }
 +
 +    fn with_shell_path(mut self, shell_path: String) -> Self {
 +        self.shell_path = shell_path;
++        self
++    }
++
++    fn into_path_candidate(mut self) -> Self {
++        self.remote_sidecar = false;
 +        self
 +    }
 +}
@@ -3119,7 +3543,11 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +#[serde(untagged)]
 +enum RemoteAssetRef {
 +    Url(String),
-+    Object { url: String, sha256: Option<String> },
++    Object {
++        url: String,
++        sha256: Option<String>,
++        format: Option<String>,
++    },
 +}
 +
 +impl RemoteAssetRef {
@@ -3135,6 +3563,15 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            Self::Url(_) => None,
 +            Self::Object { sha256, .. } => {
 +                sha256.as_deref().filter(|value| !value.trim().is_empty())
++            }
++        }
++    }
++
++    fn format(&self) -> Option<&str> {
++        match self {
++            Self::Url(_) => None,
++            Self::Object { format, .. } => {
++                format.as_deref().filter(|value| !value.trim().is_empty())
 +            }
 +        }
 +    }
@@ -3226,11 +3663,20 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +struct InstallSource {
 +    path: PathBuf,
 +    temporary_dir: Option<PathBuf>,
++    kind: InstallSourceKind,
++    sha256: Option<String>,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum InstallSourceKind {
++    Executable,
++    WindowsZip,
 +}
 +
 +struct RemoteReleaseAsset {
 +    url: String,
 +    sha256: Option<String>,
++    format: Option<String>,
 +}
 +
 +struct PreparedRemoteHerdr {
@@ -3300,6 +3746,13 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        command
 +    }
 +
++    fn scp_command(&self) -> Command {
++        let mut command = Command::new("scp");
++        command.arg("-O");
++        apply_managed_scp_options(&mut command, self.options());
++        command
++    }
++
 +    fn sh_output(&self, script: &str) -> io::Result<Output> {
 +        let mut child = self
 +            .command()
@@ -3324,6 +3777,24 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +
 +    fn user_shell_output(&self, command: &str) -> io::Result<Output> {
 +        self.command().arg(command).output()
++    }
++
++    fn powershell_output(&self, script: &str) -> io::Result<Output> {
++        self.user_shell_output(&super::windows::powershell_script_command(script))
++    }
++
++    fn windows_herdr_output(
++        &self,
++        remote_herdr: &RemoteHerdr,
++        arguments: &[String],
++    ) -> io::Result<Output> {
++        let executable = (remote_herdr.shell == RemoteShell::WindowsPowerShell)
++            .then_some(remote_herdr.shell_path.as_str());
++        self.user_shell_output(&super::windows::powershell_herdr_command(
++            executable,
++            arguments,
++            remote_herdr.remote_sidecar,
++        ))
 +    }
 +
 +    fn install_herdr(&self, remote_herdr: &RemoteHerdr, source_path: &Path) -> io::Result<()> {
@@ -3367,6 +3838,59 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            Err(io::Error::other(format!(
 +                "remote install exited with {status}"
 +            )))
++        }
++    }
++
++    fn install_windows_payload(
++        &self,
++        remote_herdr: &RemoteHerdr,
++        source_path: &Path,
++        expected_sha256: &str,
++    ) -> io::Result<()> {
++        let archive_name = windows_payload_archive_name()?;
++        let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
++        let script = windows_install_prepare_script(remote_herdr, &archive_name);
++        let output = self.user_shell_output(&script)?;
++        if !output.status.success() {
++            return Err(command_failed(
++                "Windows remote install preparation failed",
++                &output,
++            ));
++        }
++        let destination = windows_scp_destination(&self.target, &archive_name);
++        let transfer = self
++            .scp_command()
++            .arg(source_path)
++            .arg(&destination)
++            .stdin(Stdio::null())
++            .stdout(Stdio::null())
++            .stderr(Stdio::inherit())
++            .status()
++            .map_err(|err| {
++                io::Error::new(
++                    err.kind(),
++                    format!("failed to start Windows remote ZIP transfer: {err}"),
++                )
++            })?;
++        if !transfer.success() {
++            let _ = self.user_shell_output(&windows_install_cleanup_script(&temporary_archive));
++            return Err(io::Error::other(format!(
++                "Windows remote ZIP transfer to {destination} exited with {transfer}"
++            )));
++        }
++
++        let output = self.user_shell_output(&windows_install_commit_script(
++            remote_herdr,
++            &temporary_archive,
++            expected_sha256,
++        ))?;
++        if output.status.success() {
++            Ok(())
++        } else {
++            Err(command_failed(
++                "Windows remote install commit failed",
++                &output,
++            ))
 +        }
 +    }
 +}
@@ -3418,6 +3942,94 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    )
 +}
 +
++fn windows_sidecar_identity() -> String {
++    crate::build_info::build_id()
++        .map(str::to_string)
++        .unwrap_or_else(|| {
++            current_version()
++                .chars()
++                .map(|character| {
++                    if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
++                        character
++                    } else {
++                        '-'
++                    }
++                })
++                .collect()
++        })
++}
++
++fn windows_sidecar_root(remote_herdr: &RemoteHerdr) -> String {
++    remote_herdr
++        .shell_path
++        .strip_suffix("\\herdr.exe")
++        .unwrap_or(&remote_herdr.shell_path)
++        .to_string()
++}
++
++fn windows_payload_archive_name() -> io::Result<String> {
++    let timestamp = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map_err(|err| io::Error::other(format!("system clock precedes Unix epoch: {err}")))?
++        .as_nanos();
++    Ok(format!("payload-{}-{timestamp:x}.zip", std::process::id()))
++}
++
++fn windows_payload_archive_path(
++    remote_herdr: &RemoteHerdr,
++    archive_name: &str,
++) -> io::Result<String> {
++    let root = windows_sidecar_root(remote_herdr);
++    let (parent, _) = root.rsplit_once('\\').ok_or_else(|| {
++        io::Error::new(
++            io::ErrorKind::InvalidData,
++            format!("Windows remote sidecar root has no parent: {root}"),
++        )
++    })?;
++    Ok(format!("{parent}\\{archive_name}"))
++}
++
++fn windows_scp_destination(target: &str, archive_name: &str) -> String {
++    let relative_path = format!(".herdr/remote/{archive_name}");
++    if let Some(authority) = target.strip_prefix("ssh://") {
++        format!("scp://{}/{relative_path}", authority.trim_end_matches('/'))
++    } else {
++        format!("{target}:{relative_path}")
++    }
++}
++
++fn windows_install_prepare_script(remote_herdr: &RemoteHerdr, archive_name: &str) -> String {
++    let root = windows_sidecar_root(remote_herdr);
++    super::windows::powershell_bootstrap_command(&format!(
++        "Invoke-HerdrRemotePrepareInstall -Destination {} -ArchiveName {}",
++        super::windows::powershell_quote(&root),
++        super::windows::powershell_quote(archive_name),
++    ))
++}
++
++fn windows_install_cleanup_script(archive_path: &str) -> String {
++    super::windows::powershell_bootstrap_command(&format!(
++        "Remove-HerdrRemoteArchive -Archive {}",
++        super::windows::powershell_quote(archive_path),
++    ))
++}
++
++fn windows_install_commit_script(
++    remote_herdr: &RemoteHerdr,
++    archive_path: &str,
++    expected_sha256: &str,
++) -> String {
++    let root = windows_sidecar_root(remote_herdr);
++    super::windows::powershell_bootstrap_command(&format!(
++        "Invoke-HerdrRemoteCommitInstall -Archive {} -Destination {} -ExpectedSha256 {} -ExpectedVersion {} -ExpectedProtocol {}",
++        super::windows::powershell_quote(archive_path),
++        super::windows::powershell_quote(&root),
++        super::windows::powershell_quote(expected_sha256),
++        super::windows::powershell_quote(&format!("herdr {}", current_version())),
++        CURRENT_PROTOCOL,
++    ))
++}
++
 +impl Drop for RemoteSsh {
 +    fn drop(&mut self) {
 +        let Some(_control_path) = self
@@ -3459,11 +4071,30 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    }
 +}
 +
++fn apply_managed_scp_options(command: &mut Command, options: Option<&ManagedSshOptions>) {
++    let Some(options) = options else {
++        return;
++    };
++
++    command.arg("-F").arg(&options.config_path);
++    if let Some(control_path) = &options.control_path {
++        command
++            .arg("-o")
++            .arg(format!("ControlPath={}", control_path.display()))
++            .arg("-o")
++            .arg("ControlMaster=auto")
++            .arg("-o")
++            .arg("ControlPersist=yes");
++    }
++}
++
 +impl InstallSource {
 +    fn persistent(path: PathBuf) -> Self {
 +        Self {
 +            path,
 +            temporary_dir: None,
++            kind: InstallSourceKind::Executable,
++            sha256: None,
 +        }
 +    }
 +
@@ -3471,6 +4102,17 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        Self {
 +            path,
 +            temporary_dir: Some(temporary_dir),
++            kind: InstallSourceKind::Executable,
++            sha256: None,
++        }
++    }
++
++    fn windows_zip(path: PathBuf, temporary_dir: Option<PathBuf>, sha256: String) -> Self {
++        Self {
++            path,
++            temporary_dir,
++            kind: InstallSourceKind::WindowsZip,
++            sha256: Some(sha256),
 +        }
 +    }
 +
@@ -3547,20 +4189,101 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    })
 +}
 +
-+fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemoteHostPlatform> {
-+    #[cfg(windows)]
-+    {
-+        // Windows OpenSSH can use either cmd.exe or PowerShell as the account's
-+        // login shell. Invoke cmd explicitly so the probe does not depend on
-+        // either shell's separator or environment-variable syntax.
-+        let output = ssh.user_shell_output("cmd.exe /d /c echo Windows_NT")?;
-+        let stdout = String::from_utf8_lossy(&output.stdout);
-+        if matches!(
-+            remote_host_platform_from_probe(&stdout),
-+            Some(RemoteHostPlatform::Windows)
-+        ) {
-+            return Ok(RemoteHostPlatform::Windows);
++fn prepare_remote_windows_herdr(
++    ssh: &RemoteSsh,
++    platform: RemotePlatform,
++    user_profile: &str,
++) -> io::Result<PreparedRemoteHerdr> {
++    let managed = RemoteHerdr::for_windows(platform, user_profile);
++    let path_candidate = windows_remote_binary_on_path(ssh, &managed)?;
++    if let Some(candidate) = path_candidate.as_ref() {
++        if remote_binary_matches(ssh, candidate)? {
++            return Ok(PreparedRemoteHerdr {
++                remote_herdr: candidate.clone(),
++                installed_or_replaced: false,
++                stop_after_install_approved: false,
++            });
 +        }
++    }
++    if remote_binary_matches(ssh, &managed)? {
++        return Ok(PreparedRemoteHerdr {
++            remote_herdr: managed,
++            installed_or_replaced: false,
++            stop_after_install_approved: false,
++        });
++    }
++
++    let status_probe = match path_candidate.as_ref() {
++        Some(candidate) => Some(candidate),
++        None if remote_binary_exists(ssh, &managed)? => Some(&managed),
++        None => None,
++    };
++    let stop_before_install = match status_probe {
++        Some(remote) => confirm_remote_install_with_running_server(ssh, remote, false)?,
++        None => false,
++    };
++    if let Some(remote) = status_probe.filter(|_| stop_before_install) {
++        stop_remote_server(ssh, remote)?;
++    }
++    let override_payload = remote_binary_override_path()?;
++    confirm_remote_install(
++        ssh.target(),
++        &managed,
++        &install_source_description(&managed.platform, override_payload.as_deref()),
++    )?;
++    let source = resolve_windows_install_source(override_payload)?;
++    if source.kind != InstallSourceKind::WindowsZip {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            format!(
++                "{REMOTE_BINARY_ENV_VAR} must identify the complete Windows portable ZIP for a Windows remote host"
++            ),
++        ));
++    }
++    let expected_sha256 = source.sha256.as_deref().ok_or_else(|| {
++        io::Error::new(
++            io::ErrorKind::InvalidData,
++            "Windows remote portable payload is missing its verified SHA-256 identity",
++        )
++    })?;
++    let install_result = ssh.install_windows_payload(&managed, &source.path, expected_sha256);
++    source.cleanup();
++    install_result?;
++    if !remote_binary_matches(ssh, &managed)? {
++        return Err(io::Error::other(format!(
++            "installed Windows remote Herdr at {}, but its exact version or protocol does not match this client",
++            managed.shell_path
++        )));
++    }
++    Ok(PreparedRemoteHerdr {
++        remote_herdr: managed,
++        installed_or_replaced: true,
++        stop_after_install_approved: false,
++    })
++}
++
++fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemoteHostPlatform> {
++    // Invoke PowerShell explicitly so Windows detection works from every client
++    // OS and does not depend on the account's configured OpenSSH default shell.
++    let windows_probe = "$ErrorActionPreference = 'Stop'; [Console]::Out.WriteLine('Windows_NT'); [Console]::Out.WriteLine($env:PROCESSOR_ARCHITECTURE); [Console]::Out.WriteLine($env:USERPROFILE)";
++    match ssh.powershell_output(windows_probe) {
++        Ok(output) => {
++            let stdout = String::from_utf8_lossy(&output.stdout);
++            if let Some(platform @ RemoteHostPlatform::Windows { .. }) =
++                remote_host_platform_from_probe(&stdout)
++            {
++                return Ok(platform);
++            }
++            let stderr = String::from_utf8_lossy(&output.stderr);
++            if output.status.success() || !windows_probe_command_missing(&stderr) {
++                return Err(command_failed(
++                    "Windows remote platform detection failed",
++                    &output,
++                ));
++            }
++        }
++        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
++        Err(_) => {}
 +    }
 +
 +    let output = ssh.sh_output("uname -s\nuname -m\n")?;
@@ -3579,6 +4302,14 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    )))
 +}
 +
++fn windows_probe_command_missing(stderr: &str) -> bool {
++    let stderr = stderr.to_ascii_lowercase();
++    stderr.contains("powershell.exe")
++        && (stderr.contains("not recognized")
++            || stderr.contains("not found")
++            || stderr.contains("no such file"))
++}
++
 +fn remote_host_platform_from_probe(stdout: &str) -> Option<RemoteHostPlatform> {
 +    let lines = stdout
 +        .lines()
@@ -3586,17 +4317,35 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        .filter(|line| !line.is_empty())
 +        .collect::<Vec<_>>();
 +
-+    #[cfg(windows)]
 +    if lines
 +        .first()
 +        .is_some_and(|line| line.eq_ignore_ascii_case("Windows_NT"))
 +    {
-+        return Some(RemoteHostPlatform::Windows);
++        let platform = lines
++            .get(1)
++            .and_then(|arch| RemotePlatform::windows(arch))?;
++        let user_profile = lines.get(2).copied()?;
++        if !valid_windows_user_profile(user_profile) {
++            return None;
++        }
++        return Some(RemoteHostPlatform::Windows {
++            platform,
++            user_profile: user_profile.to_string(),
++        });
 +    }
 +
 +    lines
 +        .windows(2)
 +        .find_map(|pair| RemotePlatform::from_uname(pair[0], pair[1]).map(RemoteHostPlatform::Unix))
++}
++
++fn valid_windows_user_profile(path: &str) -> bool {
++    let bytes = path.as_bytes();
++    bytes.len() >= 3
++        && bytes[0].is_ascii_alphabetic()
++        && bytes[1] == b':'
++        && matches!(bytes[2], b'\\' | b'/')
++        && !path.contains(['\r', '\n', '\0'])
 +}
 +
 +fn remote_binary_candidates(
@@ -3705,6 +4454,27 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    Ok(remote_herdr_from_path_discovery(remote_herdr, &stdout))
 +}
 +
++fn windows_remote_binary_on_path(
++    ssh: &RemoteSsh,
++    remote_herdr: &RemoteHerdr,
++) -> io::Result<Option<RemoteHerdr>> {
++    let script = "$ErrorActionPreference = 'Stop'; $command = Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue; if ($null -eq $command) { exit 1 }; [Console]::Out.WriteLine($command.Source)";
++    let output = ssh.powershell_output(script)?;
++    if !output.status.success() {
++        return Ok(None);
++    }
++    let path = String::from_utf8_lossy(&output.stdout);
++    let Some(path) = path.lines().map(str::trim).find(|path| !path.is_empty()) else {
++        return Ok(None);
++    };
++    Ok(Some(
++        remote_herdr
++            .clone()
++            .with_shell_path(path.to_string())
++            .into_path_candidate(),
++    ))
++}
++
 +fn remote_herdrs_from_path_discovery(remote_herdr: &RemoteHerdr, stdout: &str) -> Vec<RemoteHerdr> {
 +    stdout
 +        .lines()
@@ -3737,11 +4507,21 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +}
 +
 +fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
-+    let command = format!(
-+        "test -x {0} && {0} --version && {0} status client --json",
-+        remote_herdr.shell_path
-+    );
-+    let output = ssh.sh_output(&command)?;
++    let output = match remote_herdr.shell {
++        RemoteShell::Posix => {
++            let command = format!(
++                "test -x {0} && {0} --version && {0} status client --json",
++                remote_herdr.shell_path
++            );
++            ssh.sh_output(&command)?
++        }
++        RemoteShell::WindowsPowerShell => {
++            ssh.user_shell_output(&super::windows::powershell_herdr_probe_command(
++                &remote_herdr.shell_path,
++                remote_herdr.remote_sidecar,
++            ))?
++        }
++    };
 +    if !output.status.success() {
 +        return Ok(false);
 +    }
@@ -3757,8 +4537,19 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +}
 +
 +fn remote_binary_exists(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
-+    let command = format!("test -x {}", remote_herdr.shell_path);
-+    Ok(ssh.sh_output(&command)?.status.success())
++    match remote_herdr.shell {
++        RemoteShell::Posix => {
++            let command = format!("test -x {}", remote_herdr.shell_path);
++            Ok(ssh.sh_output(&command)?.status.success())
++        }
++        RemoteShell::WindowsPowerShell => {
++            let script = format!(
++                "if ([IO.File]::Exists({})) {{ exit 0 }} else {{ exit 1 }}",
++                super::windows::powershell_quote(&remote_herdr.shell_path)
++            );
++            Ok(ssh.powershell_output(&script)?.status.success())
++        }
++    }
 +}
 +
 +fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
@@ -3840,6 +4631,63 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    }
 +
 +    download_release_asset(platform)
++}
++
++fn resolve_windows_install_source(override_payload: Option<PathBuf>) -> io::Result<InstallSource> {
++    if let Some(path) = override_payload {
++        validate_windows_zip_path(&path)?;
++        let sha256 = file_sha256(&path)?;
++        return Ok(InstallSource::windows_zip(path, None, sha256));
++    }
++    let source = download_release_asset(&RemotePlatform {
++        os: "windows",
++        arch: "x86_64",
++    })?;
++    if source.kind != InstallSourceKind::WindowsZip {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "Windows remote asset resolver returned a non-ZIP payload",
++        ));
++    }
++    Ok(source)
++}
++
++fn validate_windows_zip_path(path: &Path) -> io::Result<()> {
++    let mut file = File::open(path)?;
++    let mut signature = [0_u8; 4];
++    std::io::Read::read_exact(&mut file, &mut signature).map_err(|err| {
++        io::Error::new(
++            err.kind(),
++            format!("Windows remote payload ZIP is unreadable: {err}"),
++        )
++    })?;
++    if !matches!(signature, [b'P', b'K', 3, 4] | [b'P', b'K', 5, 6]) {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            format!(
++                "{REMOTE_BINARY_ENV_VAR} must identify a complete Windows portable ZIP, not a loose executable"
++            ),
++        ));
++    }
++    Ok(())
++}
++
++fn file_sha256(path: &Path) -> io::Result<String> {
++    let mut file = File::open(path)?;
++    let mut digest = Sha256::new();
++    let mut buffer = [0_u8; 64 * 1024];
++    loop {
++        let read = std::io::Read::read(&mut file, &mut buffer)?;
++        if read == 0 {
++            break;
++        }
++        digest.update(&buffer[..read]);
++    }
++    Ok(digest
++        .finalize()
++        .iter()
++        .map(|byte| format!("{byte:02x}"))
++        .collect())
 +}
 +
 +fn local_binary_can_seed_remote(platform: &RemotePlatform) -> bool {
@@ -4086,8 +4934,7 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    ssh: &RemoteSsh,
 +    remote_herdr: &RemoteHerdr,
 +) -> io::Result<RemoteServerStatus> {
-+    let command = format!("{} status server --json", remote_herdr.shell_path);
-+    let output = ssh.sh_output(&command)?;
++    let output = remote_herdr_output(ssh, remote_herdr, &["status", "server", "--json"])?;
 +    if !output.status.success() {
 +        return Err(command_failed("remote server status failed", &output));
 +    }
@@ -4239,8 +5086,7 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +}
 +
 +fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
-+    let command = format!("{} server stop", remote_herdr.shell_path);
-+    let output = ssh.sh_output(&command)?;
++    let output = remote_herdr_output(ssh, remote_herdr, &["server", "stop"])?;
 +    if !output.status.success() {
 +        return Err(command_failed("remote server stop failed", &output));
 +    }
@@ -4315,6 +5161,21 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        let _ = fs::remove_dir_all(&dir);
 +        return Err(io::Error::other("download failed"));
 +    }
++    let windows_zip = platform.os == "windows";
++    if windows_zip && asset.sha256.is_none() {
++        let _ = fs::remove_dir_all(&dir);
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "Windows remote portable asset is missing its SHA-256 digest",
++        ));
++    }
++    if windows_zip && asset.format.as_deref() != Some("zip") {
++        let _ = fs::remove_dir_all(&dir);
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "Windows remote portable asset must declare ZIP format",
++        ));
++    }
 +    if let Some(expected) = &asset.sha256 {
 +        if let Err(err) = crate::checksum::verify_sha256(&path, expected) {
 +            let _ = fs::remove_dir_all(&dir);
@@ -4325,7 +5186,18 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        }
 +    }
 +
-+    Ok(InstallSource::temporary(path, dir))
++    if windows_zip {
++        validate_windows_zip_path(&path)?;
++        let sha256 = asset.sha256.ok_or_else(|| {
++            io::Error::new(
++                io::ErrorKind::InvalidData,
++                "Windows remote portable asset is missing its SHA-256 digest",
++            )
++        })?;
++        Ok(InstallSource::windows_zip(path, Some(dir), sha256))
++    } else {
++        Ok(InstallSource::temporary(path, dir))
++    }
 +}
 +
 +fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
@@ -4352,6 +5224,7 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +    RemoteReleaseAsset {
 +        url: asset.url().to_string(),
 +        sha256: asset.sha256().map(str::to_string),
++        format: asset.format().map(str::to_string),
 +    }
 +}
 +
@@ -4481,13 +5354,72 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +}
 +
 +fn remote_bridge_command(remote_herdr: &RemoteHerdr, session_name: &str) -> String {
-+    let mut command = format!("exec {}", remote_herdr.shell_path);
-+    if session_name != crate::session::DEFAULT_SESSION_NAME {
-+        command.push_str(" --session ");
-+        command.push_str(&shell_quote(session_name));
++    match remote_herdr.shell {
++        RemoteShell::Posix => {
++            let mut command = format!("exec {}", remote_herdr.shell_path);
++            if session_name != crate::session::DEFAULT_SESSION_NAME {
++                command.push_str(" --session ");
++                command.push_str(&shell_quote(session_name));
++            }
++            command.push_str(" remote-client-bridge");
++            command
++        }
++        RemoteShell::WindowsPowerShell => {
++            let mut arguments = Vec::new();
++            if session_name != crate::session::DEFAULT_SESSION_NAME {
++                arguments.push("--session".to_string());
++                arguments.push(session_name.to_string());
++            }
++            arguments.push("remote-client-bridge".to_string());
++            super::windows::powershell_herdr_command(
++                Some(&remote_herdr.shell_path),
++                &arguments,
++                remote_herdr.remote_sidecar,
++            )
++        }
 +    }
-+    command.push_str(" remote-client-bridge");
-+    command
++}
++
++fn remote_herdr_output(
++    ssh: &RemoteSsh,
++    remote_herdr: &RemoteHerdr,
++    arguments: &[&str],
++) -> io::Result<Output> {
++    let mut scoped_arguments = Vec::new();
++    if let Some(session_name) =
++        crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME)
++    {
++        scoped_arguments.push("--session".to_string());
++        scoped_arguments.push(session_name);
++    }
++    scoped_arguments.extend(arguments.iter().map(|argument| argument.to_string()));
++    match remote_herdr.shell {
++        RemoteShell::Posix => {
++            let command = std::iter::once(remote_herdr.shell_path.clone())
++                .chain(
++                    scoped_arguments
++                        .iter()
++                        .map(|argument| shell_quote(argument)),
++                )
++                .collect::<Vec<_>>()
++                .join(" ");
++            ssh.sh_output(&command)
++        }
++        RemoteShell::WindowsPowerShell => ssh.windows_herdr_output(remote_herdr, &scoped_arguments),
++    }
++}
++
++#[cfg(test)]
++fn scoped_remote_arguments_for_test(session_name: Option<&str>, arguments: &[&str]) -> Vec<String> {
++    let mut scoped = Vec::new();
++    if let Some(session_name) =
++        session_name.filter(|name| *name != crate::session::DEFAULT_SESSION_NAME)
++    {
++        scoped.push("--session".to_string());
++        scoped.push(session_name.to_string());
++    }
++    scoped.extend(arguments.iter().map(|argument| argument.to_string()));
++    scoped
 +}
 +
 +fn reattach_command(
@@ -5000,6 +5932,7 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    use base64::Engine as _;
 +
 +    #[cfg(unix)]
 +    #[test]
@@ -5684,12 +6617,110 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +        );
 +    }
 +
-+    #[cfg(windows)]
 +    #[test]
 +    fn remote_platform_probe_identifies_windows_powershell() {
 +        assert_eq!(
-+            remote_host_platform_from_probe("Windows_NT\n"),
-+            Some(RemoteHostPlatform::Windows)
++            remote_host_platform_from_probe("Windows_NT\nAMD64\nC:\\Users\\can\n"),
++            Some(RemoteHostPlatform::Windows {
++                platform: RemotePlatform {
++                    os: "windows",
++                    arch: "x86_64",
++                },
++                user_profile: "C:\\Users\\can".to_string(),
++            })
++        );
++        assert!(remote_host_platform_from_probe("Windows_NT\nARM64\nC:\\Users\\can\n").is_none());
++    }
++
++    #[test]
++    fn windows_probe_falls_back_only_when_powershell_is_missing() {
++        assert!(windows_probe_command_missing(
++            "sh: powershell.exe: command not found"
++        ));
++        assert!(!windows_probe_command_missing(
++            "Permission denied (publickey)"
++        ));
++        assert!(!windows_probe_command_missing("Access is denied"));
++    }
++
++    #[test]
++    fn windows_sidecar_uses_exact_build_identity_and_portable_asset_key() {
++        let platform = RemotePlatform::windows("AMD64").unwrap();
++        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can");
++
++        assert_eq!(platform.asset_key(), "windows-x86_64");
++        assert!(remote.shell_path.ends_with("\\herdr.exe"));
++        assert!(remote.remote_sidecar);
++        assert_eq!(remote.shell, RemoteShell::WindowsPowerShell);
++    }
++
++    #[test]
++    fn windows_install_scripts_use_staged_complete_payload_and_exact_validation() {
++        let platform = RemotePlatform::windows("AMD64").unwrap();
++        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can");
++        let prepare = windows_install_prepare_script(&remote, "payload-42-abcd.zip");
++        let cleanup = windows_install_cleanup_script("C:\\Temp\\payload.zip");
++        let commit = windows_install_commit_script(
++            &remote,
++            "C:\\Temp\\payload.zip",
++            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
++        );
++        let bootstrap = crate::remote::windows::powershell_bootstrap_source();
++
++        assert!(prepare.contains("powershell.exe"));
++        assert!(cleanup.contains("powershell.exe"));
++        assert!(commit.contains("powershell.exe"));
++        assert!(bootstrap.contains("[Guid]::NewGuid"));
++        assert!(bootstrap.contains("Remove-HerdrRemoteArchive"));
++        assert!(bootstrap.contains("invalid remote payload archive name"));
++        assert!(bootstrap.contains("Expand-Archive"));
++        assert!(bootstrap.contains("Get-FileHash"));
++        assert!(bootstrap.contains("portable payload is missing herdr.exe"));
++        assert!(bootstrap.contains("ConPTY ownership marker"));
++        assert!(bootstrap.contains("status client --json"));
++        assert!(bootstrap.contains("[IO.Directory]::Move($stage, $Destination)"));
++        assert!(bootstrap.contains("[IO.File]::Delete($Archive)"));
++        assert!(bootstrap.contains("FileShare]::None"));
++    }
++
++    #[test]
++    fn windows_override_rejects_a_loose_executable() {
++        let path = std::env::temp_dir().join(format!(
++            "herdr-windows-remote-override-{}.exe",
++            std::process::id()
++        ));
++        fs::write(&path, b"MZ loose binary").unwrap();
++        let error = validate_windows_zip_path(&path).unwrap_err();
++        let _ = fs::remove_file(path);
++
++        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
++        assert!(error.to_string().contains("complete Windows portable ZIP"));
++    }
++
++    #[test]
++    fn windows_scp_destination_supports_aliases_and_ssh_urls() {
++        assert_eq!(
++            windows_scp_destination("workbox", "payload-42-abcd.zip"),
++            "workbox:.herdr/remote/payload-42-abcd.zip"
++        );
++        assert_eq!(
++            windows_scp_destination("ssh://user@host:2222", "payload-42-abcd.zip"),
++            "scp://user@host:2222/.herdr/remote/payload-42-abcd.zip"
++        );
++    }
++
++    #[test]
++    fn remote_lifecycle_commands_reuse_named_session_scope() {
++        assert_eq!(
++            scoped_remote_arguments_for_test(Some("work"), &["status", "server", "--json"]),
++            ["--session", "work", "status", "server", "--json"]
++        );
++        assert_eq!(
++            scoped_remote_arguments_for_test(
++                Some(crate::session::DEFAULT_SESSION_NAME),
++                &["server", "stop"]
++            ),
++            ["server", "stop"]
 +        );
 +    }
 +
@@ -5763,6 +6794,28 @@ index 0000000000000000000000000000000000000000..2f31e76223bbd4125e236810c2c6602d
 +            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
 +            "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
 +        );
++    }
++
++    #[test]
++    fn windows_path_bridge_does_not_require_a_sidecar_lease() {
++        let managed =
++            RemoteHerdr::for_windows(RemotePlatform::windows("AMD64").unwrap(), "C:\\Users\\can");
++        let path_binary = managed
++            .with_shell_path("C:\\Program Files\\Herdr\\herdr.exe".to_string())
++            .into_path_candidate();
++        let command = remote_bridge_command(&path_binary, "work");
++        let encoded = command.split_whitespace().last().unwrap();
++        let bytes = base64::engine::general_purpose::STANDARD
++            .decode(encoded)
++            .unwrap();
++        let utf16 = bytes
++            .chunks_exact(2)
++            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
++            .collect::<Vec<_>>();
++        let script = String::from_utf16(&utf16).unwrap();
++
++        assert!(!script.contains(super::super::windows::sidecar_environment_name()));
++        assert!(script.contains("'--session' 'work' 'remote-client-bridge'"));
 +    }
 +
 +    #[test]
@@ -9564,19 +10617,24 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3d33d1d3b
+index 0000000000000000000000000000000000000000..c8fea160e856a256762db0f0d1540ee7831dbf6f
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,268 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
-+use std::io;
-+use std::thread;
-+use std::time::Duration;
++#[cfg(windows)]
++use std::{io, thread, time::Duration};
 +
 +use base64::Engine as _;
++#[cfg(windows)]
 +use interprocess::local_socket::traits::Stream as _;
 +
++const WINDOWS_REMOTE_SIDECAR_ENV: &str = "HERDR_REMOTE_SIDECAR_V1";
++const WINDOWS_BOOTSTRAP_SCRIPT: &str = include_str!("windows_bootstrap.ps1");
++static REMOTE_SIDECAR_ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++
++#[cfg(windows)]
 +pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
 +    ensure_remote_server_running()?;
 +
@@ -9601,6 +10659,53 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +    copy_flush(&mut socket_to_stdout, &mut stdout).map(|_| ())
 +}
 +
++#[cfg(windows)]
++pub(crate) fn adopt_remote_sidecar_lease() -> io::Result<Option<std::fs::File>> {
++    use std::os::windows::fs::OpenOptionsExt;
++
++    let requested = std::env::var_os(sidecar_environment_name()).is_some();
++    let _ = REMOTE_SIDECAR_ACTIVE.set(requested);
++    if !requested {
++        return Ok(None);
++    }
++    let executable = std::env::current_exe()?;
++    let root = executable.parent().ok_or_else(|| {
++        io::Error::new(
++            io::ErrorKind::InvalidData,
++            "remote Windows sidecar executable has no parent directory",
++        )
++    })?;
++    let lease_path = root.join(".lease");
++    let lease = std::fs::OpenOptions::new()
++        .read(true)
++        .write(true)
++        // Keep the lease itself shareable, but deny deletion of the file and its
++        // parent directory while this process or its detached server holds it.
++        .share_mode(1 | 2)
++        .open(&lease_path)
++        .map_err(|err| {
++            io::Error::new(
++                err.kind(),
++                format!(
++                    "failed to open Windows remote sidecar lease {}: {err}",
++                    lease_path.display()
++                ),
++            )
++        })?;
++    Ok(Some(lease))
++}
++
++#[cfg(not(windows))]
++pub(crate) fn adopt_remote_sidecar_lease() -> std::io::Result<Option<std::fs::File>> {
++    let _ = REMOTE_SIDECAR_ACTIVE.set(false);
++    Ok(None)
++}
++
++pub(crate) fn remote_sidecar_active() -> bool {
++    REMOTE_SIDECAR_ACTIVE.get().copied().unwrap_or(false)
++}
++
++#[cfg(windows)]
 +fn ensure_remote_server_running() -> io::Result<()> {
 +    let socket_path = crate::server::socket_paths::client_socket_path();
 +    if let Some(status) = crate::server::autodetect::read_server_status()? {
@@ -9616,16 +10721,75 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +    crate::server::autodetect::wait_for_server_socket(&socket_path, Duration::from_secs(15))
 +}
 +
-+pub(super) fn remote_bridge_command(session_name: &str) -> String {
-+    let mut script = String::from(
-+        "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr",
-+    );
++#[cfg(test)]
++fn remote_bridge_command(session_name: &str) -> String {
++    let mut arguments = Vec::new();
 +    if session_name != crate::session::DEFAULT_SESSION_NAME {
-+        script.push_str(" --session ");
-+        script.push_str(&powershell_quote(session_name));
++        arguments.push("--session".to_string());
++        arguments.push(session_name.to_string());
 +    }
-+    script.push_str(" remote-client-bridge");
++    arguments.push("remote-client-bridge".to_string());
++    powershell_herdr_command(None, &arguments, false)
++}
 +
++pub(super) fn powershell_herdr_command(
++    executable: Option<&str>,
++    arguments: &[String],
++    sidecar: bool,
++) -> String {
++    let mut script = match executable {
++        Some(executable) => format!("$herdr = {}", powershell_quote(executable)),
++        None => String::from(
++            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source",
++        ),
++    };
++    if sidecar {
++        script.push_str(&format!(
++            "; $env:{} = '1'; Remove-Item Env:{} -ErrorAction SilentlyContinue",
++            sidecar_environment_name(),
++            crate::HERDR_ENV_VAR,
++        ));
++    }
++    script.push_str("; & $herdr");
++    for argument in arguments {
++        script.push(' ');
++        script.push_str(&powershell_quote(argument));
++    }
++    script.push_str("; exit $LASTEXITCODE");
++    encoded_powershell_command(&script)
++}
++
++pub(super) fn powershell_herdr_probe_command(executable: &str, sidecar: bool) -> String {
++    let sidecar_environment = if sidecar {
++        format!(
++            "$env:{} = '1'; Remove-Item Env:{} -ErrorAction SilentlyContinue; ",
++            sidecar_environment_name(),
++            crate::HERDR_ENV_VAR,
++        )
++    } else {
++        String::new()
++    };
++    let script = format!(
++        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}$version = & $herdr --version; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $status = & $herdr status client --json; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine($version); [Console]::Out.WriteLine($status); exit 0",
++        powershell_quote(executable)
++    );
++    encoded_powershell_command(&script)
++}
++
++pub(super) fn powershell_script_command(script: &str) -> String {
++    encoded_powershell_command(script)
++}
++
++pub(super) fn powershell_bootstrap_command(invocation: &str) -> String {
++    encoded_powershell_command(&format!("{WINDOWS_BOOTSTRAP_SCRIPT}\n{invocation}\n"))
++}
++
++#[cfg(test)]
++pub(super) fn powershell_bootstrap_source() -> &'static str {
++    WINDOWS_BOOTSTRAP_SCRIPT
++}
++
++fn encoded_powershell_command(script: &str) -> String {
 +    // Windows OpenSSH accounts can use either cmd.exe or PowerShell as their
 +    // default shell. An encoded explicit PowerShell command avoids relying on
 +    // either shell's quoting and still leaves stdin/stdout attached to Herdr.
@@ -9638,10 +10802,15 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +    format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
 +}
 +
-+fn powershell_quote(value: &str) -> String {
++pub(super) fn powershell_quote(value: &str) -> String {
 +    format!("'{}'", value.replace('\'', "''"))
 +}
 +
++pub(crate) fn sidecar_environment_name() -> &'static str {
++    WINDOWS_REMOTE_SIDECAR_ENV
++}
++
++#[cfg(windows)]
 +fn copy_flush<R: io::Read, W: io::Write>(reader: &mut R, writer: &mut W) -> io::Result<u64> {
 +    let mut buffer = [0_u8; 16 * 1024];
 +    let mut total = 0;
@@ -9667,7 +10836,7 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +    fn windows_remote_bridge_resolves_path_application_for_default_session() {
 +        assert_eq!(
 +            decoded_remote_bridge_script(crate::session::DEFAULT_SESSION_NAME),
-+            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr remote-client-bridge"
++            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr 'remote-client-bridge'; exit $LASTEXITCODE"
 +        );
 +    }
 +
@@ -9675,12 +10844,40 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +    fn windows_remote_bridge_resolves_path_application_for_named_session() {
 +        assert_eq!(
 +            decoded_remote_bridge_script("agent's work"),
-+            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr --session 'agent''s work' remote-client-bridge"
++            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr '--session' 'agent''s work' 'remote-client-bridge'; exit $LASTEXITCODE"
 +        );
++    }
++
++    #[test]
++    fn windows_explicit_remote_command_quotes_every_argument_and_propagates_exit() {
++        assert_eq!(
++            decoded_powershell_command(&powershell_herdr_command(
++                Some("C:\\Users\\A B\\herdr.exe"),
++                &["status".into(), "client".into(), "--json".into()],
++                true,
++            )),
++            "$herdr = 'C:\\Users\\A B\\herdr.exe'; $env:HERDR_REMOTE_SIDECAR_V1 = '1'; Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue; & $herdr 'status' 'client' '--json'; exit $LASTEXITCODE"
++        );
++    }
++
++    #[test]
++    fn windows_path_probe_does_not_mark_managed_install_as_remote_sidecar() {
++        let script = decoded_powershell_command(&powershell_herdr_probe_command(
++            "C:\\Program Files\\Herdr\\herdr.exe",
++            false,
++        ));
++
++        assert!(!script.contains(sidecar_environment_name()));
++        assert!(script.contains("status client --json"));
++        assert!(script.ends_with("exit 0"));
 +    }
 +
 +    fn decoded_remote_bridge_script(session_name: &str) -> String {
 +        let command = remote_bridge_command(session_name);
++        decoded_powershell_command(&command)
++    }
++
++    fn decoded_powershell_command(command: &str) -> String {
 +        let encoded = command.split_whitespace().last().unwrap();
 +        let bytes = base64::engine::general_purpose::STANDARD
 +            .decode(encoded)
@@ -9690,6 +10887,181 @@ index 0000000000000000000000000000000000000000..e70fcab4a58553113b3f3f7a28ea2ff3
 +            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
 +            .collect::<Vec<_>>();
 +        String::from_utf16(&utf16).unwrap()
++    }
++}
+diff --git a/src/remote/windows_bootstrap.ps1 b/src/remote/windows_bootstrap.ps1
+new file mode 100644
+index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef96545b98966a
+--- /dev/null
++++ b/src/remote/windows_bootstrap.ps1
+@@ -0,0 +1,169 @@
++Set-StrictMode -Version Latest
++$ErrorActionPreference = 'Stop'
++
++function Assert-HerdrRemotePlainDirectory {
++    param([Parameter(Mandatory = $true)][string] $Path)
++
++    $item = Get-Item -LiteralPath $Path -Force
++    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++        throw "unsafe remote sidecar directory: $Path"
++    }
++}
++
++function Remove-HerdrRemoteSidecar {
++    param([Parameter(Mandatory = $true)][string] $Path)
++
++    if (-not [IO.Directory]::Exists($Path)) {
++        return
++    }
++    Assert-HerdrRemotePlainDirectory -Path $Path
++    $leasePath = Join-Path $Path '.lease'
++    if (-not [IO.File]::Exists($leasePath)) {
++        throw "remote sidecar is missing its lease: $Path"
++    }
++
++    $lease = [IO.File]::Open(
++        $leasePath,
++        [IO.FileMode]::Open,
++        [IO.FileAccess]::ReadWrite,
++        [IO.FileShare]::None
++    )
++    try {
++        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
++            if ($child.Name -eq '.lease') {
++                continue
++            }
++            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
++                throw "unsafe remote sidecar child: $($child.FullName)"
++            }
++            if ($child.PSIsContainer) {
++                Remove-HerdrRemoteTree -Path $child.FullName
++            } else {
++                [IO.File]::Delete($child.FullName)
++            }
++        }
++    } finally {
++        $lease.Dispose()
++    }
++    [IO.File]::Delete($leasePath)
++    [IO.Directory]::Delete($Path, $false)
++}
++
++function Remove-HerdrRemoteTree {
++    param([Parameter(Mandatory = $true)][string] $Path)
++
++    if (-not [IO.Directory]::Exists($Path)) {
++        return
++    }
++    Assert-HerdrRemotePlainDirectory -Path $Path
++    foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
++        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
++            throw "unsafe remote staging child: $($child.FullName)"
++        }
++        if ($child.PSIsContainer) {
++            Remove-HerdrRemoteTree -Path $child.FullName
++        } else {
++            [IO.File]::Delete($child.FullName)
++        }
++    }
++    [IO.Directory]::Delete($Path, $false)
++}
++
++function Invoke-HerdrRemotePrepareInstall {
++    param(
++        [Parameter(Mandatory = $true)][string] $Destination,
++        [Parameter(Mandatory = $true)][string] $ArchiveName
++    )
++
++    $parent = Split-Path -Parent $Destination
++    [IO.Directory]::CreateDirectory($parent) | Out-Null
++    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.zip$') {
++        throw 'invalid remote payload archive name'
++    }
++    $archive = Join-Path $parent $ArchiveName
++    if ([IO.File]::Exists($archive)) {
++        throw "remote payload archive already exists: $archive"
++    }
++}
++
++function Remove-HerdrRemoteArchive {
++    param([Parameter(Mandatory = $true)][string] $Archive)
++
++    if ([IO.File]::Exists($Archive)) {
++        [IO.File]::Delete($Archive)
++    }
++}
++
++function Invoke-HerdrRemoteCommitInstall {
++    param(
++        [Parameter(Mandatory = $true)][string] $Archive,
++        [Parameter(Mandatory = $true)][string] $Destination,
++        [Parameter(Mandatory = $true)][string] $ExpectedSha256,
++        [Parameter(Mandatory = $true)][string] $ExpectedVersion,
++        [Parameter(Mandatory = $true)][int] $ExpectedProtocol
++    )
++
++    $parent = Split-Path -Parent $Destination
++    $stage = Join-Path $parent ('stage-' + [Guid]::NewGuid().ToString('N'))
++    try {
++        $actualSha256 = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
++        if ($actualSha256 -ne $ExpectedSha256) {
++            throw 'transferred portable payload checksum mismatch'
++        }
++
++        Expand-Archive -LiteralPath $Archive -DestinationPath $stage -Force
++        Assert-HerdrRemotePlainDirectory -Path $stage
++        $exe = Join-Path $stage 'herdr.exe'
++        $marker = Join-Path $stage 'conpty\herdr-conpty.json'
++        if (-not [IO.File]::Exists($exe)) {
++            throw 'portable payload is missing herdr.exe'
++        }
++        if (-not [IO.File]::Exists($marker)) {
++            throw 'portable payload is missing its ConPTY ownership marker'
++        }
++
++        $version = & $exe --version
++        if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
++            throw ('portable payload identity mismatch: ' + ($version -join ' '))
++        }
++        $status = & $exe status client --json | ConvertFrom-Json
++        if ($LASTEXITCODE -ne 0 -or [int]$status.protocol -ne $ExpectedProtocol) {
++            throw 'portable payload protocol mismatch'
++        }
++
++        [IO.File]::WriteAllBytes((Join-Path $stage '.lease'), [byte[]]@())
++        if ([IO.Directory]::Exists($Destination)) {
++            Remove-HerdrRemoteSidecar -Path $Destination
++        }
++        [IO.Directory]::Move($stage, $Destination)
++
++        foreach ($candidate in Get-ChildItem -LiteralPath $parent -Directory -Force) {
++            if ($candidate.FullName -eq $Destination -or $candidate.Name -like 'stage-*') {
++                continue
++            }
++            if ($candidate.Name -notmatch '^[A-Za-z0-9._-]{1,128}$') {
++                continue
++            }
++            $candidateExe = Join-Path $candidate.FullName 'herdr.exe'
++            $candidateMarker = Join-Path $candidate.FullName 'conpty\herdr-conpty.json'
++            $candidateLease = Join-Path $candidate.FullName '.lease'
++            if (-not [IO.File]::Exists($candidateExe) -or
++                -not [IO.File]::Exists($candidateMarker) -or
++                -not [IO.File]::Exists($candidateLease)) {
++                continue
++            }
++            try {
++                Remove-HerdrRemoteSidecar -Path $candidate.FullName
++            } catch [IO.IOException] {
++            } catch [UnauthorizedAccessException] {
++            }
++        }
++    } finally {
++        if ([IO.Directory]::Exists($stage)) {
++            Remove-HerdrRemoteTree -Path $stage
++        }
++        if ([IO.File]::Exists($Archive)) {
++            [IO.File]::Delete($Archive)
++        }
 +    }
 +}
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
@@ -9907,27 +11279,33 @@ index 70072f2d69aa06b8e17f7b743e0a2d5a1c2bf87e..5afe7bef934d7f79b51d367f8227df72
  }
  
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac7819876666170c 100644
+index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..f37b2b6c58bddbab40e05fde315d4f4dc667d64d 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -322,6 +322,8 @@ pub struct HeadlessServer {
+@@ -322,6 +322,12 @@ pub struct HeadlessServer {
      /// Shared pane runtime size derived from the foreground client,
      /// or MIN_COLS × MIN_ROWS when no clients are connected.
      effective_size: (u16, u16),
 +    /// Startup cwd consumed when the first real app client supplies its geometry.
 +    startup_cwd: Option<PathBuf>,
++    /// Whether API-created shells still need the first real app client geometry.
++    awaiting_first_app_client_geometry: bool,
++    /// Startup API workspaces whose shells wait for the first real app client geometry.
++    pending_startup_workspace_launches: Vec<app::DeferredWorkspaceShell>,
      /// Flag set when shutdown is initiated.
      shutting_down: bool,
      /// Flag set while exporting live PTYs to a replacement server.
-@@ -513,6 +515,7 @@ impl HeadlessServer {
+@@ -513,6 +519,9 @@ impl HeadlessServer {
              deferred_alt_screen_reads: Vec::new(),
              next_activity_stamp: 1,
              effective_size: (MIN_COLS, MIN_ROWS),
 +            startup_cwd: None,
++            awaiting_first_app_client_geometry: true,
++            pending_startup_workspace_launches: Vec::new(),
              shutting_down: false,
              handoff_in_progress: false,
              #[cfg(unix)]
-@@ -860,8 +863,11 @@ impl HeadlessServer {
+@@ -860,8 +869,11 @@ impl HeadlessServer {
  
          if self.app.state.request_new_workspace {
              self.app.state.request_new_workspace = false;
@@ -9939,7 +11317,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
                  error!(
                      code = %error.code,
                      message = %error.message,
-@@ -875,8 +881,11 @@ impl HeadlessServer {
+@@ -875,8 +887,11 @@ impl HeadlessServer {
          if self.app.state.request_new_tab {
              self.app.state.request_new_tab = false;
              let label = self.app.state.requested_new_tab_name.take();
@@ -9951,7 +11329,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
                  error!(
                      code = %error.code,
                      message = %error.message,
-@@ -900,12 +909,15 @@ impl HeadlessServer {
+@@ -900,12 +915,15 @@ impl HeadlessServer {
          }
  
          if let Some(cwd) = self.app.state.request_new_workspace_cwd.take() {
@@ -9967,7 +11345,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
                  error!(
                      code = %error.code,
                      message = %error.message,
-@@ -2820,8 +2832,17 @@ impl HeadlessServer {
+@@ -2820,8 +2838,23 @@ impl HeadlessServer {
                  if first_app_client {
                      self.app.mark_git_status_refresh_due(Instant::now());
                  }
@@ -9975,6 +11353,12 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
 -                self.resize_shared_runtime_to_effective_size();
 +                if !direct_attach_requested {
 +                    self.sync_foreground_client_state();
++                    if self.awaiting_first_app_client_geometry {
++                        self.awaiting_first_app_client_geometry = false;
++                        self.launch_pending_startup_workspace_shells();
++                    } else if !self.pending_startup_workspace_launches.is_empty() {
++                        self.launch_pending_startup_workspace_shells();
++                    }
 +                    if first_app_client {
 +                        seed_startup_workspace_if_empty(
 +                            &mut self.app,
@@ -9987,7 +11371,83 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
                  self.nudge_handoff_panes_on_first_client_attach();
                  true
              }
-@@ -4670,6 +4691,7 @@ pub fn run_server() -> io::Result<()> {
+@@ -3453,6 +3486,8 @@ impl HeadlessServer {
+                 .handle_deferred_worktree_api_request(msg.request, msg.respond_to);
+             return changed | deferred_changed;
+         }
++        let defer_startup_workspace_shell = self.awaiting_first_app_client_geometry
++            && matches!(&msg.request.method, api::schema::Method::WorkspaceCreate(_));
+         let mut response = if matches!(
+             &msg.request.method,
+             api::schema::Method::ServerReloadConfig(_)
+@@ -3475,6 +3510,27 @@ impl HeadlessServer {
+                 })
+                 .unwrap_or_else(|_| "{}".to_string())
+             })
++        } else if defer_startup_workspace_shell {
++            let request = msg.request;
++            let (response, pending) = match request.method {
++                api::schema::Method::WorkspaceCreate(params) => self
++                    .app
++                    .handle_workspace_create_with_deferred_shell(request.id, params),
++                method => (
++                    self.app.handle_api_request_after_internal_events_drained(
++                        api::schema::Request {
++                            id: request.id,
++                            method,
++                        },
++                    ),
++                    None,
++                ),
++            };
++            if let Some(pending) = pending {
++                self.pending_startup_workspace_launches.push(pending);
++                self.app.block_startup_session_save();
++            }
++            response
+         } else {
+             self.app
+                 .handle_api_request_after_internal_events_drained(msg.request)
+@@ -3661,6 +3717,38 @@ impl HeadlessServer {
+         changed
+     }
+ 
++    fn launch_pending_startup_workspace_shells(&mut self) {
++        if self.pending_startup_workspace_launches.is_empty() {
++            return;
++        }
++        self.resize_shared_runtime_to_effective_size_before_input();
++        let (rows, cols) = self.app.state.estimate_pane_size();
++        let mut failed = Vec::new();
++        for pending in std::mem::take(&mut self.pending_startup_workspace_launches) {
++            if let Err(err) = self.app.launch_deferred_workspace_shell(
++                &pending.terminal_id,
++                pending.extra_env.clone(),
++                rows,
++                cols,
++            ) {
++                warn!(
++                    terminal = %pending.terminal_id,
++                    rows,
++                    cols,
++                    err = %err,
++                    "failed to launch startup workspace shell at client geometry"
++                );
++                failed.push(pending);
++            }
++        }
++        self.pending_startup_workspace_launches = failed;
++        if self.pending_startup_workspace_launches.is_empty() {
++            self.app.unblock_startup_session_save();
++        } else {
++            self.app.block_startup_session_save();
++        }
++    }
++
+     fn stream_host_mouse_capture_mode(&mut self) {
+         let enabled = self
+             .app
+@@ -4670,6 +4758,7 @@ pub fn run_server() -> io::Result<()> {
      }
  
      let loaded_config = config::Config::load();
@@ -9995,7 +11455,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
      let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
      let event_hub = api::EventHub::default();
  
-@@ -4700,8 +4722,6 @@ pub fn run_server() -> io::Result<()> {
+@@ -4700,8 +4789,6 @@ pub fn run_server() -> io::Result<()> {
              api_rx,
              event_hub,
          );
@@ -10004,7 +11464,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
          // The server runs headless — disable local notification side effects.
          // Sound and terminal notifications are forwarded to connected clients
          // as ServerMessage::Notify instead of emitted by the server process.
-@@ -4726,6 +4746,7 @@ pub fn run_server() -> io::Result<()> {
+@@ -4726,6 +4813,7 @@ pub fn run_server() -> io::Result<()> {
              }
              Err(err) => return Err(err),
          };
@@ -10012,7 +11472,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
  
          info!(
              api_socket = %api::socket_path().display(),
-@@ -4743,8 +4764,12 @@ pub fn run_server() -> io::Result<()> {
+@@ -4743,8 +4831,12 @@ pub fn run_server() -> io::Result<()> {
      result
  }
  
@@ -10027,7 +11487,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
          return;
      };
  
-@@ -4756,6 +4781,9 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
+@@ -4756,6 +4848,9 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
          return;
      }
  
@@ -10037,15 +11497,35 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
      match app.create_workspace_with_options(cwd.clone(), true) {
          Ok(_) => {
              info!(cwd = %cwd.display(), "created startup workspace");
-@@ -4996,6 +5024,7 @@ mod tests {
+@@ -4942,6 +5037,17 @@ mod tests {
+         test_headless_server_with_event_hub(api::EventHub::default())
+     }
+ 
++    fn exiting_test_command() -> &'static str {
++        #[cfg(windows)]
++        {
++            "C:\\Windows\\System32\\whoami.exe"
++        }
++        #[cfg(not(windows))]
++        {
++            "/usr/bin/true"
++        }
++    }
++
+     fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
+         let config = crate::config::Config::default();
+         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+@@ -4996,6 +5102,9 @@ mod tests {
              deferred_alt_screen_reads: Vec::new(),
              next_activity_stamp: 1,
              effective_size: (MIN_COLS, MIN_ROWS),
 +            startup_cwd: None,
++            awaiting_first_app_client_geometry: true,
++            pending_startup_workspace_launches: Vec::new(),
              shutting_down: false,
              handoff_in_progress: false,
              #[cfg(unix)]
-@@ -5236,6 +5265,158 @@ mod tests {
+@@ -5236,6 +5345,158 @@ mod tests {
          shutdown_test_runtimes(&mut server);
      }
  
@@ -10204,7 +11684,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
      fn test_client_writer() -> (
          ClientWriter,
          std::sync::mpsc::Receiver<Vec<u8>>,
-@@ -5411,6 +5592,60 @@ new_tab = "prefix+t"
+@@ -5411,6 +5672,247 @@ new_tab = "prefix+t"
              .any(|binding| binding.label == "prefix+c"));
      }
  
@@ -10262,10 +11742,197 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..e7250a70b84a4c5aed35386aac781987
 +        shutdown_test_runtimes(&mut server);
 +    }
 +
++    #[tokio::test]
++    async fn startup_api_workspace_responds_before_shell_launch_at_real_client_geometry() {
++        let mut server = test_headless_server();
++        let startup_size = (120, 40);
++        let expected_pane_size = (39, 93);
++        let (respond_to, response_rx) = std::sync::mpsc::channel();
++        server.app.state.default_shell = exiting_test_command().into();
++
++        server.app.state.view.terminal_area = Rect::new(0, 0, 54, 24);
++        assert_eq!(server.app.state.estimate_pane_size(), (24, 53));
++
++        assert!(
++            server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++                request: api::schema::Request {
++                    id: "startup-workspace".into(),
++                    method: api::schema::Method::WorkspaceCreate(
++                        api::schema::WorkspaceCreateParams {
++                            cwd: Some(std::env::temp_dir().display().to_string()),
++                            focus: true,
++                            label: Some("startup".into()),
++                            env: Default::default(),
++                        },
++                    ),
++                },
++                respond_to,
++                response_write_complete: None,
++            })
++        );
++        let response: api::schema::SuccessResponse = serde_json::from_str(
++            &response_rx
++                .recv_timeout(Duration::from_millis(100))
++                .expect("workspace response before app attach"),
++        )
++        .expect("successful workspace response");
++        assert!(matches!(
++            response.result,
++            api::schema::ResponseResult::WorkspaceCreated { .. }
++        ));
++        assert_eq!(server.app.state.workspaces.len(), 1);
++        assert_eq!(server.pending_startup_workspace_launches.len(), 1);
++        assert!(server.app.session_save_deadline.is_none());
++        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
++        assert!(server
++            .app
++            .state
++            .runtime_for_pane(&server.app.terminal_runtimes, pane_id)
++            .is_none());
++
++        let (app_writer, _app_control, _app_render) = test_client_writer();
++        assert!(server.handle_server_event(ServerEvent::ClientConnected {
++            client_id: 1,
++            cols: startup_size.0,
++            rows: startup_size.1,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            render_encoding: RenderEncoding::SemanticFrame,
++            keybindings: None,
++            direct_attach_requested: false,
++            writer: app_writer,
++        }));
++
++        assert!(server.pending_startup_workspace_launches.is_empty());
++        assert_eq!(
++            server
++                .app
++                .state
++                .runtime_for_pane(&server.app.terminal_runtimes, pane_id)
++                .expect("API startup runtime after real client attach")
++                .current_size(),
++            expected_pane_size
++        );
++        shutdown_test_runtimes(&mut server);
++    }
++
++    #[tokio::test]
++    async fn startup_api_workspace_keeps_launch_env_until_app_attach() {
++        let mut server = test_headless_server();
++        let startup_size = (120, 40);
++        let (respond_to, response_rx) = std::sync::mpsc::channel();
++        server.app.state.default_shell = exiting_test_command().into();
++
++        assert!(
++            server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++                request: api::schema::Request {
++                    id: "startup-env".into(),
++                    method: api::schema::Method::WorkspaceCreate(
++                        api::schema::WorkspaceCreateParams {
++                            cwd: Some(std::env::temp_dir().display().to_string()),
++                            focus: true,
++                            label: None,
++                            env: std::collections::HashMap::from([(
++                                "HERDR_STARTUP_GEOMETRY_TEST".to_string(),
++                                "preserved".to_string(),
++                            )]),
++                        },
++                    ),
++                },
++                respond_to,
++                response_write_complete: None,
++            })
++        );
++        let response: api::schema::SuccessResponse = serde_json::from_str(
++            &response_rx
++                .recv_timeout(Duration::from_millis(100))
++                .expect("workspace response before app attach"),
++        )
++        .expect("successful workspace response");
++        assert!(matches!(
++            response.result,
++            api::schema::ResponseResult::WorkspaceCreated { .. }
++        ));
++        assert_eq!(
++            server.pending_startup_workspace_launches[0].extra_env,
++            vec![(
++                "HERDR_STARTUP_GEOMETRY_TEST".to_string(),
++                "preserved".to_string()
++            )]
++        );
++
++        let (app_writer, _app_control, _app_render) = test_client_writer();
++        assert!(server.handle_server_event(ServerEvent::ClientConnected {
++            client_id: 1,
++            cols: startup_size.0,
++            rows: startup_size.1,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            render_encoding: RenderEncoding::SemanticFrame,
++            keybindings: None,
++            direct_attach_requested: false,
++            writer: app_writer,
++        }));
++        assert!(server.pending_startup_workspace_launches.is_empty());
++        shutdown_test_runtimes(&mut server);
++    }
++
++    #[tokio::test]
++    async fn workspace_api_after_first_app_attach_launches_immediately() {
++        let mut server = test_headless_server();
++        server.app.state.default_shell = exiting_test_command().into();
++        let (app_writer, _app_control, _app_render) = test_client_writer();
++        assert!(server.handle_server_event(ServerEvent::ClientConnected {
++            client_id: 1,
++            cols: 120,
++            rows: 40,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            render_encoding: RenderEncoding::SemanticFrame,
++            keybindings: None,
++            direct_attach_requested: false,
++            writer: app_writer,
++        }));
++        assert!(!server.awaiting_first_app_client_geometry);
++
++        let (respond_to, response_rx) = std::sync::mpsc::channel();
++        assert!(
++            server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++                request: api::schema::Request {
++                    id: "post-attach-workspace".into(),
++                    method: api::schema::Method::WorkspaceCreate(
++                        api::schema::WorkspaceCreateParams {
++                            cwd: Some(std::env::temp_dir().display().to_string()),
++                            focus: true,
++                            label: None,
++                            env: Default::default(),
++                        },
++                    ),
++                },
++                respond_to,
++                response_write_complete: None,
++            })
++        );
++        let _: api::schema::SuccessResponse = serde_json::from_str(
++            &response_rx
++                .recv_timeout(Duration::from_millis(100))
++                .expect("workspace response after app attach"),
++        )
++        .expect("successful workspace response");
++        assert!(server.pending_startup_workspace_launches.is_empty());
++        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
++        assert!(server
++            .app
++            .state
++            .runtime_for_pane(&server.app.terminal_runtimes, pane_id)
++            .is_some());
++        shutdown_test_runtimes(&mut server);
++    }
++
      #[test]
      fn local_keybinding_client_hides_server_keybinding_warnings() {
          let mut server = test_headless_server();
-@@ -8194,6 +8429,7 @@ next_tab = ""
+@@ -8194,6 +8696,7 @@ next_tab = ""
                  .current_size(),
              expected
          );
@@ -10392,3 +12059,4 @@ index 3455841d2a90da519499f0c41daf5557c899cb95..2120fb3c9cad9fd20cfae7dee3072981
          return true;
 -- 
 2.55.0.windows.3
+

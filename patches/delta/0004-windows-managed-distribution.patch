@@ -1,4 +1,4 @@
-From a075d7b84202c0b30abc14465048a16411990fd5 Mon Sep 17 00:00:00 2001
+From f6cde240afb9276e3d1a92c1c0faff2c78af942e Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 23:02:52 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -7,6 +7,16 @@ Refs herdrdev/herdr#1947
 ---
  Cargo.toml                                    |   13 +
  build.rs                                      |   60 +-
+ .../src/content/docs/cli-reference.mdx        |    5 +-
+ .../next/website/src/content/docs/install.mdx |   22 +-
+ .../src/content/docs/ja/cli-reference.mdx     |    5 +-
+ .../website/src/content/docs/ja/install.mdx   |   22 +-
+ .../src/content/docs/ja/windows-beta.mdx      |    2 +-
+ .../website/src/content/docs/windows-beta.mdx |    2 +-
+ .../src/content/docs/zh-cn/cli-reference.mdx  |    5 +-
+ .../src/content/docs/zh-cn/install.mdx        |   22 +-
+ .../src/content/docs/zh-cn/windows-beta.mdx   |    2 +-
+ .../website/src/data/config-reference.json    |   12 +-
  justfile                                      |    6 +-
  packaging/windows/installer/artwork/README.md |   28 +
  .../installer-welcome-finish-164x314.bmp      |  Bin 0 -> 154542 bytes
@@ -19,9 +29,9 @@ Refs herdrdev/herdr#1947
  packaging/windows/managed-skill-hashes.txt    |    3 +
  scripts/package_windows_conpty.py             |   39 +-
  scripts/package_windows_installer.ps1         |  559 ++++
- scripts/preview.py                            |  120 +-
+ scripts/preview.py                            |  167 +-
  scripts/test_package_windows_conpty.py        |   36 +-
- scripts/test_preview.py                       |  199 +-
+ scripts/test_preview.py                       |  282 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  476 ++++
@@ -32,13 +42,14 @@ Refs herdrdev/herdr#1947
  src/app/input/navigate.rs                     |    2 +-
  src/bin/herdr-installer-helper.rs             |   41 +
  src/bin/herdr-launcher.rs                     |   36 +
- src/build_info.rs                             |   54 +-
- src/cli.rs                                    |   17 +-
- src/cli/status.rs                             |   12 +-
+ src/build_info.rs                             |   93 +-
+ src/cli.rs                                    |  198 --
+ src/cli/spec.rs                               |   15 -
+ src/cli/status.rs                             |   37 +-
  src/config.rs                                 |    2 +-
- src/config/model.rs                           |   10 -
+ src/config/model.rs                           |   49 -
  src/distribution.rs                           |   42 +
- src/main.rs                                   |   21 +-
+ src/main.rs                                   |   24 +-
  src/managed_install.rs                        |  318 +++
  src/platform/mod.rs                           |   25 +
  src/platform/windows.rs                       |  158 +-
@@ -49,11 +60,15 @@ Refs herdrdev/herdr#1947
  .../windows/installer_helper_skills.rs        |  408 +++
  src/platform/windows/launcher.rs              | 1084 ++++++++
  src/platform/windows/managed_install.rs       |  689 +++++
+ src/product_announcements.rs                  |    4 +-
+ src/release_notes.rs                          |   59 +-
  src/remote/attach.rs                          |   16 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
- src/update.rs                                 |  878 +++++-
- 48 files changed, 11382 insertions(+), 390 deletions(-)
+ src/update.rs                                 | 1059 ++++++--
+ tests/api_ping.rs                             |   11 +-
+ tests/cli/sessions.rs                         |   32 +-
+ 63 files changed, 11748 insertions(+), 842 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -207,6 +222,261 @@ index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517
      let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
      let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
      let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
+diff --git a/docs/next/website/src/content/docs/cli-reference.mdx b/docs/next/website/src/content/docs/cli-reference.mdx
+index d0f1509ae6267929b87ae22b103b2c802a963bc8..30e39ce9f7bf9a2dc4d54d2c02c2c31af14eaf99 100644
+--- a/docs/next/website/src/content/docs/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/cli-reference.mdx
+@@ -17,12 +17,9 @@ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # single-process escape hatch
+ herdr --default-config        # print default config
+-herdr update                  # download and install from the configured channel
++herdr update                  # download and install the latest distribution release
+ herdr update --handoff        # opt into live handoff for supported running servers
+ herdr completion zsh          # generate a zsh completion script
+-herdr channel show            # print stable or preview
+-herdr channel set preview     # opt into preview builds
+-herdr channel set stable      # return Linux/macOS direct installs to stable
+ herdr --version               # print version
+ ```
+ 
+diff --git a/docs/next/website/src/content/docs/install.mdx b/docs/next/website/src/content/docs/install.mdx
+index 54e5a694211c3cbbbd46c188f0d7bb3e9edbf3e6..20433e94df83dafc90c0562e333d14d5e32b3e40 100644
+--- a/docs/next/website/src/content/docs/install.mdx
++++ b/docs/next/website/src/content/docs/install.mdx
+@@ -13,13 +13,13 @@ On Linux or macOS, run:
+ curl -fsSL https://herdr.dev/install.sh | sh
+ ```
+ 
+-On Windows preview beta, install the preview channel:
++On Windows preview beta, run the Windows installer:
+ 
+ ```powershell
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-The installer downloads the right release binary for your platform and places it on your PATH. Herdr defaults to preview on Windows without changing your config. The installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
++The installer downloads the right release binary for your platform and places it on your PATH. The installed distribution chooses its update feed without changing your config. The installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
+ 
+ ## Install with Homebrew
+ 
+@@ -120,23 +120,7 @@ herdr update
+ 
+ `herdr update` is for installs managed by Herdr's own installer. Homebrew, mise, and Nix installs are updated through those package managers instead.
+ 
+-On Linux and macOS, Herdr uses the stable update channel by default. To opt into preview builds from `master`, set the channel:
+-
+-```bash
+-herdr channel set preview
+-```
+-
+-Switch Linux and macOS direct installs back to stable the same way:
+-
+-```bash
+-herdr channel set stable
+-```
+-
+-For direct installs, changing channels also checks that channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
+-
+-Preview builds are manually published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
+-
+-Windows beta builds are preview-only for now. `herdr channel set stable` is rejected on Windows until stable Windows releases are available.
++The installed distribution owns its update feed. Official Herdr direct installs use official Herdr releases. A herdr-win build uses only the fork's CalVer release feed and cannot be redirected to official Herdr or another channel through config. Homebrew, mise, Nix, and WinGet installs update through their package manager.
+ 
+ By default, `herdr update` installs the new binary and leaves compatible running sessions alone. If an update changes Herdr's client/server protocol, Herdr asks whether to stop the old server after installing. Stop the old server to use the new version. Stopping exits pane processes. For the default session, run `herdr server stop`, then run `herdr` again. For a named session, run `herdr session stop <name>`, then run `herdr session attach <name>` again.
+ 
+diff --git a/docs/next/website/src/content/docs/ja/cli-reference.mdx b/docs/next/website/src/content/docs/ja/cli-reference.mdx
+index 3cc1e13b32cdfc785a1ada50218045ba9f08f4ad..f29813a7f300ae0e3feb1325933306bc72484373 100644
+--- a/docs/next/website/src/content/docs/ja/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/ja/cli-reference.mdx
+@@ -17,12 +17,9 @@ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # シングルプロセスの逃げ道
+ herdr --default-config        # デフォルト設定を表示
+-herdr update                  # 設定済みチャンネルからダウンロードしてインストール
++herdr update                  # ディストリビューションの最新リリースをダウンロードしてインストール
+ herdr update --handoff        # 対応する実行中サーバーでライブハンドオフにオプトイン
+ herdr completion zsh          # zsh 補完スクリプトを生成
+-herdr channel show            # stable または preview を表示
+-herdr channel set preview     # プレビュービルドにオプトイン
+-herdr channel set stable      # Linux/macOS の直接インストールを安定版に戻す
+ herdr --version               # バージョンを表示
+ ```
+ 
+diff --git a/docs/next/website/src/content/docs/ja/install.mdx b/docs/next/website/src/content/docs/ja/install.mdx
+index b894c1328f9459255c82a0fff256fddbd0795a76..1532289034f2f7a6ad116d50891654990294740a 100644
+--- a/docs/next/website/src/content/docs/ja/install.mdx
++++ b/docs/next/website/src/content/docs/ja/install.mdx
+@@ -13,13 +13,13 @@ Linux または macOS では次を実行します:
+ curl -fsSL https://herdr.dev/install.sh | sh
+ ```
+ 
+-Windows プレビューベータでは、プレビューチャンネルをインストールします:
++Windows プレビューベータでは、Windows インストーラーを実行します:
+ 
+ ```powershell
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
++インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。インストール済みのディストリビューションが設定を変更せずに更新フィードを選びます。インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
+ 
+ ## Homebrew でインストール
+ 
+@@ -120,23 +120,7 @@ herdr update
+ 
+ `herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
+ 
+-Linux と macOS では、Herdr はデフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
+-
+-```bash
+-herdr channel set preview
+-```
+-
+-Linux と macOS の直接インストールを安定版に戻すのも同じ方法です:
+-
+-```bash
+-herdr channel set stable
+-```
+-
+-直接インストールの場合、チャンネルの変更はそのチャンネルをチェックして最新バイナリをインストールします。そのアップデートが失敗した場合は、`herdr update` を実行して設定済みチャンネルから再試行してください。
+-
+-プレビュービルドは、現在の開発ブランチから手動で公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
+-
+-Windows ベータビルドは今のところプレビュー限定です。安定版の Windows リリースが提供されるまで、Windows では `herdr channel set stable` は拒否されます。
++インストール済みのディストリビューションが更新フィードを所有します。公式 Herdr の直接インストールは公式リリースを使用します。herdr-win ビルドはフォークの CalVer リリースフィードのみを使用し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。Homebrew、mise、Nix、WinGet のインストールは、それぞれのパッケージマネージャーで更新します。
+ 
+ デフォルトでは、`herdr update` は新しいバイナリをインストールし、互換性のある実行中セッションには手を付けません。アップデートが Herdr のクライアント/サーバープロトコルを変更する場合、Herdr はインストール後に古いサーバーを停止するか尋ねます。新しいバージョンを使うには古いサーバーを停止してください。停止するとペインのプロセスは終了します。デフォルトセッションでは `herdr server stop` を実行してから再度 `herdr` を実行します。名前付きセッションでは `herdr session stop <name>` を実行してから再度 `herdr session attach <name>` を実行します。
+ 
+diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
+index 076e92bd7679c2ff4afbdeb32434e56d51ec8225..afbbe0d1324099ae4b9a24af2fb3fd8a0555b523 100644
+--- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
++++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
+@@ -15,7 +15,7 @@ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モ
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-Windows ベータビルドはプレビューチャンネルでのみ提供されます。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
++インストール済みの Windows ディストリビューションが更新フィードを所有します。公式 Herdr ベータビルドは公式フィードを使用し、herdr-win はフォークの CalVer フィードのみを使用します。どちらも設定で別のフィードへ切り替えることはできません。インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
+ 
+ 内部ベータテスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。
+ 
+diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
+index d26db9a63fc8f406f4ae8eba07dc9d24b3e29de3..70501e7105b58bb112397a9a245373ad1bae8aca 100644
+--- a/docs/next/website/src/content/docs/windows-beta.mdx
++++ b/docs/next/website/src/content/docs/windows-beta.mdx
+@@ -15,7 +15,7 @@ Install native Windows beta builds with PowerShell:
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-Windows beta builds ship only through the preview channel. Herdr defaults to preview on Windows without changing your config. The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
++The installed Windows distribution owns its update feed. Official Herdr beta builds use the official feed, while herdr-win uses only its fork-owned CalVer feed; neither can be redirected through config. The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
+ 
+ For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest.
+ 
+diff --git a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
+index baebfcc85d48db391ebb51ca4c0ec7961b534139..eb6e615c821d1d382d6258145de1315185254d0e 100644
+--- a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
+@@ -17,12 +17,9 @@ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # 单进程逃生舱
+ herdr --default-config        # 打印默认配置
+-herdr update                  # 从配置的通道下载并安装
++herdr update                  # 下载并安装当前发行版的最新版本
+ herdr update --handoff        # 对受支持的运行中服务器启用实时交接
+ herdr completion zsh          # 生成 zsh 补全脚本
+-herdr channel show            # 打印 stable 或 preview
+-herdr channel set preview     # 启用预览构建
+-herdr channel set stable      # 把 Linux/macOS 直接安装切回稳定版
+ herdr --version               # 打印版本
+ ```
+ 
+diff --git a/docs/next/website/src/content/docs/zh-cn/install.mdx b/docs/next/website/src/content/docs/zh-cn/install.mdx
+index 8305fd7a7cda906ef3555654e0d09e6b9b0e8fe0..d5b8db166df805fbec67b93e0a2c038dfd7a1a66 100644
+--- a/docs/next/website/src/content/docs/zh-cn/install.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/install.mdx
+@@ -13,13 +13,13 @@ Herdr 为 Linux 和 macOS 提供稳定版二进制文件。Windows 原生支持
+ curl -fsSL https://herdr.dev/install.sh | sh
+ ```
+ 
+-在 Windows 预览测试版上,安装预览通道:
++在 Windows 预览测试版上,运行 Windows 安装器:
+ 
+ ```powershell
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-安装器会下载适合你平台的发布二进制文件并放到 PATH 上。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
++安装器会下载适合你平台的发布二进制文件并放到 PATH 上。已安装的发行版会选择自己的更新源,且不会修改你的配置。安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
+ 
+ ## 用 Homebrew 安装
+ 
+@@ -120,23 +120,7 @@ herdr update
+ 
+ `herdr update` 适用于由 Herdr 自带安装器管理的安装。Homebrew、mise 和 Nix 安装请改用那些包管理器更新。
+ 
+-在 Linux 和 macOS 上,Herdr 默认使用稳定更新通道。要启用来自 `master` 的预览构建,设置通道:
+-
+-```bash
+-herdr channel set preview
+-```
+-
+-用同样的方式把 Linux 和 macOS 的直接安装切回稳定版:
+-
+-```bash
+-herdr channel set stable
+-```
+-
+-对于直接安装,切换通道时也会检查该通道并安装其最新二进制文件。如果该更新失败,运行 `herdr update` 从配置的通道重试。
+-
+-预览构建是从当前开发分支手动发布的 GitHub 预发布。当你想在下一个稳定版之前拿到修复时很有用,但它们可能出现回归。Homebrew、mise 和 Nix 安装不使用预览通道。
+-
+-Windows 测试版构建目前仅限预览通道。在稳定的 Windows 发布可用之前,Windows 上的 `herdr channel set stable` 会被拒绝。
++已安装的发行版拥有自己的更新源。官方 Herdr 直接安装使用官方 Herdr 发布。herdr-win 构建只使用该分支的 CalVer 发布源,不能通过配置切换到官方 Herdr 或其他通道。Homebrew、mise、Nix 和 WinGet 安装通过各自的包管理器更新。
+ 
+ 默认情况下,`herdr update` 安装新二进制文件,并不打扰兼容的运行中会话。如果某次更新改变了 Herdr 的客户端/服务器协议,Herdr 会在安装后询问是否停止旧服务器。要使用新版本,请停止旧服务器。停止会退出窗格进程。对于默认会话,运行 `herdr server stop`,再运行 `herdr`。对于命名会话,运行 `herdr session stop <name>`,再运行 `herdr session attach <name>`。
+ 
+diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
+index a9e09a1a6b5d4beb2b78f306b1725e8fad9162b7..095b078d9dca0e99aebf4d74ef2118b0b5498b09 100644
+--- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
+@@ -15,7 +15,7 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不
+ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+ ```
+ 
+-Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
++已安装的 Windows 发行版拥有自己的更新源。官方 Herdr 测试版使用官方更新源,herdr-win 只使用该分支的 CalVer 更新源;两者都不能通过配置切换到其他更新源。安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
+ 
+ 对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。
+ 
+diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
+index 1646a095a31af5fe46c95414fe0f65d716349d54..88188e9bbd2661d98609e0a8e3f61561400990aa 100644
+--- a/docs/next/website/src/data/config-reference.json
++++ b/docs/next/website/src/data/config-reference.json
+@@ -177,21 +177,11 @@
+       "id": "update",
+       "title": "Updates",
+       "keys": [
+-        {
+-          "key": "update.channel",
+-          "type": "enum",
+-          "default": "\"stable\" (\"preview\" on Windows)",
+-          "description": "Update channel used by background version checks and herdr update. Homebrew, mise, and Nix installs ignore the preview channel.",
+-          "values": [
+-            "stable",
+-            "preview"
+-          ]
+-        },
+         {
+           "key": "update.version_check",
+           "type": "boolean",
+           "default": "true",
+-          "description": "Check herdr.dev for new Herdr versions in the background."
++          "description": "Check the distribution-owned update feed for new releases in the background."
+         },
+         {
+           "key": "update.manifest_check",
 diff --git a/justfile b/justfile
 index e5f9e1b21702c141d1d90e77e30d39e720a1b2fa..a2a6e2bd4e07cccb8b339813126784dbe71fa51f 100644
 --- a/justfile
@@ -52877,7 +53147,7 @@ index 0000000000000000000000000000000000000000..a8df73b28dd7cf5cf15ed679e7e7ffb5
 +
 +Write-Host "Created $DistributionName installer: $OutputPath"
 diff --git a/scripts/preview.py b/scripts/preview.py
-index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738ffa579bf 100644
+index fa55d623d865cfe1f797ab3efad58ae842f91c7c..a9ee8d43c8eeb7f4f732380a6f069f1d68dcda87 100644
 --- a/scripts/preview.py
 +++ b/scripts/preview.py
 @@ -2,9 +2,11 @@
@@ -52909,12 +53179,12 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
  HIDDEN_SUBJECTS = (
      "docs: update website manifest",
      "docs: update preview manifest",
-@@ -164,9 +171,54 @@ def build_notes(previous: str, commit: str, build_id: str, base_version: str, re
+@@ -164,9 +171,86 @@ def build_notes(previous: str, commit: str, build_id: str, base_version: str, re
      return "\n".join(lines).rstrip() + "\n"
  
  
 -def default_asset_urls(repo: str, tag: str) -> dict[str, str]:
-+def herdr_win_asset_names(release_version: str) -> dict[str, str]:
++def parse_herdr_win_release_version(release_version: str) -> tuple[int, int, int, int]:
 +    match = HERDR_WIN_RELEASE_VERSION_RE.fullmatch(release_version)
 +    if not match:
 +        raise ValueError("release_version must use YYYY.MM.DD.N CalVer")
@@ -52926,6 +53196,19 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
 +        )
 +    except ValueError as error:
 +        raise ValueError("release_version must contain a real UTC calendar date") from error
++    sequence = int(match.group("sequence"))
++    if sequence > 65535:
++        raise ValueError("release_version sequence must be at most 65535")
++    return (
++        int(match.group("year")),
++        int(match.group("month")),
++        int(match.group("day")),
++        sequence,
++    )
++
++
++def herdr_win_asset_names(release_version: str) -> dict[str, str]:
++    parse_herdr_win_release_version(release_version)
      return {
 -        target: f"https://github.com/{repo}/releases/download/{tag}/{EXPECTED_ASSET_NAMES[target]}"
 +        "linux-x86_64": f"herdr-win_v{release_version}_linux_amd64",
@@ -52937,6 +53220,25 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
 +            f"herdr-win_v{release_version}_windows_amd64_setup.exe"
 +        ),
 +    }
++
++
++def require_newer_herdr_win_release(
++    release_version: str, current: dict[str, Any]
++) -> None:
++    candidate = parse_herdr_win_release_version(release_version)
++    if "release_version" not in current:
++        return
++    current_text = current["release_version"]
++    if not isinstance(current_text, str):
++        raise ValueError("current manifest has an invalid release_version")
++    try:
++        published = parse_herdr_win_release_version(current_text)
++    except ValueError as error:
++        raise ValueError("current manifest has an invalid release_version") from error
++    if candidate <= published:
++        raise ValueError(
++            f"release_version {release_version} must be newer than published {current_text}"
++        )
 +
 +
 +def candidate_build_id(
@@ -52966,7 +53268,7 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
          for target in ASSET_TARGETS
      }
  
-@@ -181,17 +233,19 @@ def read_sha_file(path: Path | None) -> dict[str, str]:
+@@ -181,17 +265,19 @@ def read_sha_file(path: Path | None) -> dict[str, str]:
  
  
  def asset_objects(urls: dict[str, str], shas: dict[str, str]) -> dict[str, dict[str, str]]:
@@ -52994,7 +53296,7 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
          assets[target] = entry
      return assets
  
-@@ -208,13 +262,16 @@ def build_manifest(
+@@ -208,13 +294,18 @@ def build_manifest(
      notes: str,
      shas: dict[str, str],
      retain: int,
@@ -53009,13 +53311,15 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
 -    builds = current.get("builds") if isinstance(current.get("builds"), dict) else {}
 -    builds = dict(builds)
 -    builds[build_id] = {
++    if release_version is not None:
++        require_newer_herdr_win_release(release_version, current)
 +    current_builds = current.get("builds")
 +    builds: dict[str, Any] = dict(current_builds) if isinstance(current_builds, dict) else {}
 +    build = {
          "base_version": normalize_version(base_version),
          "commit": commit,
          "built_at": built_at,
-@@ -222,6 +279,9 @@ def build_manifest(
+@@ -222,6 +313,9 @@ def build_manifest(
          "tag": tag,
          "assets": assets,
      }
@@ -53025,7 +53329,7 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
      ordered_builds = {
          key: builds[key]
          for key in sorted(
-@@ -242,6 +302,8 @@ def build_manifest(
+@@ -242,6 +336,8 @@ def build_manifest(
          "assets": assets,
          "builds": ordered_builds,
      }
@@ -53034,7 +53338,7 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
      return json.dumps(manifest, indent=2) + "\n"
  
  
-@@ -267,6 +329,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
+@@ -267,6 +363,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
          notes=notes,
          shas=shas,
          retain=args.retain,
@@ -53042,12 +53346,20 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
      )
      Path(args.output).write_text(content, encoding="utf-8")
      return 0
-@@ -289,6 +352,23 @@ def cmd_range_base(args: argparse.Namespace) -> int:
+@@ -289,6 +386,31 @@ def cmd_range_base(args: argparse.Namespace) -> int:
      return 0
  
  
 +def cmd_asset_names(args: argparse.Namespace) -> int:
 +    print(json.dumps(herdr_win_asset_names(args.release_version), sort_keys=True))
++    return 0
++
++
++def cmd_require_newer_release(args: argparse.Namespace) -> int:
++    current = read_json(Path(args.manifest)) or {}
++    if "release_version" not in current:
++        raise ValueError("current manifest is missing release_version")
++    require_newer_herdr_win_release(args.release_version, current)
 +    return 0
 +
 +
@@ -53066,7 +53378,7 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
  def main() -> int:
      parser = argparse.ArgumentParser(description="Preview channel release helpers")
      sub = parser.add_subparsers(required=True)
-@@ -315,8 +395,20 @@ def main() -> int:
+@@ -315,8 +437,25 @@ def main() -> int:
      manifest.add_argument("--notes", required=True)
      manifest.add_argument("--sha-file")
      manifest.add_argument("--retain", type=int, default=30)
@@ -53076,6 +53388,11 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..46e2e43fc96c4259cbeff319108dd738
 +    asset_names = sub.add_parser("herdr-win-asset-names")
 +    asset_names.add_argument("--release-version", required=True)
 +    asset_names.set_defaults(func=cmd_asset_names)
++
++    newer_release = sub.add_parser("require-newer-herdr-win-release")
++    newer_release.add_argument("--release-version", required=True)
++    newer_release.add_argument("--manifest", default="website/preview.json")
++    newer_release.set_defaults(func=cmd_require_newer_release)
 +
 +    build_id = sub.add_parser("candidate-build-id")
 +    build_id.add_argument("--upstream-sha", required=True)
@@ -53165,10 +53482,17 @@ index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..7a9f323734bd548969b6e4034be3cca5
              (stage / "conpty" / "conpty.dll").write_bytes(b"tampered")
              with self.assertRaisesRegex(ValueError, "staged file hash mismatch"):
 diff --git a/scripts/test_preview.py b/scripts/test_preview.py
-index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3add1e34447 100644
+index c280f572d346fe3f6776dac9416562f8c88d490f..e30f075ddaa82add1ee564cbc0a57a65b80c7741 100644
 --- a/scripts/test_preview.py
 +++ b/scripts/test_preview.py
-@@ -9,6 +9,11 @@ from pathlib import Path
+@@ -3,12 +3,18 @@ import os
+ import subprocess
+ import tempfile
+ import unittest
++from argparse import Namespace
+ from unittest import mock
+ from pathlib import Path
+ 
  import scripts.conventional_commits as conventional_commits
  import scripts.preview as preview
  
@@ -53180,7 +53504,7 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
  
  class PreviewNotesTests(unittest.TestCase):
      def test_humanize_groups_conventional_subjects(self):
-@@ -32,54 +37,215 @@ class PreviewNotesTests(unittest.TestCase):
+@@ -32,54 +38,297 @@ class PreviewNotesTests(unittest.TestCase):
              content = preview.build_manifest(
                  output=output,
                  repo="herdrdev/herdr",
@@ -53246,8 +53570,7 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
 +                data["builds"]["abcdef123456.7890abcdef12"]["release_version"],
 +                "2026.06.02.1",
 +            )
- 
--    def test_windows_preview_asset_requires_sha256(self):
++
 +    def test_herdr_win_asset_names_require_real_calver(self):
 +        self.assertEqual(
 +            preview.herdr_win_asset_names("2026.07.31.1"),
@@ -53263,8 +53586,8 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
 +            },
 +        )
 +        self.assertIn(
-+            "4294967296",
-+            preview.herdr_win_asset_names("2026.07.31.4294967296")[
++            "65535",
++            preview.herdr_win_asset_names("2026.07.31.65535")[
 +                "windows-x86_64-installer"
 +            ],
 +        )
@@ -53273,15 +53596,98 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
 +            "2026.02.30.1",
 +            "2026.07.31.0",
 +            "2026.07.31.+1",
++            "2026.07.31.65536",
 +        ):
 +            with self.subTest(invalid=invalid), self.assertRaisesRegex(
 +                ValueError, "release_version"
 +            ):
 +                preview.herdr_win_asset_names(invalid)
 +
-+    def test_preview_assets_require_sha256(self):
++    def test_manifest_requires_monotonic_release_calver(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            output = Path(tmp) / "preview.json"
++            output.write_text(
++                json.dumps({"release_version": "2026.08.05.5", "builds": {}}),
++                encoding="utf-8",
++            )
++            for stale in ("2026.08.05.5", "2026.08.05.4", "2026.08.04.99"):
++                with self.subTest(stale=stale), self.assertRaisesRegex(
++                    ValueError, "must be newer"
++                ):
++                    preview.build_manifest(
++                        output=output,
++                        repo="hdosys/herdr-win",
++                        tag=f"v{stale}",
++                        build_id="abcdef123456.7890abcdef12",
++                        commit="abcdef1234567890",
++                        built_at="2026-08-05T04:00:00Z",
++                        base_version="0.8.0",
++                        protocol=20,
++                        notes="test",
++                        shas=VALID_SHAS,
++                        retain=30,
++                        release_version=stale,
++                    )
++            data = json.loads(
++                preview.build_manifest(
++                    output=output,
++                    repo="hdosys/herdr-win",
++                    tag="v2026.08.05.6",
++                    build_id="abcdef123456.7890abcdef12",
++                    commit="abcdef1234567890",
++                    built_at="2026-08-05T04:00:00Z",
++                    base_version="0.8.0",
++                    protocol=20,
++                    notes="test",
++                    shas=VALID_SHAS,
++                    retain=30,
++                    release_version="2026.08.05.6",
++                )
++            )
++            self.assertEqual(data["release_version"], "2026.08.05.6")
++
++    def test_release_gate_requires_newer_calver(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            manifest = Path(tmp) / "preview.json"
++            manifest.write_text(
++                json.dumps({"release_version": "2026.08.05.5"}), encoding="utf-8"
++            )
++            with self.assertRaisesRegex(ValueError, "must be newer"):
++                preview.cmd_require_newer_release(
++                    Namespace(
++                        release_version="2026.08.05.5", manifest=str(manifest)
++                    )
++                )
++            self.assertEqual(
++                preview.cmd_require_newer_release(
++                    Namespace(
++                        release_version="2026.08.05.6", manifest=str(manifest)
++                    )
++                ),
++                0,
++            )
++
++    def test_release_gate_rejects_invalid_published_calver(self):
++        for current in ({"release_version": 20260805}, {"release_version": "bad"}):
++            with self.subTest(current=current), self.assertRaisesRegex(
++                ValueError, "current manifest has an invalid release_version"
++            ):
++                preview.require_newer_herdr_win_release("2026.08.05.6", current)
+ 
+-    def test_windows_preview_asset_requires_sha256(self):
          with tempfile.TemporaryDirectory() as tmp:
 -            with self.assertRaisesRegex(ValueError, "windows-x86_64 requires"):
++            manifest = Path(tmp) / "preview.json"
++            manifest.write_text("{}", encoding="utf-8")
++            with self.assertRaisesRegex(ValueError, "missing release_version"):
++                preview.cmd_require_newer_release(
++                    Namespace(
++                        release_version="2026.08.05.6", manifest=str(manifest)
++                    )
++                )
++
++    def test_preview_assets_require_sha256(self):
++        with tempfile.TemporaryDirectory() as tmp:
 +            for target in preview.ASSET_TARGETS:
 +                shas = dict(VALID_SHAS)
 +                shas.pop(target)
@@ -53411,7 +53817,7 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
      def test_hidden_subjects_include_preview_manifest_commits(self):
          self.assertTrue(preview.hidden_subject("docs: update preview manifest"))
          self.assertTrue(preview.hidden_subject("docs: update website manifest"))
-@@ -183,7 +349,7 @@ file: ../../../public/assets/logo.svg
+@@ -183,7 +432,7 @@ file: ../../../public/assets/logo.svg
          self.assertIn("from '../../../../components/LocaleWidget.astro'", output)
          self.assertIn("Preview build `2026-07-29-44b3adb12552`", output)
          self.assertIn(
@@ -53420,7 +53826,7 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..44594b06ab6abd414c7c5c28a857f3ad
              output,
          )
  
-@@ -211,7 +377,6 @@ file: ../../../public/assets/logo.svg
+@@ -211,7 +460,6 @@ file: ../../../public/assets/logo.svg
          self.assertIn("[Install](/docs/0.7.4/install/)", output)
          self.assertIn("file: ../../../../../public/assets/logo.svg", output)
          self.assertIn("from '../../../../components/ConfigReference.astro'", output)
@@ -55450,10 +55856,10 @@ index 0000000000000000000000000000000000000000..ddc4aa888719ebd71b62bf8a9aecb456
 +#[cfg(not(windows))]
 +fn main() {}
 diff --git a/src/build_info.rs b/src/build_info.rs
-index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e96b7ea8f 100644
+index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..4a5ee9894e1cda12e983064d8fd25645ab3ab172 100644
 --- a/src/build_info.rs
 +++ b/src/build_info.rs
-@@ -3,13 +3,17 @@
+@@ -3,20 +3,51 @@
  pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
  
  pub fn channel() -> &'static str {
@@ -55469,13 +55875,30 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e
 +    non_empty(option_env!("HERDR_RELEASE_VERSION"))
 +}
 +
++pub fn release_identity() -> &'static str {
++    release_version().unwrap_or("local")
++}
++
++/// Exact runtime identity used by status, handoff, and matching remote binaries.
  pub fn version() -> String {
-     match channel() {
-         "stable" => BASE_VERSION.to_string(),
-@@ -20,6 +24,25 @@ pub fn version() -> String {
-     }
- }
- 
+-    match channel() {
+-        "stable" => BASE_VERSION.to_string(),
+-        channel => match build_id() {
+-            Some(build_id) => format!("{BASE_VERSION}-{channel}.{build_id}"),
+-            None => format!("{BASE_VERSION}-{channel}"),
+-        },
++    version_for(release_version(), build_id())
++}
++
++fn version_for(release_version: Option<&str>, build_id: Option<&str>) -> String {
++    match (release_version, build_id) {
++        (Some(release), Some(build)) => format!("{release}+{build}"),
++        (Some(release), None) => release.to_string(),
++        (None, Some(build)) => format!("local+{build}"),
++        (None, None) => "local".to_string(),
++    }
++}
++
 +pub fn cli_version() -> String {
 +    cli_version_for(release_version(), BASE_VERSION, build_id())
 +}
@@ -55492,13 +55915,10 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e
 +            format!("{name} local (Herdr {herdr_version}, build {build})")
 +        }
 +        (None, None) => format!("{name} local (Herdr {herdr_version})"),
-+    }
-+}
-+
- pub fn is_preview() -> bool {
-     channel() == "preview"
+     }
  }
-@@ -38,7 +61,32 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
+ 
+@@ -38,7 +69,51 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
  #[cfg(test)]
  mod tests {
      #[test]
@@ -55506,10 +55926,29 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e
 -        assert!(!super::version().is_empty());
 +    fn distribution_channel_owns_local_build_identity() {
 +        assert_eq!(super::channel(), "preview");
-+        assert!(super::version().starts_with(&format!("{}-preview", super::BASE_VERSION)));
++        assert_eq!(
++            super::version(),
++            super::version_for(super::release_version(), super::build_id())
++        );
 +        assert_eq!(
 +            super::cli_version(),
-+            format!("herdr-win local (Herdr {})", super::BASE_VERSION)
++            super::cli_version_for(
++                super::release_version(),
++                super::BASE_VERSION,
++                super::build_id()
++            )
++        );
++    }
++
++    #[test]
++    fn runtime_identity_separates_release_order_from_exact_build() {
++        assert_eq!(
++            super::version_for(Some("2026.08.11.1"), Some("0123456789ab.cdef01234567")),
++            "2026.08.11.1+0123456789ab.cdef01234567"
++        );
++        assert_eq!(
++            super::version_for(None, Some("0123456789ab.cdef01234567")),
++            "local+0123456789ab.cdef01234567"
 +        );
 +    }
 +
@@ -55534,55 +55973,266 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..ed26afe5276e09b841c7fd40cca6f63e
      }
  }
 diff --git a/src/cli.rs b/src/cli.rs
-index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..045633c47b38b697a709ca9cf17a73c6ed957140 100644
+index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a1b198a2e 100644
 --- a/src/cli.rs
 +++ b/src/cli.rs
-@@ -110,8 +110,7 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
-     match args.first().map(|arg| arg.as_str()) {
-         Some("set") => channel_set(&args[1..]),
-         Some("show") if args.len() == 1 => {
--            let config = crate::config::Config::load().config;
--            println!("{}", config.update.channel.as_str());
-+            println!("{}", crate::build_info::channel());
-             Ok(0)
-         }
-         Some("help" | "--help" | "-h") => {
-@@ -127,10 +126,18 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
- 
- fn channel_set(args: &[String]) -> std::io::Result<i32> {
-     let Some(channel) = parse_channel_set_arg(args) else {
--        eprintln!("usage: herdr channel set <stable|preview>");
-+        eprintln!("usage: herdr channel set preview");
-         return Ok(2);
-     };
- 
-+    if channel != crate::distribution::UPDATE_CHANNEL {
-+        eprintln!(
-+            "herdr-win update channel is fixed to {}.",
-+            crate::distribution::UPDATE_CHANNEL
-+        );
-+        return Ok(1);
-+    }
-+
-     if let Some(reason) = channel_set_rejection(
-         channel,
-         crate::update::preview_channel_rejection_for_current_install(),
-@@ -237,8 +244,8 @@ fn channel_set_install_action(
- 
- fn print_channel_help() {
-     eprintln!("herdr channel commands:");
--    eprintln!("  herdr channel show                  print the configured update channel");
--    eprintln!("  herdr channel set <stable|preview>  choose the update channel");
-+    eprintln!("  herdr channel show         print the fixed distribution channel");
-+    eprintln!("  herdr channel set preview  keep the herdr-win preview channel");
+@@ -89,7 +89,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+         "status" => status::run_status_command(&args[2..])?,
+         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
+         "config" => run_config_command(&args[2..])?,
+-        "channel" => run_channel_command(&args[2..])?,
+         "workspace" => workspace::run_workspace_command(&args[2..])?,
+         "worktree" => worktree::run_worktree_command(&args[2..])?,
+         "tab" => tab::run_tab_command(&args[2..])?,
+@@ -106,141 +105,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+     Ok(CommandOutcome::Handled(exit_code))
  }
  
+-fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
+-    match args.first().map(|arg| arg.as_str()) {
+-        Some("set") => channel_set(&args[1..]),
+-        Some("show") if args.len() == 1 => {
+-            let config = crate::config::Config::load().config;
+-            println!("{}", config.update.channel.as_str());
+-            Ok(0)
+-        }
+-        Some("help" | "--help" | "-h") => {
+-            print_channel_help();
+-            Ok(0)
+-        }
+-        _ => {
+-            print_channel_help();
+-            Ok(2)
+-        }
+-    }
+-}
+-
+-fn channel_set(args: &[String]) -> std::io::Result<i32> {
+-    let Some(channel) = parse_channel_set_arg(args) else {
+-        eprintln!("usage: herdr channel set <stable|preview>");
+-        return Ok(2);
+-    };
+-
+-    if let Some(reason) = channel_set_rejection(
+-        channel,
+-        crate::update::preview_channel_rejection_for_current_install(),
+-    ) {
+-        eprintln!("{reason}.");
+-        return Ok(1);
+-    }
+-
+-    let path = crate::config::config_path();
+-    let content = if path.exists() {
+-        std::fs::read_to_string(&path)?
+-    } else {
+-        String::new()
+-    };
+-    if let Err(err) = content.parse::<toml::Value>() {
+-        eprintln!(
+-            "config file at {} is invalid TOML: {err}. Fix it before changing the update channel.",
+-            path.display()
+-        );
+-        return Ok(1);
+-    }
+-
+-    let updated = crate::config::upsert_section_value(
+-        &content,
+-        "update",
+-        "channel",
+-        &format!("\"{channel}\""),
+-    );
+-    if let Err(err) = updated.parse::<toml::Value>() {
+-        eprintln!(
+-            "changing the update channel would make {} invalid TOML: {err}; leaving config unchanged",
+-            path.display()
+-        );
+-        return Ok(1);
+-    }
+-    if let Some(parent) = path.parent() {
+-        std::fs::create_dir_all(parent)?;
+-    }
+-    std::fs::write(&path, updated)?;
+-    println!(
+-        "Herdr update channel set to {channel} in {}.",
+-        path.display()
+-    );
+-
+-    match channel_set_install_action(
+-        crate::update::package_manager_channel_update_guidance_for_current_install(),
+-    ) {
+-        ChannelSetInstallAction::PrintGuidance(guidance) => {
+-            println!("{guidance}");
+-            return Ok(0);
+-        }
+-        ChannelSetInstallAction::RunSelfUpdate => {}
+-    }
+-
+-    if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
+-        eprintln!("update failed: {err}");
+-        eprintln!("Run `herdr update` to retry.");
+-        return Ok(1);
+-    }
+-
+-    Ok(0)
+-}
+-
+-fn parse_channel_set_arg(args: &[String]) -> Option<&str> {
+-    let channel = args.first().map(|arg| arg.as_str())?;
+-    if args.len() == 1 && matches!(channel, "stable" | "preview") {
+-        Some(channel)
+-    } else {
+-        None
+-    }
+-}
+-
+-fn channel_set_rejection(
+-    channel: &str,
+-    install_rejection: Option<&'static str>,
+-) -> Option<&'static str> {
+-    if cfg!(windows) && channel == "stable" {
+-        return Some(
+-            "stable channel is not available on Windows yet; Windows builds are preview-only",
+-        );
+-    }
+-
+-    if channel == "preview" {
+-        return install_rejection;
+-    }
+-
+-    None
+-}
+-
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-enum ChannelSetInstallAction {
+-    RunSelfUpdate,
+-    PrintGuidance(&'static str),
+-}
+-
+-fn channel_set_install_action(
+-    package_manager_guidance: Option<&'static str>,
+-) -> ChannelSetInstallAction {
+-    match package_manager_guidance {
+-        Some(guidance) => ChannelSetInstallAction::PrintGuidance(guidance),
+-        None => ChannelSetInstallAction::RunSelfUpdate,
+-    }
+-}
+-
+-fn print_channel_help() {
+-    eprintln!("herdr channel commands:");
+-    eprintln!("  herdr channel show                  print the configured update channel");
+-    eprintln!("  herdr channel set <stable|preview>  choose the update channel");
+-}
+-
  fn run_config_command(args: &[String]) -> std::io::Result<i32> {
+     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
+         print_config_help();
+@@ -1006,68 +870,6 @@ fn _print_json<T: Serialize>(value: &T) {
+ 
+ #[cfg(test)]
+ mod tests {
+-    #[test]
+-    fn parses_channel_set_argument() {
+-        assert_eq!(
+-            super::parse_channel_set_arg(&["preview".to_string()]),
+-            Some("preview")
+-        );
+-        assert_eq!(
+-            super::parse_channel_set_arg(&["stable".to_string()]),
+-            Some("stable")
+-        );
+-        assert_eq!(super::parse_channel_set_arg(&["nightly".to_string()]), None);
+-        assert_eq!(
+-            super::parse_channel_set_arg(&["preview".to_string(), "stable".to_string()]),
+-            None
+-        );
+-    }
+-
+-    #[test]
+-    fn channel_set_rejects_package_managed_preview_before_config_write() {
+-        assert_eq!(
+-            super::channel_set_rejection("preview", Some("no preview")),
+-            Some("no preview")
+-        );
+-        assert_eq!(
+-            super::channel_set_rejection("stable", Some("no preview")),
+-            if cfg!(windows) {
+-                Some(
+-                    "stable channel is not available on Windows yet; Windows builds are preview-only",
+-                )
+-            } else {
+-                None
+-            }
+-        );
+-        assert_eq!(super::channel_set_rejection("preview", None), None);
+-    }
+-
+-    #[test]
+-    fn channel_set_rejects_stable_only_on_windows() {
+-        assert_eq!(
+-            super::channel_set_rejection("stable", None),
+-            if cfg!(windows) {
+-                Some(
+-                    "stable channel is not available on Windows yet; Windows builds are preview-only",
+-                )
+-            } else {
+-                None
+-            }
+-        );
+-    }
+-
+-    #[test]
+-    fn channel_set_skips_self_update_for_package_manager_guidance() {
+-        assert_eq!(
+-            super::channel_set_install_action(Some("use package manager")),
+-            super::ChannelSetInstallAction::PrintGuidance("use package manager")
+-        );
+-        assert_eq!(
+-            super::channel_set_install_action(None),
+-            super::ChannelSetInstallAction::RunSelfUpdate
+-        );
+-    }
+-
+     #[test]
+     fn parse_env_assignment_accepts_empty_values() {
+         assert_eq!(
+diff --git a/src/cli/spec.rs b/src/cli/spec.rs
+index 3be833286c6629caf8c03dbbb9335fef59521a05..940875309d584f11ce0826a2bb93394f5c40e451 100644
+--- a/src/cli/spec.rs
++++ b/src/cli/spec.rs
+@@ -30,7 +30,6 @@ pub(super) fn command() -> Command {
+         .subcommand(update_command())
+         .subcommand(status_command())
+         .subcommand(config_command())
+-        .subcommand(channel_command())
+         .subcommand(server_command())
+         .subcommand(api_command())
+         .subcommand(workspace_command())
+@@ -141,20 +140,6 @@ fn config_command() -> Command {
+         .subcommand(Command::new("reset-keys").about("Reset custom keybindings"))
+ }
+ 
+-fn channel_command() -> Command {
+-    Command::new("channel")
+-        .about("Manage stable and preview update channels")
+-        .subcommand(Command::new("show").about("Print the configured update channel"))
+-        .subcommand(
+-            Command::new("set").about("Choose the update channel").arg(
+-                Arg::new("channel")
+-                    .value_name("CHANNEL")
+-                    .required(true)
+-                    .value_parser(["stable", "preview"]),
+-            ),
+-        )
+-}
+-
+ fn server_command() -> Command {
+     Command::new("server")
+         .about("Run or control the headless server")
 diff --git a/src/cli/status.rs b/src/cli/status.rs
-index 8594fd1b7117d0d1952f74f8e092f20741a9e77c..1bed121b8eeb0d51eef3cefb3771a3e0ddfec45b 100644
+index 8594fd1b7117d0d1952f74f8e092f20741a9e77c..bb50ec4042b600570075ed0b9b86418478bc2461 100644
 --- a/src/cli/status.rs
 +++ b/src/cli/status.rs
-@@ -93,10 +93,7 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
+@@ -93,10 +93,8 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
  
      println!("client:");
      println!("  version: {}", crate::build_info::version());
@@ -55590,11 +56240,12 @@ index 8594fd1b7117d0d1952f74f8e092f20741a9e77c..1bed121b8eeb0d51eef3cefb3771a3e0
 -        "  channel: {}",
 -        crate::config::Config::load().config.update.channel.as_str()
 -    );
-+    println!("  channel: {}", crate::build_info::channel());
++    println!("  herdr: {}", crate::build_info::BASE_VERSION);
++    println!("  build: {}", build_id_label());
      println!("  protocol: {}", crate::protocol::PROTOCOL_VERSION);
      println!();
      println!("server:");
-@@ -125,10 +122,7 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
+@@ -125,10 +123,8 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
      }
  
      println!("version: {}", crate::build_info::version());
@@ -55602,19 +56253,62 @@ index 8594fd1b7117d0d1952f74f8e092f20741a9e77c..1bed121b8eeb0d51eef3cefb3771a3e0
 -        "channel: {}",
 -        crate::config::Config::load().config.update.channel.as_str()
 -    );
-+    println!("channel: {}", crate::build_info::channel());
++    println!("herdr: {}", crate::build_info::BASE_VERSION);
++    println!("build: {}", build_id_label());
      println!("protocol: {}", crate::protocol::PROTOCOL_VERSION);
      println!("binary: {}", current_exe_label());
      Ok(())
-@@ -245,7 +239,7 @@ struct UpdateStatusJson {
+@@ -212,7 +208,8 @@ struct FullStatusJson {
+ #[derive(Serialize)]
+ struct ClientStatusJson {
+     version: String,
+-    channel: &'static str,
++    herdr_version: &'static str,
++    build_id: Option<&'static str>,
+     protocol: u32,
+     binary: String,
+     session: Option<String>,
+@@ -245,7 +242,8 @@ struct UpdateStatusJson {
  fn client_status_json() -> ClientStatusJson {
      ClientStatusJson {
          version: crate::build_info::version(),
 -        channel: crate::config::Config::load().config.update.channel.as_str(),
-+        channel: crate::build_info::channel(),
++        herdr_version: crate::build_info::BASE_VERSION,
++        build_id: crate::build_info::build_id(),
          protocol: crate::protocol::PROTOCOL_VERSION,
          binary: current_exe_label(),
          session: crate::session::active_name(),
+@@ -316,6 +314,10 @@ fn current_exe_label() -> String {
+         .unwrap_or_else(|err| format!("unknown ({err})"))
+ }
+ 
++fn build_id_label() -> &'static str {
++    crate::build_info::build_id().unwrap_or("none")
++}
++
+ fn print_status_help() {
+     eprintln!("herdr status commands:");
+     eprintln!("  herdr status [--json]         show local client and running server status");
+@@ -333,4 +335,19 @@ mod tests {
+ 
+         assert!(value.get("windows_remote_guest_executable").is_none());
+     }
++
++    #[test]
++    fn client_status_separates_release_compatibility_and_build_identity() {
++        let value = serde_json::to_value(client_status_json()).unwrap();
++
++        assert_eq!(value["version"], crate::build_info::version());
++        assert_eq!(value["herdr_version"], crate::build_info::BASE_VERSION);
++        assert_eq!(
++            value["build_id"],
++            crate::build_info::build_id()
++                .map(serde_json::Value::from)
++                .unwrap_or(serde_json::Value::Null)
++        );
++        assert!(value.get("channel").is_none());
++    }
+ }
 diff --git a/src/config.rs b/src/config.rs
 index f3fc170a65ead5a1c0424121373afab55d17d7fd..96fd8d1325bf1cdd7061035a3e505e08aa799d9c 100644
 --- a/src/config.rs
@@ -55629,13 +56323,21 @@ index f3fc170a65ead5a1c0424121373afab55d17d7fd..96fd8d1325bf1cdd7061035a3e505e08
      sidebar::{
          AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
 diff --git a/src/config/model.rs b/src/config/model.rs
-index e56ac087226af0bb995b6678980eccf828156d92..2751ab2cadc32380db14644d98703bb86ca6a02e 100644
+index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373c54aef97 100644
 --- a/src/config/model.rs
 +++ b/src/config/model.rs
-@@ -19,15 +19,6 @@ pub enum UpdateChannelConfig {
-     Preview,
- }
+@@ -11,27 +11,9 @@ use super::{
  
+ pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
+ 
+-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+-#[serde(rename_all = "lowercase")]
+-pub enum UpdateChannelConfig {
+-    #[default]
+-    Stable,
+-    Preview,
+-}
+-
 -impl UpdateChannelConfig {
 -    pub fn as_str(self) -> &'static str {
 -        match self {
@@ -55648,17 +56350,77 @@ index e56ac087226af0bb995b6678980eccf828156d92..2751ab2cadc32380db14644d98703bb8
  #[derive(Debug, Clone, Copy, Deserialize)]
  #[serde(default)]
  pub struct UpdateConfig {
-@@ -1141,7 +1132,6 @@ manifest_check = false
+-    pub channel: UpdateChannelConfig,
+     pub version_check: bool,
+     pub manifest_check: bool,
+ }
+@@ -39,21 +21,12 @@ pub struct UpdateConfig {
+ impl Default for UpdateConfig {
+     fn default() -> Self {
+         Self {
+-            channel: default_update_channel(),
+             version_check: true,
+             manifest_check: true,
+         }
+     }
+ }
+ 
+-fn default_update_channel() -> UpdateChannelConfig {
+-    if cfg!(windows) {
+-        UpdateChannelConfig::Preview
+-    } else {
+-        UpdateChannelConfig::Stable
+-    }
+-}
+-
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+ #[serde(rename_all = "lowercase")]
+ pub enum ToastDelivery {
+@@ -1129,41 +1102,19 @@ mod tests {
+     #[test]
+     fn update_config_defaults_and_parses() {
+         let default_config = Config::default();
+-        assert_eq!(default_config.update.channel, default_update_channel());
+         assert!(default_config.update.version_check);
+         assert!(default_config.update.manifest_check);
+ 
+         let toml = r#"
+ [update]
+-channel = "preview"
+ version_check = false
+ manifest_check = false
  "#;
          let config: Config = toml::from_str(toml).unwrap();
-         assert_eq!(config.update.channel, UpdateChannelConfig::Preview);
+-        assert_eq!(config.update.channel, UpdateChannelConfig::Preview);
 -        assert_eq!(config.update.channel.as_str(), "preview");
          assert!(!config.update.version_check);
          assert!(!config.update.manifest_check);
      }
+ 
+-    #[cfg(windows)]
+-    #[test]
+-    fn windows_update_config_defaults_to_preview() {
+-        let empty: Config = toml::from_str("").unwrap();
+-        let without_update_channel: Config =
+-            toml::from_str("[update]\nversion_check = false").unwrap();
+-
+-        assert_eq!(
+-            Config::default().update.channel,
+-            UpdateChannelConfig::Preview
+-        );
+-        assert_eq!(empty.update.channel, UpdateChannelConfig::Preview);
+-        assert_eq!(
+-            without_update_channel.update.channel,
+-            UpdateChannelConfig::Preview
+-        );
+-    }
+-
+     #[test]
+     fn terminal_default_shell_defaults_empty_and_parses() {
+         let default_config = Config::default();
 diff --git a/src/distribution.rs b/src/distribution.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..4de017f78e032f802d0d8a4f0bb7474202a3d91e
+index 0000000000000000000000000000000000000000..320cf6d97fa808c5aa2c429d75987dacaadcde11
 --- /dev/null
 +++ b/src/distribution.rs
 @@ -0,0 +1,42 @@
@@ -55668,8 +56430,8 @@ index 0000000000000000000000000000000000000000..4de017f78e032f802d0d8a4f0bb74742
 +pub(crate) const UPDATE_CHANNEL: &str = "preview";
 +pub(crate) const PREVIEW_MANIFEST_URL: &str =
 +    "https://raw.githubusercontent.com/hdosys/herdr-win/master/website/preview.json";
-+// herdr-win has no stable channel. Keep dormant stable code fork-owned so an
-+// accidental channel regression fails to parse instead of contacting upstream.
++// Keep dormant upstream stable-feed code fork-owned so an accidental routing
++// regression cannot contact upstream.
 +pub(crate) const STABLE_MANIFEST_URL: &str = PREVIEW_MANIFEST_URL;
 +
 +#[cfg(windows)]
@@ -55705,7 +56467,7 @@ index 0000000000000000000000000000000000000000..4de017f78e032f802d0d8a4f0bb74742
 +    }
 +}
 diff --git a/src/main.rs b/src/main.rs
-index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b585f712ec4 100644
+index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..3ee0fb7789077b37275e91b971457c5535db407b 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -63,6 +63,7 @@ mod cli;
@@ -55732,8 +56494,8 @@ index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b58
 -# Defaults to "stable" on Linux/macOS and "preview" on Windows.
 -# Set explicitly to choose stable releases or opt-in preview builds.
 -# channel = "stable"
-+# The herdr-win update channel and sources are fixed by src/distribution.rs.
-+# User configuration cannot redirect the updater away from the fork preview feed.
++# The herdr-win update source is fixed by src/distribution.rs.
++# User configuration cannot redirect the updater away from the fork release feed.
  
 -# Check herdr.dev for new Herdr versions in the background.
 +# Check the configured herdr-win feed for new versions in the background.
@@ -55748,18 +56510,32 @@ index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b58
      let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
          Ok(args) => args,
          Err(err) => {
-@@ -612,8 +613,8 @@ fn main() -> io::Result<()> {
+@@ -582,13 +583,11 @@ fn main() -> io::Result<()> {
+         println!("       herdr session attach <name>");
+         println!("       herdr completion zsh");
+         println!("       herdr update [--handoff]");
+-        println!("       herdr channel set <stable|preview>");
+         println!("       herdr server stop");
+         println!("       herdr server reload-config");
+         println!("       herdr api <subcommand> ...");
+         println!("       herdr completion <shell>");
+         println!("       herdr config <subcommand> ...");
+-        println!("       herdr channel <subcommand> ...");
+         println!("       herdr workspace <subcommand> ...");
+         println!("       herdr worktree <subcommand> ...");
+         println!("       herdr tab <subcommand> ...");
+@@ -611,10 +610,6 @@ fn main() -> io::Result<()> {
+                 "herdr server stop",
                  "Stop the running server via the API socket",
              ),
-             (
+-            (
 -                "herdr channel set <stable|preview>",
 -                "Choose the stable or preview update channel",
-+                "herdr channel show",
-+                "Show the fixed herdr-win update channel",
-             ),
+-            ),
              (
                  "herdr server reload-config",
-@@ -623,10 +624,6 @@ fn main() -> io::Result<()> {
+                 "Reload config.toml in the running server",
+@@ -623,10 +618,6 @@ fn main() -> io::Result<()> {
                  "herdr config reset-keys",
                  "Back up config.toml and remove custom keybindings",
              ),
@@ -55770,7 +56546,7 @@ index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b58
              (
                  "herdr api <subcommand>",
                  "Inspect socket API metadata and live runtime state",
-@@ -688,7 +685,7 @@ fn main() -> io::Result<()> {
+@@ -688,7 +679,7 @@ fn main() -> io::Result<()> {
      }
  
      if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -55779,6 +56555,14 @@ index dcb647cbdfb69a4babef6a2c0dd764b424c55f6f..54f5ca7c62a747dc261564a7611b8b58
          return Ok(());
      }
  
+@@ -730,7 +721,6 @@ fn main() -> io::Result<()> {
+                 "update",
+                 "status",
+                 "config",
+-                "channel",
+                 "workspace",
+                 "worktree",
+                 "pane",
 diff --git a/src/managed_install.rs b/src/managed_install.rs
 new file mode 100644
 index 0000000000000000000000000000000000000000..fcb64ad4e1e4f551ed12581c5253165bb05d0efc
@@ -63116,6 +63900,119 @@ index 0000000000000000000000000000000000000000..569b245b5b144658ae4f23d5aa798a44
 +fn invalid_data(message: String) -> io::Error {
 +    io::Error::new(io::ErrorKind::InvalidData, message)
 +}
+diff --git a/src/product_announcements.rs b/src/product_announcements.rs
+index fe338021b46e4d03daaf3608581c784e9d3c7fb4..55313bb159d3d6db5d2c4f3172fdcec353e7c2fc 100644
+--- a/src/product_announcements.rs
++++ b/src/product_announcements.rs
+@@ -99,7 +99,7 @@ pub fn save_manifest_announcement(
+ 
+ pub fn load_unseen_for_current_version() -> Option<ProductAnnouncement> {
+     load_fake_for_current_version()
+-        .or_else(|| load_unseen_from_path(&store_path(), &crate::build_info::version()))
++        .or_else(|| load_unseen_from_path(&store_path(), crate::build_info::release_identity()))
+ }
+ 
+ pub fn mark_seen(version: &str, id: &str) -> io::Result<()> {
+@@ -155,7 +155,7 @@ fn load_fake_for_current_version() -> Option<ProductAnnouncement> {
+         .unwrap_or_else(|| "product announcement preview".to_string());
+ 
+     Some(ProductAnnouncement {
+-        version: crate::build_info::version(),
++        version: crate::build_info::release_identity().to_string(),
+         id,
+         title,
+         body,
+diff --git a/src/release_notes.rs b/src/release_notes.rs
+index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ffa00e3c13 100644
+--- a/src/release_notes.rs
++++ b/src/release_notes.rs
+@@ -71,7 +71,7 @@ fn load_stored_from_path(path: &Path) -> Option<StoredReleaseNotes> {
+ }
+ 
+ pub fn load_latest() -> Option<ReleaseNotes> {
+-    load_latest_from_path(&pending_path(), &crate::build_info::version())
++    load_latest_from_path(&pending_path(), crate::build_info::release_identity())
+ }
+ 
+ fn load_latest_from_path(path: &Path, current_version: &str) -> Option<ReleaseNotes> {
+@@ -88,12 +88,19 @@ fn release_notes_from_stored(
+         return None;
+     }
+ 
+-    let preview = match (
+-        crate::update::Version::parse(&stored.version),
+-        crate::update::Version::parse(current_version),
+-    ) {
+-        (Some(stored_version), Some(current_version)) => stored_version > current_version,
+-        _ => false,
++    let preview = match crate::update::ReleaseVersion::parse(&stored.version) {
++        Some(stored_version) => {
++            crate::update::ReleaseVersion::parse(current_version)
++                .is_some_and(|current_version| stored_version > current_version)
++                || current_version == "local"
++        }
++        None => match (
++            crate::update::Version::parse(&stored.version),
++            crate::update::Version::parse(current_version),
++        ) {
++            (Some(stored_version), Some(current_version)) => stored_version > current_version,
++            _ => false,
++        },
+     };
+ 
+     Some(ReleaseNotes {
+@@ -104,7 +111,7 @@ fn release_notes_from_stored(
+ }
+ 
+ pub fn mark_current_version_seen() -> std::io::Result<()> {
+-    mark_current_version_seen_at(&pending_path(), &crate::build_info::version())
++    mark_current_version_seen_at(&pending_path(), crate::build_info::release_identity())
+ }
+ 
+ fn mark_current_version_seen_at(path: &Path, current_version: &str) -> std::io::Result<()> {
+@@ -227,6 +234,42 @@ mod tests {
+         clear_pending_at(&path).unwrap();
+     }
+ 
++    #[test]
++    fn release_calver_controls_update_ready_state() {
++        let newer = StoredReleaseNotes {
++            version: "2026.08.12.2".to_string(),
++            body: "### Changed\n- One".to_string(),
++            show_on_startup: true,
++        };
++        assert!(
++            release_notes_from_stored(newer, "2026.08.12.1")
++                .expect("notes")
++                .preview
++        );
++
++        let same = StoredReleaseNotes {
++            version: "2026.08.12.2".to_string(),
++            body: "### Changed\n- One".to_string(),
++            show_on_startup: true,
++        };
++        assert!(
++            !release_notes_from_stored(same, "2026.08.12.2")
++                .expect("notes")
++                .preview
++        );
++
++        let local = StoredReleaseNotes {
++            version: "2026.08.12.2".to_string(),
++            body: "### Changed\n- One".to_string(),
++            show_on_startup: true,
++        };
++        assert!(
++            release_notes_from_stored(local, "local")
++                .expect("notes")
++                .preview
++        );
++    }
++
+     #[test]
+     fn marking_current_version_seen_preserves_latest_notes() {
+         let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 index 2f31e76223bbd4125e236810c2c6602d1f2e07a5..5517a26849e0ac6ca2b707a41258e29b28118a62 100644
 --- a/src/remote/attach.rs
@@ -63216,14 +64113,14 @@ index d17bfa91b62a42d32f06bb596315ca02a05c3f96..8ebfaeb5245404eecdfa8037646322b4
                  err.kind(),
                  format!("failed to determine herdr executable path: {err}"),
 diff --git a/src/update.rs b/src/update.rs
-index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ede39cb7c5 100644
+index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..3b92163a19fa6c5d69a4de00b699e368fe75c607 100644
 --- a/src/update.rs
 +++ b/src/update.rs
 @@ -1,6 +1,6 @@
  //! Self-update mechanism.
  //!
 -//! Checks the hosted herdr.dev update manifest for newer versions.
-+//! Checks the configured distribution manifest for newer versions.
++//! Checks the distribution-owned manifest for newer versions.
  //! Manual `herdr update` downloads and installs the binary.
  //! Background checks only surface availability and release notes.
  //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
@@ -63288,7 +64185,76 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  fn fake_release_notes_body(version: &str) -> String {
      let notes_version = env::var(FAKE_UPDATE_NOTES_VERSION_ENV)
          .ok()
-@@ -107,9 +131,9 @@ enum UpdateChannel {
+@@ -95,6 +119,68 @@ impl std::fmt::Display for Version {
+     }
+ }
+ 
++/// Parsed herdr-win CalVer used only for fork release ordering.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++pub(crate) struct ReleaseVersion {
++    year: u16,
++    month: u8,
++    day: u8,
++    sequence: u16,
++}
++
++impl ReleaseVersion {
++    pub(crate) fn parse(value: &str) -> Option<Self> {
++        let mut parts = value.split('.');
++        let (Some(year), Some(month), Some(day), Some(sequence), None) = (
++            parts.next(),
++            parts.next(),
++            parts.next(),
++            parts.next(),
++            parts.next(),
++        ) else {
++            return None;
++        };
++        if year.len() != 4
++            || month.len() != 2
++            || day.len() != 2
++            || sequence.is_empty()
++            || sequence.starts_with('0')
++            || ![year, month, day, sequence]
++                .into_iter()
++                .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
++        {
++            return None;
++        }
++        let release = Self {
++            year: year.parse().ok()?,
++            month: month.parse().ok()?,
++            day: day.parse().ok()?,
++            sequence: sequence.parse().ok()?,
++        };
++        let leap = release.year.is_multiple_of(4)
++            && (!release.year.is_multiple_of(100) || release.year.is_multiple_of(400));
++        let maximum_day = match release.month {
++            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
++            4 | 6 | 9 | 11 => 30,
++            2 if leap => 29,
++            2 => 28,
++            _ => return None,
++        };
++        (release.year > 0 && release.day > 0 && release.day <= maximum_day && release.sequence > 0)
++            .then_some(release)
++    }
++}
++
++impl std::fmt::Display for ReleaseVersion {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        write!(
++            f,
++            "{:04}.{:02}.{:02}.{}",
++            self.year, self.month, self.day, self.sequence
++        )
++    }
++}
++
+ // ---------------------------------------------------------------------------
+ // Update manifest
+ // ---------------------------------------------------------------------------
+@@ -107,9 +193,9 @@ enum UpdateChannel {
  
  impl UpdateChannel {
      fn configured() -> Self {
@@ -63301,7 +64267,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
          }
      }
  
-@@ -125,6 +149,7 @@ impl UpdateChannel {
+@@ -125,6 +211,7 @@ impl UpdateChannel {
  struct AssetRef {
      url: String,
      sha256: Option<String>,
@@ -63309,7 +64275,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  }
  
  impl<'de> Deserialize<'de> for AssetRef {
-@@ -137,6 +162,7 @@ impl<'de> Deserialize<'de> for AssetRef {
+@@ -137,6 +224,7 @@ impl<'de> Deserialize<'de> for AssetRef {
              serde_json::Value::String(url) if !url.trim().is_empty() => Ok(Self {
                  url: url.trim().to_string(),
                  sha256: None,
@@ -63317,7 +64283,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              }),
              serde_json::Value::Object(mut object) => {
                  let url = object
-@@ -146,12 +172,16 @@ impl<'de> Deserialize<'de> for AssetRef {
+@@ -146,12 +234,16 @@ impl<'de> Deserialize<'de> for AssetRef {
                  let sha256 = object
                      .remove("sha256")
                      .and_then(|value| value.as_str().map(str::to_string));
@@ -63334,7 +64300,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
                  })
              }
              _ => Err(serde::de::Error::custom(
-@@ -198,6 +228,7 @@ struct PreviewManifest {
+@@ -198,6 +290,7 @@ struct PreviewManifest {
      channel: String,
      base_version: String,
      build_id: String,
@@ -63342,15 +64308,20 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      commit: String,
      built_at: String,
      protocol: u32,
-@@ -266,6 +297,7 @@ impl ManifestReleaseMetadata {
+@@ -264,8 +357,12 @@ impl ManifestReleaseMetadata {
+ /// Information about an available update.
+ #[derive(Debug, Clone)]
  struct ReleaseInfo {
++    // Upstream Herdr SemVer remains the plugin/provenance compatibility version.
      version: Version,
++    // Fork CalVer is the user-visible update and release identity.
      identity: String,
-+    package_version: Option<String>,
++    runtime_identity: String,
++    release_version: Option<ReleaseVersion>,
      channel: UpdateChannel,
      build_id: Option<String>,
      commit: Option<String>,
-@@ -273,6 +305,7 @@ struct ReleaseInfo {
+@@ -273,6 +370,7 @@ struct ReleaseInfo {
      target_protocol: Option<u32>,
      download_url: String,
      sha256: Option<String>,
@@ -63358,7 +64329,15 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      notes_body: String,
  }
  
-@@ -283,11 +316,11 @@ impl ReleaseInfo {
+@@ -280,14 +378,19 @@ impl ReleaseInfo {
+     fn label(&self) -> &str {
+         &self.identity
+     }
++
++    #[cfg(not(windows))]
++    fn runtime_identity(&self) -> &str {
++        &self.runtime_identity
++    }
  }
  
  fn fetch_update_manifest() -> Result<UpdateManifest, String> {
@@ -63372,7 +64351,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  }
  
  fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
-@@ -297,6 +330,8 @@ where
+@@ -297,6 +400,8 @@ where
      let output = crate::noninteractive_process::curl_command()
          .args([
              "-sfL",
@@ -63381,7 +64360,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              "--retry",
              "3",
              "--connect-timeout",
-@@ -338,6 +373,94 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
+@@ -338,6 +443,58 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
      }
  }
  
@@ -63401,43 +64380,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +    else {
 +        return false;
 +    };
-+    let mut fields = version.split('.');
-+    let (Some(year), Some(month), Some(day), Some(sequence), None) = (
-+        fields.next(),
-+        fields.next(),
-+        fields.next(),
-+        fields.next(),
-+        fields.next(),
-+    ) else {
-+        return false;
-+    };
-+    if year.len() != 4
-+        || month.len() != 2
-+        || day.len() != 2
-+        || ![year, month, day, sequence]
-+            .into_iter()
-+            .all(|field| !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit()))
-+        || !matches!(sequence.as_bytes().first(), Some(b'1'..=b'9'))
-+    {
-+        return false;
-+    }
-+    let (Ok(year), Ok(month), Ok(day)) =
-+        (year.parse::<i32>(), month.parse::<u8>(), day.parse::<u8>())
-+    else {
-+        return false;
-+    };
-+    if year == 0 {
-+        return false;
-+    }
-+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-+    let maximum_day = match month {
-+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-+        4 | 6 | 9 | 11 => 30,
-+        2 if leap_year => 29,
-+        2 => 28,
-+        _ => return false,
-+    };
-+    day != 0 && day <= maximum_day
++    ReleaseVersion::parse(version).is_some()
 +}
 +
 +#[cfg(windows)]
@@ -63476,7 +64419,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<ReleaseInfo>, String> {
      let current = Version::current();
      let latest = Version::parse(&manifest.version)
-@@ -356,16 +479,19 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+@@ -356,16 +513,20 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
      }
  
      let (os, arch) = platform_target();
@@ -63492,12 +64435,13 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  
      Ok(Some(ReleaseInfo {
          identity: latest.to_string(),
++        runtime_identity: latest.to_string(),
          version: latest,
-+        package_version: None,
++        release_version: None,
          channel: UpdateChannel::Stable,
          build_id: None,
          commit: None,
-@@ -373,6 +499,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+@@ -373,6 +534,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
          target_protocol: manifest.protocol,
          download_url,
          sha256: asset.sha256.clone(),
@@ -63505,10 +64449,16 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
          notes_body,
      }))
  }
-@@ -393,6 +520,61 @@ fn preview_display_version(base_version: &str, build_id: &str) -> String {
-     )
+@@ -385,12 +547,35 @@ fn stable_channel_should_install(
+     installed_is_preview || latest > current
  }
  
+-fn preview_display_version(base_version: &str, build_id: &str) -> String {
+-    format!(
+-        "{}-preview.{}",
+-        base_version.trim_start_matches('v'),
+-        build_id
+-    )
 +fn is_fork_build_id(value: &str) -> bool {
 +    let mut parts = value.split('.');
 +    let Some(upstream) = parts.next() else {
@@ -63528,81 +64478,50 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 +}
 +
-+fn is_herdr_win_release_version(value: &str) -> bool {
-+    let mut parts = value.split('.');
-+    let Some(year) = parts.next() else {
-+        return false;
++fn preview_release_should_install(
++    latest: ReleaseVersion,
++    current: Option<&str>,
++) -> Result<bool, String> {
++    let Some(current) = current else {
++        return Ok(true);
 +    };
-+    let Some(month) = parts.next() else {
-+        return false;
-+    };
-+    let Some(day) = parts.next() else {
-+        return false;
-+    };
-+    let Some(revision) = parts.next() else {
-+        return false;
-+    };
-+
-+    parts.next().is_none()
-+        && year.len() == 4
-+        && month.len() == 2
-+        && day.len() == 2
-+        && year.bytes().all(|byte| byte.is_ascii_digit())
-+        && month.bytes().all(|byte| byte.is_ascii_digit())
-+        && day.bytes().all(|byte| byte.is_ascii_digit())
-+        && revision
-+            .bytes()
-+            .next()
-+            .is_some_and(|byte| (b'1'..=b'9').contains(&byte))
-+        && revision.bytes().all(|byte| byte.is_ascii_digit())
-+}
-+
-+fn preview_transition_may_be_stale(current: &str, latest: &str, current_is_archived: bool) -> bool {
-+    current != latest
-+        && is_fork_build_id(current)
-+        && is_fork_build_id(latest)
-+        && !current_is_archived
-+}
-+
++    let current = ReleaseVersion::parse(current)
++        .ok_or_else(|| format!("invalid compiled herdr-win release version: {current}"))?;
++    Ok(latest > current)
+ }
+ 
  fn release_info_from_preview_manifest(
-     manifest: &PreviewManifest,
- ) -> Result<Option<ReleaseInfo>, String> {
-@@ -403,14 +585,24 @@ fn release_info_from_preview_manifest(
+@@ -403,27 +588,32 @@ fn release_info_from_preview_manifest(
          ));
      }
      let build_id = manifest.build_id.trim();
 -    if build_id.is_empty() {
 -        return Err("preview manifest build_id is empty".into());
+-    }
+-    if crate::build_info::is_preview()
+-        && crate::build_info::build_id().is_some_and(|current| current == build_id)
+-    {
+-        return Ok(None);
 +    if !is_fork_build_id(build_id) {
 +        return Err(
 +            "preview manifest build_id must be two lowercase 12-hex commit prefixes".into(),
 +        );
      }
-     if crate::build_info::is_preview()
-         && crate::build_info::build_id().is_some_and(|current| current == build_id)
-     {
-         return Ok(None);
-     }
-+    if let Some(current) = crate::build_info::build_id() {
-+        if preview_transition_may_be_stale(current, build_id, manifest.builds.contains_key(current))
-+        {
-+            return Err(format!(
-+                "preview manifest does not include current build {current}; refusing a possible downgrade"
-+            ));
-+        }
-+    }
- 
+-
      let version = Version::parse(&manifest.base_version).ok_or_else(|| {
          format!(
-@@ -418,12 +610,18 @@ fn release_info_from_preview_manifest(
+             "invalid base_version in preview manifest: {}",
              manifest.base_version
          )
      })?;
-+    if !is_herdr_win_release_version(&manifest.release_version) {
-+        return Err(format!(
++    let release_version = ReleaseVersion::parse(&manifest.release_version).ok_or_else(|| {
++        format!(
 +            "invalid herdr-win release_version in preview manifest: {}",
 +            manifest.release_version
-+        ));
++        )
++    })?;
++    if !preview_release_should_install(release_version, crate::build_info::release_version())? {
++        return Ok(None);
 +    }
      let notes_body = manifest.notes.trim().to_string();
      if notes_body.is_empty() {
@@ -63614,7 +64533,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      if let Some(archived) = manifest.builds.get(build_id) {
          if archived.base_version != manifest.base_version
              || archived.commit != manifest.commit
-@@ -446,11 +644,14 @@ fn release_info_from_preview_manifest(
+@@ -446,11 +636,15 @@ fn release_info_from_preview_manifest(
                  .and_then(|build| build.assets.get(&asset_key))
          })
          .ok_or_else(|| format!("no binary for {asset_key} in preview manifest"))?;
@@ -63623,13 +64542,15 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      let download_url = asset.url.clone();
  
      Ok(Some(ReleaseInfo {
-         identity: preview_display_version(&manifest.base_version, build_id),
+-        identity: preview_display_version(&manifest.base_version, build_id),
++        identity: release_version.to_string(),
++        runtime_identity: format!("{release_version}+{build_id}"),
          version,
-+        package_version: Some(manifest.release_version.clone()),
++        release_version: Some(release_version),
          channel: UpdateChannel::Preview,
          build_id: Some(build_id.to_string()),
          commit: Some(manifest.commit.clone()),
-@@ -458,6 +659,7 @@ fn release_info_from_preview_manifest(
+@@ -458,6 +652,7 @@ fn release_info_from_preview_manifest(
          target_protocol: Some(manifest.protocol),
          download_url,
          sha256: asset.sha256.clone(),
@@ -63637,7 +64558,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
          notes_body,
      }))
  }
-@@ -529,6 +731,93 @@ fn check_homebrew_latest() -> Result<Option<Version>, String> {
+@@ -529,6 +724,93 @@ fn check_homebrew_latest() -> Result<Option<Version>, String> {
      homebrew_update_from_formula_json(&output.stdout, &current)
  }
  
@@ -63681,7 +64602,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +
 +#[cfg(windows)]
 +fn winget_catalog_has_release(release_version: &str) -> Result<bool, String> {
-+    if !is_herdr_win_release_version(release_version) {
++    if ReleaseVersion::parse(release_version).is_none() {
 +        return Err(format!(
 +            "cannot query WinGet for invalid herdr-win release version {release_version}"
 +        ));
@@ -63731,7 +64652,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  // ---------------------------------------------------------------------------
  // Download + install
  // ---------------------------------------------------------------------------
-@@ -628,53 +917,148 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
+@@ -628,53 +910,148 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
  }
  
  #[cfg(windows)]
@@ -63765,14 +64686,14 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +    root: PathBuf,
 +    path: PathBuf,
 +}
-+
+ 
 +#[cfg(windows)]
 +impl Drop for DownloadedWindowsInstaller {
 +    fn drop(&mut self) {
 +        let _ = fs::remove_dir_all(&self.root);
 +    }
 +}
- 
++
 +#[cfg(windows)]
 +fn create_windows_update_temp_root() -> Result<PathBuf, String> {
 +    let nonce = std::time::SystemTime::now()
@@ -63918,7 +64839,34 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  }
  
  // ---------------------------------------------------------------------------
-@@ -1732,7 +2116,9 @@ fn print_running_session_update_outcomes(
+@@ -1240,7 +1617,7 @@ fn runtime_matches_release(status: &crate::api::RuntimeStatus, release: &Release
+     let protocol_matches = release
+         .target_protocol
+         .is_none_or(|protocol| status.protocol == Some(protocol));
+-    let version_matches = status.version.as_deref() == Some(release.label());
++    let version_matches = status.version.as_deref() == Some(release.runtime_identity());
+     protocol_matches && version_matches
+ }
+ 
+@@ -1474,7 +1851,7 @@ fn live_handoff_server_via_api_for_release_at(
+     let params = ServerLiveHandoffParams {
+         import_exe: Some(updated_exe.display().to_string()),
+         expected_protocol: release.target_protocol,
+-        expected_version: Some(release.label().to_string()),
++        expected_version: Some(release.runtime_identity().to_string()),
+     };
+ 
+     send_server_update_method_at(
+@@ -1561,7 +1938,7 @@ fn wait_for_server_handoff_at(
+         socket_path,
+         timeout,
+         release.target_protocol,
+-        Some(release.label()),
++        Some(release.runtime_identity()),
+     )
+ }
+ 
+@@ -1732,7 +2109,9 @@ fn print_running_session_update_outcomes(
  // ---------------------------------------------------------------------------
  
  pub(crate) fn update_install_command() -> &'static str {
@@ -63929,7 +64877,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
          HOMEBREW_UPDATE_COMMAND
      } else if is_mise_managed_install() {
          MISE_UPDATE_COMMAND
-@@ -1748,6 +2134,11 @@ pub(crate) fn update_install_instruction(install_command: &str) -> String {
+@@ -1748,6 +2127,11 @@ pub(crate) fn update_install_instruction(install_command: &str) -> String {
          HERDR_UPDATE_COMMAND => {
              "detach, run `herdr update`, then follow its restart guidance".to_string()
          }
@@ -63941,10 +64889,28 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
          HOMEBREW_UPDATE_COMMAND => {
              "detach, run `brew update && brew upgrade herdr`, then restart this Herdr session when ready".to_string()
          }
-@@ -1786,6 +2177,28 @@ fn is_mise_managed_install() -> bool {
+@@ -1786,40 +2170,25 @@ fn is_mise_managed_install() -> bool {
      is_mise_managed_exe_path_following_links(&current_exe)
  }
  
+-pub(crate) fn preview_channel_rejection_for_current_install() -> Option<&'static str> {
+-    let Ok(current_exe) = env::current_exe() else {
+-        return None;
+-    };
+-
+-    preview_channel_rejection_for_exe_path(&current_exe)
+-}
+-
+-pub(crate) fn package_manager_channel_update_guidance_for_current_install() -> Option<&'static str>
+-{
+-    if is_homebrew_managed_install() {
+-        Some("Use `brew update && brew upgrade herdr` to update Homebrew installs.")
+-    } else if is_mise_managed_install() {
+-        Some("Use `mise upgrade herdr` to update mise installs.")
+-    } else if is_nix_managed_install() {
+-        Some("Update through Nix to update Nix-managed Herdr installs.")
+-    } else {
+-        None
 +fn is_winget_managed_install() -> Result<bool, String> {
 +    #[cfg(windows)]
 +    {
@@ -63954,9 +64920,22 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +    #[cfg(not(windows))]
 +    {
 +        Ok(false)
-+    }
-+}
-+
+     }
+ }
+ 
+-fn preview_channel_rejection_for_exe_path(path: &Path) -> Option<&'static str> {
+-    if is_homebrew_managed_exe_path_following_links(path) {
+-        Some(
+-            "preview channel is only available for direct Herdr installs; Homebrew installs update through `brew update && brew upgrade herdr`",
+-        )
+-    } else if is_mise_managed_exe_path_following_links(path) {
+-        Some(
+-            "preview channel is only available for direct Herdr installs; mise installs update through `mise upgrade herdr`",
+-        )
+-    } else if is_nix_store_exe_path_following_links(path) {
+-        Some("preview channel is only available for direct Herdr installs; Nix installs update through Nix")
+-    } else {
+-        None
 +fn winget_managed_install_for_guidance() -> bool {
 +    match is_winget_managed_install() {
 +        Ok(managed) => managed,
@@ -63964,38 +64943,80 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +            tracing::warn!(error = %err, "could not inspect WinGet install ownership");
 +            false
 +        }
-+    }
-+}
-+
- pub(crate) fn preview_channel_rejection_for_current_install() -> Option<&'static str> {
-     let Ok(current_exe) = env::current_exe() else {
-         return None;
-@@ -1796,7 +2209,11 @@ pub(crate) fn preview_channel_rejection_for_current_install() -> Option<&'static
+     }
+ }
  
- pub(crate) fn package_manager_channel_update_guidance_for_current_install() -> Option<&'static str>
- {
--    if is_homebrew_managed_install() {
-+    if winget_managed_install_for_guidance() {
-+        Some(
-+            "Use `winget upgrade --id hdosys.herdr-win --exact --source winget` to update WinGet installs.",
-+        )
-+    } else if is_homebrew_managed_install() {
-         Some("Use `brew update && brew upgrade herdr` to update Homebrew installs.")
-     } else if is_mise_managed_install() {
-         Some("Use `mise upgrade herdr` to update mise installs.")
-@@ -1958,6 +2375,11 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
+@@ -1957,42 +2326,24 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
+ 
  /// Manual self-update command (`herdr update`).
  pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
-     let channel = UpdateChannel::configured();
+-    let channel = UpdateChannel::configured();
+-    #[cfg(windows)]
+-    if channel == UpdateChannel::Stable {
+-        return Err(
+-            "Windows builds are preview-only for now; run `herdr channel set preview`".into(),
+-        );
 +    if is_winget_managed_install()? {
 +        return Err(format!(
 +            "self-update is disabled for WinGet installs; run `{WINGET_UPDATE_COMMAND}`"
 +        ));
-+    }
-     #[cfg(windows)]
-     if channel == UpdateChannel::Stable {
+     }
+-
+     if is_homebrew_managed_install() {
+-        if channel == UpdateChannel::Preview {
+-            return Err(
+-                "self-update is disabled for Homebrew installs; preview is only available for direct Herdr installs".into(),
+-            );
+-        }
+         return Err(format!(
+             "self-update is disabled for Homebrew installs; run `{HOMEBREW_UPDATE_COMMAND}`"
+         ));
+     }
+ 
+     if is_mise_managed_install() {
+-        if channel == UpdateChannel::Preview {
+-            return Err(
+-                "self-update is disabled for mise installs; preview is only available for direct Herdr installs".into(),
+-            );
+-        }
+         return Err(format!(
+             "self-update is disabled for mise installs; run `{MISE_UPDATE_COMMAND}`"
+         ));
+     }
+ 
+     if is_nix_managed_install() {
+-        if channel == UpdateChannel::Preview {
+-            return Err(
+-                "self-update is disabled for Nix installs; preview is only available for direct Herdr installs".into(),
+-            );
+-        }
          return Err(
-@@ -2024,22 +2446,20 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+             "self-update is disabled for Nix installs; update with `nix profile upgrade` or update the flake input that provides Herdr".into(),
+         );
+@@ -2002,7 +2353,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+         return Err("run `herdr update` outside herdr after detaching from the session".into());
+     }
+ 
+-    eprintln!("checking {} channel for updates...", channel.as_str());
++    eprintln!("checking for herdr-win updates...");
+ 
+     let current = Version::current();
+ 
+@@ -2015,7 +2366,12 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+     };
+ 
+     if let Some(commit) = &release.commit {
+-        tracing::info!(commit = %commit, build_id = ?release.build_id, "selected preview update build");
++        tracing::info!(
++            commit = %commit,
++            build_id = ?release.build_id,
++            runtime_identity = %release.runtime_identity,
++            "selected preview update build"
++        );
+     }
+     if let Err(e) = crate::release_notes::save_pending(release.label(), &release.notes_body) {
+         tracing::warn!("failed to save pending release notes: {e}");
+@@ -2024,22 +2380,20 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
      #[cfg(windows)]
      {
          let _ = options;
@@ -64030,7 +65051,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      }
  
      #[cfg(not(windows))]
-@@ -2079,6 +2499,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+@@ -2079,6 +2433,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
      Ok(release.version)
  }
  
@@ -64038,7 +65059,32 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
      let status = Command::new(updated_exe)
          .args(["integration", "status", "--outdated-only"])
-@@ -2137,6 +2558,17 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2118,7 +2473,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+     if is_homebrew_managed_install() {
+         if configured_channel == UpdateChannel::Preview {
+             crate::logging::update_check_failed(
+-                "preview channel is not available for Homebrew installs",
++                "herdr-win self-update is not available for Homebrew installs",
+             );
+             return;
+         }
+@@ -2127,16 +2482,31 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+     }
+ 
+     if is_mise_managed_install() && configured_channel == UpdateChannel::Preview {
+-        crate::logging::update_check_failed("preview channel is not available for mise installs");
++        crate::logging::update_check_failed(
++            "herdr-win self-update is not available for mise installs",
++        );
+         return;
+     }
+ 
+     let nix_managed_install = is_nix_managed_install();
+     if nix_managed_install && configured_channel == UpdateChannel::Preview {
+-        crate::logging::update_check_failed("preview channel is not available for Nix installs");
++        crate::logging::update_check_failed(
++            "herdr-win self-update is not available for Nix installs",
++        );
          return;
      }
  
@@ -64056,19 +65102,20 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      let release = match check_latest() {
          Ok(Some(r)) => r,
          Ok(None) => return,
-@@ -2146,8 +2578,37 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2146,8 +2516,38 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
          }
      };
  
 +    #[cfg(windows)]
 +    if winget_managed_install {
-+        let Some(release_version) = release.package_version.as_deref() else {
++        let Some(release_version) = release.release_version else {
 +            crate::logging::update_check_failed(
 +                "preview feed did not identify the target herdr-win release version",
 +            );
 +            return;
 +        };
-+        match winget_catalog_has_release(release_version) {
++        let release_version = release_version.to_string();
++        match winget_catalog_has_release(&release_version) {
 +            Ok(true) => {}
 +            Ok(false) => {
 +                tracing::info!(
@@ -64090,11 +65137,11 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +
      crate::logging::update_available(release.label());
      tracing::info!(
-+        package_version = ?release.package_version,
++        release_version = ?release.release_version,
          "new {} build available at {}",
          release.channel.as_str(),
          release.download_url
-@@ -2163,9 +2624,17 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2163,9 +2563,17 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
      );
  
      // Notify the TUI — blocking_send is safe from a std::thread
@@ -64113,7 +65160,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      });
  }
  
-@@ -2246,6 +2715,245 @@ fn platform_target() -> (&'static str, &'static str) {
+@@ -2246,6 +2654,312 @@ fn platform_target() -> (&'static str, &'static str) {
  // Tests
  // ---------------------------------------------------------------------------
  
@@ -64130,23 +65177,9 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +    }
 +
 +    #[test]
-+    fn preview_transition_rejects_unknown_older_manifest() {
-+        assert!(preview_transition_may_be_stale(
-+            "dc2506ea8cb5.db56546f1a7e",
-+            "e536bd8bd99d.d87208e06674",
-+            false
-+        ));
-+        assert!(!preview_transition_may_be_stale(
-+            "e536bd8bd99d.d87208e06674",
-+            "dc2506ea8cb5.db56546f1a7e",
-+            true
-+        ));
-+    }
-+
-+    #[test]
 +    fn herdr_win_release_version_requires_exact_calver() {
-+        for valid in ["2026.08.04.1", "2026.08.04.4294967296"] {
-+            assert!(is_herdr_win_release_version(valid), "{valid}");
++        for valid in ["2026.08.04.1", "2028.02.29.65535"] {
++            assert!(ReleaseVersion::parse(valid).is_some(), "{valid}");
 +        }
 +        for invalid in [
 +            "v2026.08.04.1",
@@ -64157,9 +65190,35 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +            "2026.08.04.-1",
 +            "2026.08.04.1 ",
 +            "2026.08.04.1.2",
++            "2026.02.29.1",
++            "2026.08.04.65536",
 +        ] {
-+            assert!(!is_herdr_win_release_version(invalid), "{invalid}");
++            assert!(ReleaseVersion::parse(invalid).is_none(), "{invalid}");
 +        }
++        assert!(
++            ReleaseVersion::parse("2026.08.05.1").unwrap()
++                > ReleaseVersion::parse("2026.08.04.99").unwrap()
++        );
++    }
++
++    #[test]
++    fn published_preview_rejects_equal_or_older_calver() {
++        let latest = ReleaseVersion::parse("2026.08.12.2").unwrap();
++
++        assert_eq!(preview_release_should_install(latest, None), Ok(true));
++        assert_eq!(
++            preview_release_should_install(latest, Some("2026.08.12.1")),
++            Ok(true)
++        );
++        assert_eq!(
++            preview_release_should_install(latest, Some("2026.08.12.2")),
++            Ok(false)
++        );
++        assert_eq!(
++            preview_release_should_install(latest, Some("2026.08.13.1")),
++            Ok(false)
++        );
++        assert!(preview_release_should_install(latest, Some("not-calver")).is_err());
 +    }
 +
 +    #[test]
@@ -64238,7 +65297,10 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +    #[test]
 +    fn windows_manifest_requires_fork_nsis_asset_and_sha256() {
 +        assert!(is_herdr_win_setup_asset_name(
-+            "herdr-win_v2026.07.31.4294967296_windows_amd64_setup.exe"
++            "herdr-win_v2026.07.31.65535_windows_amd64_setup.exe"
++        ));
++        assert!(!is_herdr_win_setup_asset_name(
++            "herdr-win_v2026.07.31.65536_windows_amd64_setup.exe"
 +        ));
 +        assert!(!is_herdr_win_setup_asset_name(
 +            "herdr-win_v2026.07.31.+1_windows_amd64_setup.exe"
@@ -64328,11 +65390,63 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
 +            .download_url
 +            .ends_with("herdr-win_v2026.07.31.1_windows_amd64_setup.exe"));
 +        assert_eq!(release.asset_format.as_deref(), Some("nsis"));
-+        assert_eq!(release.package_version.as_deref(), Some("2026.07.31.1"));
++        assert_eq!(
++            release.release_version,
++            ReleaseVersion::parse("2026.07.31.1")
++        );
 +        assert_eq!(
 +            release.sha256.as_deref(),
 +            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 +        );
++    }
++
++    #[test]
++    fn published_preview_uses_calver_for_update_identity() {
++        let current_build_id = crate::build_info::build_id().unwrap_or("111111111111.aaaaaaaaaaaa");
++        let build_id = if current_build_id == "bbbbbbbbbbbb.222222222222" {
++            "cccccccccccc.333333333333"
++        } else {
++            "bbbbbbbbbbbb.222222222222"
++        };
++        let assets = BTreeMap::from([(
++            update_asset_key(platform_target().0, platform_target().1),
++            AssetRef {
++                url: if cfg!(windows) {
++                    format!(
++                        "{}v2026.08.12.2/herdr-win_v2026.08.12.2_windows_amd64_setup.exe",
++                        crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
++                    )
++                } else {
++                    "https://example.com/herdr".to_string()
++                },
++                sha256: Some("a".repeat(64)),
++                format: cfg!(windows).then(|| "nsis".to_string()),
++            },
++        )]);
++        let manifest = PreviewManifest {
++            channel: "preview".to_string(),
++            base_version: "9.9.9".to_string(),
++            build_id: build_id.to_string(),
++            release_version: "2026.08.12.2".to_string(),
++            commit: "b".repeat(40),
++            built_at: "2026-08-12T00:00:00Z".to_string(),
++            protocol: crate::protocol::PROTOCOL_VERSION,
++            notes: "### Changed\n- CalVer update".to_string(),
++            assets,
++            builds: BTreeMap::new(),
++        };
++
++        let release = release_info_from_preview_manifest(&manifest)
++            .expect("valid manifest")
++            .expect("local or older published build sees newer CalVer");
++        assert_eq!(release.label(), "2026.08.12.2");
++        assert_eq!(release.runtime_identity, format!("2026.08.12.2+{build_id}"));
++        assert_eq!(
++            release.release_version,
++            ReleaseVersion::parse("2026.08.12.2")
++        );
++        assert_eq!(release.build_id.as_deref(), Some(build_id));
++        assert_eq!(release.version, Version::parse("9.9.9").unwrap());
 +    }
 +
 +    #[test]
@@ -64359,11 +65473,12 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
  #[cfg(all(test, unix))]
  mod tests {
      use super::*;
-@@ -2319,12 +3027,14 @@ mod tests {
+@@ -2319,12 +3033,15 @@ mod tests {
          ReleaseInfo {
              version: Version::parse(version).unwrap(),
              identity: version.to_string(),
-+            package_version: None,
++            runtime_identity: version.to_string(),
++            release_version: None,
              channel: UpdateChannel::Stable,
              build_id: None,
              commit: None,
@@ -64374,7 +65489,30 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              notes_body: "### Changed\n- One".to_string(),
          }
      }
-@@ -2598,22 +3308,6 @@ mod tests {
+@@ -2512,22 +3229,6 @@ mod tests {
+         assert!(is_package_manager_managed_exe_path(path));
+     }
+ 
+-    #[test]
+-    fn preview_channel_is_rejected_for_package_manager_paths() {
+-        let homebrew = Path::new("/opt/homebrew/Cellar/herdr/0.6.6/bin/herdr");
+-        let mise = Path::new("/home/user/.local/share/mise/installs/herdr/0.6.6/bin/herdr");
+-        let nix = Path::new("/nix/store/abc123-herdr-0.6.6/bin/herdr");
+-        let direct = Path::new("/home/user/.local/bin/herdr");
+-
+-        assert!(preview_channel_rejection_for_exe_path(homebrew)
+-            .is_some_and(|message| message.contains("Homebrew")));
+-        assert!(preview_channel_rejection_for_exe_path(mise)
+-            .is_some_and(|message| message.contains("mise")));
+-        assert!(preview_channel_rejection_for_exe_path(nix)
+-            .is_some_and(|message| message.contains("Nix")));
+-        assert!(preview_channel_rejection_for_exe_path(direct).is_none());
+-    }
+-
+     #[test]
+     fn non_nix_store_path_is_not_detected() {
+         let path = Path::new("/usr/local/bin/herdr");
+@@ -2598,22 +3299,6 @@ mod tests {
          assert_eq!(body, "### Fixed\n- Brew notes");
      }
  
@@ -64397,11 +65535,12 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
      #[test]
      fn fake_release_notes_default_to_real_large_changelog_section() {
          let _guard = env_lock().lock().unwrap();
-@@ -2696,12 +3390,14 @@ mod tests {
+@@ -2696,12 +3381,15 @@ mod tests {
          let compatible_release = ReleaseInfo {
              version: Version::parse("0.5.6").unwrap(),
              identity: "0.5.6".to_string(),
-+            package_version: None,
++            runtime_identity: "0.5.6".to_string(),
++            release_version: None,
              channel: UpdateChannel::Stable,
              build_id: None,
              commit: None,
@@ -64412,11 +65551,12 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              notes_body: "### Changed\n- One".to_string(),
          };
          let incompatible_release = ReleaseInfo {
-@@ -2938,12 +3634,14 @@ mod tests {
+@@ -2938,12 +3626,15 @@ mod tests {
          let release = ReleaseInfo {
              version: Version::parse("0.5.6").unwrap(),
              identity: "0.5.6".to_string(),
-+            package_version: None,
++            runtime_identity: "0.5.6".to_string(),
++            release_version: None,
              channel: UpdateChannel::Stable,
              build_id: None,
              commit: None,
@@ -64427,11 +65567,12 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              notes_body: "### Changed\n- One".to_string(),
          };
          let plan = RunningServerUpdatePlan {
-@@ -3073,12 +3771,14 @@ mod tests {
+@@ -3073,12 +3764,15 @@ mod tests {
          let release = ReleaseInfo {
              version: Version::parse("9.8.7").unwrap(),
              identity: "9.8.7".to_string(),
-+            package_version: None,
++            runtime_identity: "9.8.7".to_string(),
++            release_version: None,
              channel: UpdateChannel::Stable,
              build_id: None,
              commit: None,
@@ -64442,7 +65583,15 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
              notes_body: "### Changed\n- One".to_string(),
          };
  
-@@ -3387,7 +4087,8 @@ mod tests {
+@@ -3380,14 +4074,15 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn preview_manifest_reports_update_when_build_id_differs() {
++    fn preview_manifest_reports_release_calver() {
+         let (os, arch) = platform_target();
+         let asset_key = format!("{os}-{arch}");
+         let json = format!(
              r####"{{
                  "channel": "preview",
                  "base_version": "9.9.9",
@@ -64452,7 +65601,7 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
                  "commit": "abcdef1234567890",
                  "built_at": "2026-06-02T03:00:00Z",
                  "protocol": 77,
-@@ -3399,7 +4100,7 @@ mod tests {
+@@ -3399,7 +4094,7 @@ mod tests {
                      }}
                  }},
                  "builds": {{
@@ -64461,16 +65610,126 @@ index 2120fb3c9cad9fd20cfae7dee307298120d7fca6..6cb62f46daafa763deab9fc83aa0d3ed
                          "base_version": "9.9.9",
                          "commit": "abcdef1234567890",
                          "built_at": "2026-06-02T03:00:00Z",
-@@ -3421,7 +4122,8 @@ mod tests {
+@@ -3421,7 +4116,15 @@ mod tests {
              .expect("preview update");
  
          assert_eq!(release.channel, UpdateChannel::Preview);
 -        assert_eq!(release.identity, "9.9.9-preview.2026-06-02-abcdef123456");
-+        assert_eq!(release.identity, "9.9.9-preview.abcdef123456.7890abcdef12");
-+        assert_eq!(release.package_version.as_deref(), Some("2026.08.04.3"));
++        assert_eq!(release.identity, "2026.08.04.3");
++        assert_eq!(
++            release.runtime_identity,
++            "2026.08.04.3+abcdef123456.7890abcdef12"
++        );
++        assert_eq!(
++            release.release_version,
++            ReleaseVersion::parse("2026.08.04.3")
++        );
          assert_eq!(release.target_protocol, Some(77));
          assert_eq!(release.sha256.as_deref(), Some("deadbeef"));
      }
+diff --git a/tests/api_ping.rs b/tests/api_ping.rs
+index 1033628a924307791197c9476242a8a2bdfcf11a..997d9c724ec07d72784267a5fa1c368cbd05bdc3 100644
+--- a/tests/api_ping.rs
++++ b/tests/api_ping.rs
+@@ -301,7 +301,16 @@ fn ping_over_socket_returns_version() {
+     );
+     assert_eq!(value["id"], "req_1");
+     assert_eq!(value["result"]["type"], "pong");
+-    assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
++    let expected_version = match (
++        option_env!("HERDR_RELEASE_VERSION"),
++        option_env!("HERDR_BUILD_ID"),
++    ) {
++        (Some(release), Some(build)) => format!("{release}+{build}"),
++        (Some(release), None) => release.to_string(),
++        (None, Some(build)) => format!("local+{build}"),
++        (None, None) => "local".to_string(),
++    };
++    assert_eq!(value["result"]["version"], expected_version);
+     // Intentionally hardcoded so wire protocol bumps require updating this test.
+     // Changing this value means old clients/servers are no longer compatible.
+     assert_eq!(value["result"]["protocol"], 19);
+diff --git a/tests/cli/sessions.rs b/tests/cli/sessions.rs
+index 934d7e27775896f4b4ca796b20e66a65e457db9d..0b1935786e1aadd8aaca94efe6957261a8a71ac5 100644
+--- a/tests/cli/sessions.rs
++++ b/tests/cli/sessions.rs
+@@ -375,6 +375,15 @@ fn status_commands_report_client_and_server_versions() {
+ 
+     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+     wait_for_socket(&socket_path, Duration::from_secs(5));
++    let expected_version = match (
++        option_env!("HERDR_RELEASE_VERSION"),
++        option_env!("HERDR_BUILD_ID"),
++    ) {
++        (Some(release), Some(build)) => format!("{release}+{build}"),
++        (Some(release), None) => release.to_string(),
++        (None, Some(build)) => format!("local+{build}"),
++        (None, None) => "local".to_string(),
++    };
+ 
+     let full = run_cli(&socket_path, &["status"]);
+     assert!(
+@@ -385,7 +394,7 @@ fn status_commands_report_client_and_server_versions() {
+     let full_stdout = String::from_utf8_lossy(&full.stdout);
+     assert!(full_stdout.contains("client:\n"), "stdout: {full_stdout}");
+     assert!(
+-        full_stdout.contains(&format!("  version: {}", env!("CARGO_PKG_VERSION"))),
++        full_stdout.contains(&format!("  version: {expected_version}")),
+         "stdout: {full_stdout}"
+     );
+     assert!(
+@@ -418,7 +427,7 @@ fn status_commands_report_client_and_server_versions() {
+         "stdout: {server_stdout}"
+     );
+     assert!(
+-        server_stdout.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))),
++        server_stdout.contains(&format!("version: {expected_version}")),
+         "stdout: {server_stdout}"
+     );
+     assert!(
+@@ -430,7 +439,7 @@ fn status_commands_report_client_and_server_versions() {
+     assert!(client.status.success());
+     let client_stdout = String::from_utf8_lossy(&client.stdout);
+     assert!(
+-        client_stdout.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))),
++        client_stdout.contains(&format!("version: {expected_version}")),
+         "stdout: {client_stdout}"
+     );
+     assert!(
+@@ -443,8 +452,12 @@ fn status_commands_report_client_and_server_versions() {
+     );
+ 
+     let full_json = run_cli_json(&socket_path, &["status", "--json"]);
+-    assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(full_json["client"]["protocol"], 19);
++    assert_eq!(full_json["client"]["version"], expected_version);
++    assert_eq!(
++        full_json["client"]["herdr_version"],
++        env!("CARGO_PKG_VERSION")
++    );
++    assert_eq!(full_json["client"]["protocol"], CURRENT_PROTOCOL);
+     assert_eq!(full_json["server"]["status"], "running");
+     assert_eq!(full_json["server"]["running"], true);
+     assert_eq!(full_json["server"]["compatible"], true);
+@@ -457,13 +470,14 @@ fn status_commands_report_client_and_server_versions() {
+ 
+     let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
+     assert_eq!(server_json["status"], "running");
+-    assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(server_json["protocol"], 19);
++    assert_eq!(server_json["version"], expected_version);
++    assert_eq!(server_json["protocol"], CURRENT_PROTOCOL);
+     assert_eq!(server_json["compatible"], true);
+ 
+     let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
+-    assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(client_json["protocol"], 19);
++    assert_eq!(client_json["version"], expected_version);
++    assert_eq!(client_json["herdr_version"], env!("CARGO_PKG_VERSION"));
++    assert_eq!(client_json["protocol"], CURRENT_PROTOCOL);
+     assert!(client_json["binary"]
+         .as_str()
+         .is_some_and(|path| !path.is_empty()));
 -- 
 2.55.0.windows.3
 

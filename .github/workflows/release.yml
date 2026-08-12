@@ -296,6 +296,10 @@ jobs:
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_cli_version_leads_with_calver
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr local_cli_version_retains_build_provenance
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr fork_distribution_locks_the_existing_preview_channel
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr runtime_identity_separates_release_order_from_exact_build
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_preview_rejects_equal_or_older_calver
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr client_status_separates_release_compatibility_and_build_identity
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr release_calver_controls_update_ready_state
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr winget_catalog
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr herdr_win_release_version
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr windows_
@@ -985,6 +989,9 @@ jobs:
             "$metadata" >/dev/null
 
           release_version="$(jq -er .release_version "$metadata")"
+          python3 control/scripts/preview.py require-newer-herdr-win-release \
+            --release-version "$release_version" \
+            --manifest control/website/preview.json
           asset_names_json="$(jq -cS .asset_names "$metadata")"
           expected_names="$(python3 control/scripts/preview.py herdr-win-asset-names \
             --release-version "$release_version" | jq -cS .)"
@@ -1737,7 +1744,7 @@ jobs:
           $env:HERDR_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "herdr-win-update-install"
           Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
           $output = Invoke-BoundedCaptured -FilePath (Join-Path $stage "herdr.exe") -Arguments @("update")
-          $expected = "already up to date ($env:BASE_VERSION-preview.$env:BUILD_ID)"
+          $expected = "already up to date ($env:RELEASE_VERSION+$env:BUILD_ID)"
           if ($output -notlike "*$expected*") {
             throw "updater did not confirm the published fork build: $output"
           }

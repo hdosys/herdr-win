@@ -12,7 +12,7 @@ tests remain the detailed implementation truth.
 - herdr-win is an unofficial, upstream-first Windows distribution of Herdr, not a
   separate product line. It exists to advance Herdr's Windows support through a
   small patch set designed to remain reviewable and suitable for upstream.
-- Fork identity appears in repository, release, update-channel, Windows setup, and
+- Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
   `herdr` and stay compatible with upstream.
@@ -113,6 +113,14 @@ tests remain the detailed implementation truth.
   except Active and optional Pending. Busy or ambiguous content is preserved and
   reported. A hard process-tree kill leaves pending state recoverable for the next
   safe launch or setup. Update never terminates active Herdr sessions.
+- The installed distribution owns its update feed. A herdr-win binary has no
+  user-selectable stable/preview channel or `update.channel` setting and cannot be
+  redirected to official Herdr update sources. CalVer `YYYY.MM.DD.N` orders fork
+  releases: a published binary accepts only a newer feed CalVer, while a local
+  build may install the latest published release. The runtime build ID remains the
+  exact immutable payload and matching remote-asset identity, upstream Cargo
+  SemVer remains plugin/provenance compatibility metadata, and the wire protocol
+  remains the client/server compatibility gate.
 - A copy installed by WinGet updates only through
   `winget upgrade --id hdosys.herdr-win --exact --source winget`; `herdr update`
   refuses to replace package-managed bytes. A newer GitHub release does not create

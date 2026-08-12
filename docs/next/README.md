@@ -84,6 +84,8 @@ herdr
 
 Published builds report `herdr-win <CalVer> (Herdr <upstream-version>)`. Local test builds include their build ID when available, as in `herdr-win local (Herdr <upstream-version>, build <build-id>)`, and omit that clause otherwise. Integrations can use the stable `herdr-win ` prefix to identify this distribution and its Windows-specific features.
 
+The installed distribution owns its update feed. herdr-win has no user-selectable update channel and cannot be redirected to official Herdr update sources through config. CalVer orders fork releases, the build ID identifies the exact immutable runtime and matching remote assets, and the wire protocol gates client/server compatibility.
+
 Running a newer setup over a current managed installation updates it in place and repairs incomplete current installer registration.
 
 For setup downloaded directly from Releases, use `herdr update` from an ordinary terminal after detaching from active Herdr sessions. Updates preserve running sessions and activate the new verified snapshot when it is safe. A WinGet-owned installation instead updates through:

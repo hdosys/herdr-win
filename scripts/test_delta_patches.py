@@ -291,7 +291,23 @@ class DeltaPatchTests(unittest.TestCase):
         )
         self.assertIn("--bin herdr published_cli_version_leads_with_calver", workflow)
         self.assertIn("--bin herdr local_cli_version_retains_build_provenance", workflow)
+        self.assertIn(
+            "--bin herdr runtime_identity_separates_release_order_from_exact_build",
+            workflow,
+        )
+        self.assertIn(
+            "--bin herdr published_preview_rejects_equal_or_older_calver",
+            workflow,
+        )
+        self.assertIn(
+            "--bin herdr client_status_separates_release_compatibility_and_build_identity",
+            workflow,
+        )
+        self.assertIn(
+            "--bin herdr release_calver_controls_update_ready_state", workflow
+        )
         self.assertIn("herdr-win-asset-names", workflow)
+        self.assertIn("require-newer-herdr-win-release", workflow)
         self.assertIn('tag="v${RELEASE_VERSION}"', workflow)
         preview_source = (PROJECT_ROOT / "scripts" / "preview.py").read_text(
             encoding="utf-8"

@@ -127,14 +127,20 @@ The retained candidate compiles that CalVer into every platform binary.
 setup and Installed Apps use the same CalVer as their primary display version.
 Separately built local artifacts use the literal `local` identity plus their build
 ID when one is available, and must never claim a release CalVer.
+That CalVer is also the fork update-order key. Promotion must reject a candidate
+whose CalVer is equal to or older than the published manifest, and the updater
+must reject an equal or older feed CalVer regardless of build ID. Build ID remains
+the immutable runtime and matching remote-asset key; protocol remains the
+client/server compatibility gate. The distribution feed is fixed at compile time,
+with no `herdr channel` command or `update.channel` setting.
 
 The build fails closed on replay conflict, source drift, or a wrong installer pin.
 Promotion additionally validates the selected successful workflow run and attempt,
 source/control identities, expected file set, and every digest before publication;
 it also fails on missing or mutable assets or feed content that was not fetched and
-verified independently. Runtime builds retain Herdr's preview-channel identity for
-update compatibility, while fork release presentation calls the artifacts
-snapshots; both use only fork-owned update/setup sources.
+verified independently. Runtime builds retain the manifest's `preview` schema token
+for wire-format compatibility, while CalVer owns fork update order and release
+presentation; all builds use only fork-owned update/setup sources.
 
 Manual release work is ephemeral: never create or force-push an integration
 branch, merge upstream into a release branch, resolve replay conflicts

@@ -171,7 +171,7 @@ def build_notes(previous: str, commit: str, build_id: str, base_version: str, re
     return "\n".join(lines).rstrip() + "\n"
 
 
-def herdr_win_asset_names(release_version: str) -> dict[str, str]:
+def parse_herdr_win_release_version(release_version: str) -> tuple[int, int, int, int]:
     match = HERDR_WIN_RELEASE_VERSION_RE.fullmatch(release_version)
     if not match:
         raise ValueError("release_version must use YYYY.MM.DD.N CalVer")
@@ -183,6 +183,19 @@ def herdr_win_asset_names(release_version: str) -> dict[str, str]:
         )
     except ValueError as error:
         raise ValueError("release_version must contain a real UTC calendar date") from error
+    sequence = int(match.group("sequence"))
+    if sequence > 65535:
+        raise ValueError("release_version sequence must be at most 65535")
+    return (
+        int(match.group("year")),
+        int(match.group("month")),
+        int(match.group("day")),
+        sequence,
+    )
+
+
+def herdr_win_asset_names(release_version: str) -> dict[str, str]:
+    parse_herdr_win_release_version(release_version)
     return {
         "linux-x86_64": f"herdr-win_v{release_version}_linux_amd64",
         "linux-aarch64": f"herdr-win_v{release_version}_linux_arm64",
@@ -193,6 +206,25 @@ def herdr_win_asset_names(release_version: str) -> dict[str, str]:
             f"herdr-win_v{release_version}_windows_amd64_setup.exe"
         ),
     }
+
+
+def require_newer_herdr_win_release(
+    release_version: str, current: dict[str, Any]
+) -> None:
+    candidate = parse_herdr_win_release_version(release_version)
+    if "release_version" not in current:
+        return
+    current_text = current["release_version"]
+    if not isinstance(current_text, str):
+        raise ValueError("current manifest has an invalid release_version")
+    try:
+        published = parse_herdr_win_release_version(current_text)
+    except ValueError as error:
+        raise ValueError("current manifest has an invalid release_version") from error
+    if candidate <= published:
+        raise ValueError(
+            f"release_version {release_version} must be newer than published {current_text}"
+        )
 
 
 def candidate_build_id(
@@ -269,6 +301,8 @@ def build_manifest(
     urls = default_asset_urls(repo, tag, release_version)
     assets = asset_objects(urls, shas)
     current = read_json(output) or {}
+    if release_version is not None:
+        require_newer_herdr_win_release(release_version, current)
     current_builds = current.get("builds")
     builds: dict[str, Any] = dict(current_builds) if isinstance(current_builds, dict) else {}
     build = {
@@ -357,6 +391,14 @@ def cmd_asset_names(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_require_newer_release(args: argparse.Namespace) -> int:
+    current = read_json(Path(args.manifest)) or {}
+    if "release_version" not in current:
+        raise ValueError("current manifest is missing release_version")
+    require_newer_herdr_win_release(args.release_version, current)
+    return 0
+
+
 def cmd_candidate_build_id(args: argparse.Namespace) -> int:
     print(
         candidate_build_id(
@@ -401,6 +443,11 @@ def main() -> int:
     asset_names = sub.add_parser("herdr-win-asset-names")
     asset_names.add_argument("--release-version", required=True)
     asset_names.set_defaults(func=cmd_asset_names)
+
+    newer_release = sub.add_parser("require-newer-herdr-win-release")
+    newer_release.add_argument("--release-version", required=True)
+    newer_release.add_argument("--manifest", default="website/preview.json")
+    newer_release.set_defaults(func=cmd_require_newer_release)
 
     build_id = sub.add_parser("candidate-build-id")
     build_id.add_argument("--upstream-sha", required=True)

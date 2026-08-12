@@ -203,7 +203,7 @@ behavior; code and tests remain the detailed implementation truth.
   residual is preserved and reported without changing successful application
   removal into failure. The managed install/runtime tree is not best-effort state:
   its active process and lease checks remain required uninstall gates.
-- `src/distribution.rs` is the single fork channel/source configuration. New
+- `src/distribution.rs` is the single fork update-source configuration. New
   Windows clients consume the separately hashed immutable NSIS asset from the fork
   release; there is no upstream-source fallback. The portable ZIP remains only as
   a user choice and compatibility asset for older immutable clients.
@@ -317,6 +317,12 @@ behavior; code and tests remain the detailed implementation truth.
   Full upstream/control hashes and run/attempt metadata remain the exact provenance
   owners. CalVer owns the human fork release identity; the upstream Cargo version
   remains compatibility/provenance metadata and does not define the herdr-win release.
+- The compiled CalVer also owns update ordering and release-note state. Runtime
+  status and handoff use `<CalVer>+<build-id>` for published candidates and
+  `local[+<build-id>]` for local builds so exact payload matching remains separate
+  from release order. Client status reports upstream Herdr SemVer and build ID as
+  separate fields. The fork exposes no user-selectable update channel or
+  `update.channel` config path.
 - `website/preview.json` is generated channel state and the promotion operation is
   its only writer. Release publication uses the exact tested candidate and fails
   closed on source drift, stale control state, missing/mutable assets, or

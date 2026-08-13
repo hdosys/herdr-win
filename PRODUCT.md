@@ -79,8 +79,11 @@ tests remain the detailed implementation truth.
   value-ownership fact to unowned and rewrites the complete current registration.
   Before setup adds its exact PATH entry it persists one ownership-intent marker;
   Installed Apps registration finalizes that ownership. An interrupted setup
-  therefore claims and later removes only the exact entry it was about to add,
-  while pre-existing equivalent user entries remain unowned. The intent also
+  therefore claims the fixed literal managed path while pre-existing equivalent
+  user entries remain unowned. On uninstall it removes every normalized literal
+  spelling of that fixed path, including case, slash, quote, or trailing-separator
+  variants, so no dead managed-path alias remains. Environment expressions and
+  foreign entries remain preserved. The intent also
   records whether setup created the user `PATH` value itself, so uninstall restores
   an originally absent value as absent instead of leaving an empty registry value.
   Exact rooted literal entries may contain `%`; expandable entries such as
@@ -130,7 +133,7 @@ tests remain the detailed implementation truth.
   preserves existing WinGet ownership rather than creating competing update paths.
   Uninstall removes that ownership with the managed program.
 - Uninstall requires managed sessions to be closed and never terminates them. It
-  removes the managed program, only its own user `PATH` entry, **Herdr Win** Installed
+  removes the managed program, only literal spellings of its own user `PATH` path, **Herdr Win** Installed
   Apps registration, and installer-known `SKILL.md` copies at its managed universal
   and Claude locations. Its single skill-removal checkbox covers both locations and
   starts selected only when every existing copy is installer-known or absent; any
@@ -154,13 +157,20 @@ tests remain the detailed implementation truth.
 ## Interaction and Status
 
 - Keyboard-first terminal operation remains complete end to end.
-- Every supported client can attach to an x86_64 Windows SSH host. Herdr first
-  uses an exact version- and protocol-matching `herdr.exe` from that SSH user's
-  `PATH` or its versioned per-user sidecar. If neither matches, an interactive
-  attach offers to transfer the complete digest-verified Windows portable ZIP
-  into that user's profile without running the managed installer or changing
-  `PATH`; a non-interactive attach never modifies the host. Windows remote hosts
-  do not support live handoff.
+- Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
+  first uses an exact version- and protocol-matching `herdr.exe` from that SSH
+  user's `PATH` or its versioned per-user sidecar. If neither matches, an
+  interactive attach offers to transfer the complete digest-verified Windows
+  portable ZIP into that user's profile without running the managed installer or
+  changing `PATH`; an ordinary non-interactive attach never modifies the host.
+- `herdr --remote <target> --provision` is the explicit configuration-management
+  path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
+  binary, rejects invalid remote configuration before server activation, starts a
+  missing server, reloads configuration when the running binary already matches,
+  and saves then restarts only when binary activation requires it. A non-package-
+  managed local Windows x86_64 build can provision itself to x86_64 or ARM64
+  Windows through Windows emulation. Windows remote hosts do not support live
+  handoff.
 - User-visible state distinguishes waiting, active, mixed, complete, failed,
   cancelled, stopped, and no-op outcomes whenever they require different user
   understanding or action.

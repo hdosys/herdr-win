@@ -30,7 +30,7 @@ The table is intentionally capability-level. The patch files contain the exact i
 | --- | --- | --- |
 | Native ConPTY foundation | ✅ **Upstreamed in Herdr v0.6.9** | Herdr v0.8.0 added the modern app-local ConPTY packaging that herdr-win now reuses instead of carrying a duplicate foundation. |
 | Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Windows appearance, color and cursor fidelity, rendering, and VTI input behavior. |
-| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Upstream master now includes Windows client attach to Linux/macOS and the image bridge. herdr-win adds x86_64 Windows-host detection from every client, exact identity checks, explicit digest-verified portable sidecars, shared named-session lifecycle, and additional named-pipe/backpressure coverage until the next stable refresh minimizes the mailbox. |
+| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Upstream master now includes Windows client attach to Linux/macOS and the image bridge. herdr-win adds x86_64 and ARM64 Windows-host detection from every client, exact identity checks, explicit digest-verified portable sidecars, unattended provision with config validation and reload-or-restart activation, shared named-session lifecycle, and additional named-pipe/backpressure coverage until the next stable refresh minimizes the mailbox. |
 | Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Verified Windows packages, per-user setup, portable archives, package-manager update ownership, and safe runtime handoff. |
 | OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Retry-aware status correlation so active retries stay quiet and terminal failures remain visible. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Cross-platform `curl` transfers ignore user configuration and permit only bounded TLS 1.2+ HTTPS requests and redirects. |
@@ -69,7 +69,15 @@ An upstream refresh is deliberate: select the latest stable release, replay the 
 
 Windows x86_64 is the managed distribution target. Each release also carries matching Linux and macOS binaries for remote endpoints that must speak the same wire protocol.
 
-Every supported client can attach to an x86_64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or a versioned per-user sidecar. When a sidecar is needed, an interactive attach can transfer the complete digest-verified Windows portable ZIP without running setup or changing remote `PATH`; non-interactive attach leaves the host unchanged. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
+Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or a versioned per-user sidecar. When a sidecar is needed, an interactive attach can transfer the complete digest-verified Windows portable ZIP without running setup or changing remote `PATH`; ordinary non-interactive attach leaves the host unchanged. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
+
+For explicit unattended deployment and activation, validate the remote configuration and provision the matching binary with:
+
+```powershell
+herdr --remote workbox --provision --yes --json
+```
+
+Provision starts a missing server, reloads configuration when the running binary already matches, and saves then restarts only when a different binary must be activated.
 
 ### Setup (recommended)
 

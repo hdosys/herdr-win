@@ -45,15 +45,27 @@ behavior; code and tests remain the detailed implementation truth.
 - Mailbox 0003 owns shared remote orchestration, Windows SSH/named-pipe attach,
   startup geometry gating, and bounded clipboard/drop image transport. Every
   client probes a Windows SSH host through explicit PowerShell, accepts only
-  x86_64, and reuses the shared exact-version, protocol, named-session status,
-  stop, and restart policy. It prefers `herdr.exe` from the SSH user's `PATH`,
-  then a build-identity sidecar. Interactive bootstrap transfers the complete
-  digest-bearing portable ZIP with OpenSSH, validates its digest, layout,
-  version, and protocol, and atomically publishes it in a user-owned versioned
-  directory. A lease retains active payloads; inactive exact sidecars may be
-  pruned. The bridge propagates the PowerShell child exit code. This path never
-  runs the managed installer, changes remote `PATH`, adds compatibility layouts,
-  or enables Windows live handoff or OpenSSH control-socket reuse.
+  x86_64 or ARM64, and reuses the shared exact-version, protocol, named-session
+  status, stop, and restart policy. It prefers `herdr.exe` from the SSH user's
+  `PATH`, then a build-identity sidecar. Published bootstrap transfers the complete
+  digest-bearing portable ZIP with OpenSSH, validates its digest, layout, version,
+  and protocol, and atomically publishes it in a user-owned versioned directory.
+  A non-package-managed local Windows x86_64 build instead uses its executable
+  SHA-256 as a development sidecar identity and may run on Windows ARM64 through
+  x64 emulation. Its missing app-local ConPTY bundle intentionally selects the
+  verified system-ConPTY fallback already owned by `portable-pty`.
+- Mailbox 0003 also owns `--remote <target> --provision`, with `--yes` required
+  for unattended mutation and optional `--json` results. Provision validates
+  remote config before activation. No server means start; the same running binary
+  means config reload; a different or unknown running binary means session save,
+  bounded stop, and exact-binary restart. Pong and `status server` expose the
+  resolved server executable for that decision. Persistent Windows server launch
+  always crosses the existing WMI process boundary so no invoking terminal,
+  OpenSSH channel, or job is retained. A lease retains active payloads; inactive
+  exact sidecars may be pruned. The bridge propagates the PowerShell child exit
+  code. This path never runs the managed installer, changes remote `PATH`, adds
+  compatibility layouts, or enables Windows live handoff or OpenSSH control-socket
+  reuse.
 - Mailbox 0004 owns deterministic ConPTY packaging, managed Windows distribution,
   fork update sources, and installer lifecycle.
 - Mailbox 0005 owns OpenCode retry/error lifecycle correlation. It must preserve
@@ -195,11 +207,13 @@ behavior; code and tests remain the detailed implementation truth.
   marker; if publication stops after `PathAdded` but before `PathValueCreated`, the
   exact pending marker completes only that missing fact on retry. Setup or uninstall
   recovery may claim only an exact literal entry while that marker remains.
-  Uninstall compares the raw unexpanded candidate and removes at most one exact
-  rooted owned entry, including a literal path containing `%`. An expandable token
-  such as `%LOCALAPPDATA%\...` remains foreign even when it resolves to the managed
-  directory. Every other entry and its order remain unchanged, and the value is
-  deleted only when setup created it and no concurrent entries remain.
+  Uninstall compares each raw unexpanded candidate and removes every rooted
+  literal spelling that normalizes to the fixed managed path, including case,
+  slash, quote, and trailing-separator variants. A literal owned path may contain
+  `%`; an expandable token such as `%LOCALAPPDATA%\...` remains foreign even when
+  it resolves to the managed directory. Every other entry and its order remain
+  unchanged, and the value is deleted only when setup created it and no concurrent
+  entries remain.
 - Interactive and silent uninstall both preserve `%USERPROFILE%\.herdr` by
   default; the interactive checkbox or `/REMOVE_SETTINGS` explicitly authorizes
   deletion. Settings cleanup stays in the helper's validated filesystem boundary

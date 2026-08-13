@@ -1,67 +1,8 @@
-From 4128faa057f0312d3a568604fecb7ea3eed32c83 Mon Sep 17 00:00:00 2001
+From 8f077e895c5403a2d7b68029430ee128857ba375 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
-Date: Wed, 12 Aug 2026 16:42:58 +0200
+Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
 
-Share remote orchestration across platforms, preserve startup geometry before shell launch, and transport clipboard or dropped images through the existing client protocol.
-
-Detect Windows SSH hosts from every client, require exact version and protocol identity, and offer an explicit complete portable ZIP sidecar without running an installer or changing remote PATH. Reuse the shared named-session server lifecycle while keeping Windows live handoff and SSH control-socket reuse unsupported.
-
-Refs herdrdev/herdr#2409
-
-Refs ogulcancelik/herdr#1947
----
- Cargo.lock                                    |    1 +
- Cargo.toml                                    |    1 +
- .../src/content/docs/configuration.mdx        |    4 +-
- .../src/content/docs/ja/configuration.mdx     |    4 +-
- .../content/docs/ja/persistence-remote.mdx    |   12 +-
- .../src/content/docs/ja/windows-beta.mdx      |   14 +-
- .../src/content/docs/persistence-remote.mdx   |   10 +-
- .../website/src/content/docs/windows-beta.mdx |   14 +-
- .../src/content/docs/zh-cn/configuration.mdx  |    4 +-
- .../content/docs/zh-cn/persistence-remote.mdx |   12 +-
- .../src/content/docs/zh-cn/windows-beta.mdx   |   14 +-
- src/app/agent_resume.rs                       |   11 +-
- src/app/api.rs                                |    3 +-
- src/app/api/layouts.rs                        |    4 +-
- src/app/api/panes.rs                          |    2 +-
- src/app/api/tabs.rs                           |    2 +-
- src/app/api/workspaces.rs                     |   44 +-
- src/app/creation.rs                           |  211 +-
- src/app/input/modal.rs                        |   22 +-
- src/app/mod.rs                                |   42 +-
- src/app/session.rs                            |   18 +-
- src/app/state.rs                              |   11 +-
- src/cli/status.rs                             |   12 +
- src/client/mod.rs                             |  294 +-
- src/ipc.rs                                    |  176 +-
- src/main.rs                                   |    6 +-
- src/platform/fallback.rs                      |   54 +
- src/platform/linux.rs                         |    6 +
- src/platform/macos.rs                         |    6 +
- src/platform/mod.rs                           |   16 +-
- src/platform/unix_common.rs                   |  123 +
- src/platform/windows.rs                       |  192 +-
- src/platform/windows/clipboard_image.rs       |  535 ++
- src/plugin_command.rs                         |    3 +-
- src/remote.rs                                 |  171 +-
- src/remote/attach.rs                          | 4307 +++++++++++++++++
- src/remote/unix.rs                            | 3091 +-----------
- src/remote/windows.rs                         |  268 +
- src/remote/windows_bootstrap.ps1              |  169 +
- src/server/autodetect.rs                      |   48 +-
- src/server/client_transport.rs                |   51 +-
- src/server/clipboard_image.rs                 |   12 +-
- src/server/headless.rs                        |  515 +-
- src/ui.rs                                     |   69 +-
- src/update.rs                                 |    5 +
- 45 files changed, 7149 insertions(+), 3440 deletions(-)
- create mode 100644 src/platform/unix_common.rs
- create mode 100644 src/platform/windows/clipboard_image.rs
- create mode 100644 src/remote/attach.rs
- create mode 100644 src/remote/windows.rs
- create mode 100644 src/remote/windows_bootstrap.ps1
 
 diff --git a/Cargo.lock b/Cargo.lock
 index 980fcb5d966bd6ce04bbe1445ff3a087636c5a7c..fbf3ebcfbea2f8cf905e5308780409f8ccefbef2 100644
@@ -87,6 +28,53 @@ index 84949e2de62652b0202051e106a71711ef5f1c5c..91627ca457ae6a1a782c6c91588d0357
  windows-sys = { version = "0.61.2", features = [
      "Wdk_System_Threading",
      "Win32_Foundation",
+diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
+index 4183c2ba0de983e75edaa55b527dac27dffa0d1d..6aed4c7ff67744b597b1d1d037c74e7d103063c8 100644
+--- a/docs/next/api/herdr-api.schema.json
++++ b/docs/next/api/herdr-api.schema.json
+@@ -8563,6 +8563,13 @@
+           "oneOf": [
+             {
+               "properties": {
++                "binary": {
++                  "default": null,
++                  "type": [
++                    "string",
++                    "null"
++                  ]
++                },
+                 "capabilities": {
+                   "anyOf": [
+                     {
+diff --git a/docs/next/website/src/content/docs/cli-reference.mdx b/docs/next/website/src/content/docs/cli-reference.mdx
+index d0f1509ae6267929b87ae22b103b2c802a963bc8..fe2f2409fbec56e8b54a2073a825557e4210bfac 100644
+--- a/docs/next/website/src/content/docs/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/cli-reference.mdx
+@@ -13,6 +13,7 @@ Most commands print JSON responses. Use them from scripts when you want determin
+ herdr                         # launch or attach to the default session
+ herdr --session work          # launch or attach to a named session
+ herdr --remote workbox        # attach through SSH, using local keybindings
++herdr --remote workbox --provision --yes --json
+ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # single-process escape hatch
+@@ -84,6 +85,7 @@ compinit
+ 
+ ```bash
+ herdr server
++herdr server start
+ herdr server stop
+ herdr server reload-config
+ herdr server agent-manifests [--json]
+@@ -91,7 +93,7 @@ herdr server update-agent-manifests [--json]
+ herdr server reload-agent-manifests
+ ```
+ 
+-`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
++`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `herdr server start` starts the persistent background server if needed and returns after it is ready. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
+ 
+ ## Notifications
+ 
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
 index 69b2b9ed50a086caa14a1853d5eb50c73764b321..42b80bf7f6beff2f7f83e1aa3dd63e67ef277896 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx
@@ -107,6 +95,35 @@ index 69b2b9ed50a086caa14a1853d5eb50c73764b321..42b80bf7f6beff2f7f83e1aa3dd63e67
 +When enabled, `herdr --remote` writes a private temporary SSH config that includes your user and system SSH configs first, then adds fallback `ServerAliveInterval` and `ServerAliveCountMax` values. Your own keepalive settings win. Unix clients also use a private per-attach OpenSSH control socket to reuse the first authenticated connection. Herdr does not use that reuse path on Windows, so Windows clients keep the managed configuration and keepalives but run setup probes as separate SSH connections. Set `manage_ssh_config = false` to run remote attach through plain `ssh`.
  
  ## Keybindings
+ 
+diff --git a/docs/next/website/src/content/docs/ja/cli-reference.mdx b/docs/next/website/src/content/docs/ja/cli-reference.mdx
+index 3cc1e13b32cdfc785a1ada50218045ba9f08f4ad..dab0648268c15df0df9457d6c2985b7acc99f45c 100644
+--- a/docs/next/website/src/content/docs/ja/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/ja/cli-reference.mdx
+@@ -13,6 +13,7 @@ Herdr の CLI は、インテグレーションやエージェントが使うの
+ herdr                         # デフォルトセッションを起動またはアタッチ
+ herdr --session work          # 名前付きセッションを起動またはアタッチ
+ herdr --remote workbox        # SSH 越しにアタッチ (ローカルのキーバインドを使用)
++herdr --remote workbox --provision --yes --json
+ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # シングルプロセスの逃げ道
+@@ -80,6 +81,7 @@ compinit
+ 
+ ```bash
+ herdr server
++herdr server start
+ herdr server stop
+ herdr server reload-config
+ herdr server agent-manifests [--json]
+@@ -87,7 +89,7 @@ herdr server update-agent-manifests [--json]
+ herdr server reload-agent-manifests
+ ```
+ 
+-`herdr server` はヘッドレスサーバーを明示的に起動します。監視下やサービス的な構成で使ってください。`reload-config` はペインを再起動せずにリロード可能な設定を適用します。`agent-manifests` は、アクティブなエージェント検出マニフェストのソース、キャッシュされたリモートバージョン、直近のリモート更新結果を表示します。`update-agent-manifests` はリモートマニフェストの更新を即座に取得し、実行中のサーバーにリロードして、更新後のマニフェスト状態を表示します。生のステータスレスポンスが欲しいときは `--json` を渡してください。`reload-agent-manifests` は、ローカルオーバーライドの編集後にエージェント検出マニフェストを実行中のサーバーにリロードします。
++`herdr server` はヘッドレスサーバーを明示的に起動します。監視下やサービス的な構成で使ってください。`herdr server start` は必要な場合に永続バックグラウンドサーバーを起動し、準備ができてから戻ります。`reload-config` はペインを再起動せずにリロード可能な設定を適用します。`agent-manifests` は、アクティブなエージェント検出マニフェストのソース、キャッシュされたリモートバージョン、直近のリモート更新結果を表示します。`update-agent-manifests` はリモートマニフェストの更新を即座に取得し、実行中のサーバーにリロードして、更新後のマニフェスト状態を表示します。生のステータスレスポンスが欲しいときは `--json` を渡してください。`reload-agent-manifests` は、ローカルオーバーライドの編集後にエージェント検出マニフェストを実行中のサーバーにリロードします。
+ 
+ ## 通知
  
 diff --git a/docs/next/website/src/content/docs/ja/configuration.mdx b/docs/next/website/src/content/docs/ja/configuration.mdx
 index dda1629c537c6807c3a903cc22a5601c4dc9c2b0..137ed74cbcc199d65fb1cb64deca2fde7ac1b59c 100644
@@ -130,10 +147,10 @@ index dda1629c537c6807c3a903cc22a5601c4dc9c2b0..137ed74cbcc199d65fb1cb64deca2fde
  ## キーバインド
  
 diff --git a/docs/next/website/src/content/docs/ja/persistence-remote.mdx b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
-index f8d3ff02f5be343971171672c9f1793384f3357d..57b7f02158ae21bf597ef1305a0ebd5b94fcd847 100644
+index f8d3ff02f5be343971171672c9f1793384f3357d..6043272d5cd389e73aa6e49f70faf481a92a68b3 100644
 --- a/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
-@@ -63,11 +63,15 @@ Host workbox
+@@ -63,11 +63,23 @@ Host workbox
  herdr --remote workbox
  ```
  
@@ -141,9 +158,17 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..57b7f02158ae21bf597ef1305a0ebd5b
 +リモートアタッチは x86_64 と aarch64 の Linux および macOS ホストをサポートします。Herdr はリモートのプラットフォームを確認し、リモートの `PATH` 上にある一致する `herdr` を優先してから、一般的な直接インストール、Homebrew、mise、Nix プロファイルのパスを確認します。一致するバイナリがない場合、対話的な実行では `~/.local/bin/herdr` へのインストールを提案します。非対話的な実行はホストを変更せずに失敗します。`~/.local/bin` がリモートの `PATH` にない場合、Herdr はインストール後に警告します。
  
 -ネイティブ Windows の `herdr --remote` は Windows ベータの範囲外です。Windows からはサーバーに SSH してそこで `herdr` を実行してください。
-+すべての対応クライアントは x86_64 Windows ホストにもアタッチできます。Herdr は最初に、SSH ユーザーの `PATH` またはユーザー所有のバージョン付きサイドカーから、バージョンとプロトコルが完全に一致する `herdr.exe` を使います。どちらも一致しない場合、対話的な実行では、ダイジェスト検証済みの完全な Windows ポータブル ZIP を SSH ユーザーのプロファイルへ転送するか確認します。インストーラーの実行や `PATH` の変更は行いません。非対話的な実行はホストを変更せずに失敗します。ライブハンドオフは引き続き Unix ホスト専用です。
++すべての対応クライアントは x86_64 と ARM64 の Windows ホストにもアタッチできます。Herdr は最初に、SSH ユーザーの `PATH` またはユーザー所有のバージョン付きサイドカーから、バージョンとプロトコルが完全に一致する `herdr.exe` を使います。どちらも一致しない場合、対話的な実行では、ダイジェスト検証済みの完全な Windows ポータブル ZIP を SSH ユーザーのプロファイルへ転送するか確認します。インストーラーの実行や `PATH` の変更は行いません。通常の非対話的アタッチはホストを変更せずに失敗します。ライブハンドオフは引き続き Unix ホスト専用です。
  
 -デフォルトでは、`herdr --remote` はあなたの SSH config を最初に include し、その後にフォールバックのキープアライブ設定を加えた一時的な SSH config を通してブリッジを実行します。既存のユーザーのキープアライブ設定が優先されます。Herdr が生成するブリッジ設定を使わず素の `ssh` を使うには `[remote].manage_ssh_config = false` を設定してください。
++自動化でバイナリの配置とサーバーの有効化を管理する場合は、明示的なプロビジョニングを使います:
++
++```bash
++herdr --remote workbox --provision --yes --json
++```
++
++無人プロビジョニングには `--yes` が必要で、`--json` は省略できます。Herdr は一致するバイナリを配置し、有効化の前にリモート設定を検証します。サーバーがなければ起動し、実行中のサーバーがその同じバイナリを使っていれば設定だけを再読み込みし、別のバイナリを有効化する必要がある場合に限りセッションを保存して再起動します。パッケージ管理されていないローカル Windows x86_64 ビルドは、Windows のエミュレーションを通じて現在の実行ファイルを x86_64 または ARM64 Windows にプロビジョニングできます。公開 Windows ビルドでは引き続き完全なポータブル ZIP を使います。
++
 +Windows からのリモートアタッチでは、既定の `ctrl+v` リモート画像バインドが登録済み PNG または DIB クリップボード画像を既存のクライアントプロトコルで送信し、リモートホストへステージして、そのリモートパスを貼り付けます。PNG、JPEG、GIF、WebP、BMP の絶対パスをひとつドラッグまたは貼り付けた場合も、同じサイズ制限付き転送を使います。対応するクリップボード画像がない場合、テキスト入力はそのまま送られます。ショートカットを変更または無効化するには `keys.remote_image_paste` を設定してください。
 +
 +デフォルトでは、`herdr --remote` はあなたの SSH config を最初に include し、その後にフォールバックのキープアライブ設定を加えた一時的な SSH config を通してリモートセットアップとブリッジを実行します。既存のユーザーのキープアライブ設定が優先されます。Unix クライアントは接続再利用用のプライベートなアタッチ単位コントロールソケットも追加します。Herdr が生成する設定やコントロールソケットを使わず通常の `ssh` を使うには `[remote].manage_ssh_config = false` を設定してください。
@@ -152,24 +177,24 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..57b7f02158ae21bf597ef1305a0ebd5b
  
  デフォルトでは、実行中のリモートサーバーの置き換えや再起動が必要な場合、リモートアタッチは通常の再起動/停止フローを使います。対応する実行中リモートサーバーで実験的なライブハンドオフにオプトインするには `--handoff` を渡します:
  
-@@ -79,7 +83,7 @@ herdr --remote workbox --handoff
+@@ -79,7 +91,7 @@ herdr --remote workbox --handoff
  
  ローカルとリモートのプラットフォームが一致する場合、直接インストールでは Herdr は現在のローカルバイナリをコピーできます。Homebrew、mise、Nix のインストールの場合、またはプラットフォームが異なる場合は、`https://herdr.dev/latest.json` から現在のクライアントバージョンに一致するリリースアセットをダウンロードします。
  
 -ローカルビルドやカスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。
-+ローカルビルドやカスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。Windows ホストでは完全なポータブル ZIP、Unix ホストでは単一の実行ファイルが必要です。
++カスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。Windows のオーバーライドでは完全なポータブル ZIP、Unix ホストでは単一の実行ファイルが必要です。パッケージ管理されていないローカル Windows 開発ビルドは、Windows ターゲットで実行可能な場合に自動で選択されます。
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-index ee0f85679b531a3cf8c470b603375dfb6bf86665..79475cf59e4996be6b1ea4226b30d896a95ab6a0 100644
+index ee0f85679b531a3cf8c470b603375dfb6bf86665..36d3df7c55537e5edef93cd3f9787052182876e0 100644
 --- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows ベータビルドはプレビューチャンネルでのみ提供され
  | プラグイン | プレビュー |
  | ペイン画面履歴 | ベータ |
  | ネストされた起動のオーバーライド | ベータ |
-+| Linux/macOS と x86_64 Windows ホストへの `herdr --remote` | ベータ |
++| Linux/macOS と x86_64 または ARM64 Windows ホストへの `herdr --remote` | ベータ |
  
  Windows のエージェントプロセス検出は、ペインのシェルの子孫プロセスをスキャンし、直接のエージェントと一般的なコマンドラッパーを認識します。Codex、Claude などのエージェントには有用ですが、Unix のフォアグラウンドプロセスグループ検出と同じものではありません。
  
@@ -190,7 +215,7 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..79475cf59e4996be6b1ea4226b30d896
  
  Kitty graphics は実験的なままで、まだ Windows でのサポートを謳っていません。Windows Terminal での画像レンダリングを特にテストしているのでない限り、`experimental.kitty_graphics = false` のままにしてください。
  
-@@ -92,22 +93,19 @@ Herdr のペインテキストコピーは Windows ベータで動作します
+@@ -92,22 +93,20 @@ Herdr のペインテキストコピーは Windows ベータで動作します
  | 機能 | 状況 |
  | --- | --- |
  | ダイレクトターミナルアタッチ | 未サポート |
@@ -203,31 +228,40 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..79475cf59e4996be6b1ea4226b30d896
  | 署名済みバイナリ / SmartScreen 回避 | 未サポート |
  
 -Windows からのリモート作業は、サーバーに SSH してそこで `herdr` を実行してください:
-+ネイティブ Windows バイナリは、Linux、macOS、x86_64 Windows の Herdr ホストに対するシンクライアントとして動作できます:
++ネイティブ Windows バイナリは、Linux、macOS、x86_64 または ARM64 Windows の Herdr ホストに対するシンクライアントとして動作できます:
  
  ```powershell
 -ssh you@server
 -herdr
 +herdr --remote workbox
++herdr --remote workbox --provision --yes --json
  ```
  
 -このモードでは Herdr はリモートホスト上で動きます。ネイティブ Windows の `herdr --remote` はベータの範囲外です。
-+Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` またはユーザー所有のバージョン付きサイドカーから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチはダイジェスト検証済みの完全なポータブル ZIP を転送できますが、インストーラーの実行やリモート `PATH` の変更は行いません。非対話的なアタッチはインストールしません。Windows リモートホストではライブハンドオフをサポートしません。
++Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` またはユーザー所有のバージョン付きサイドカーから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチはダイジェスト検証済みの完全なポータブル ZIP を転送できますが、インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は設定を検証し、起動、再読み込み、または制御された再起動による有効化を管理します。Windows リモートホストではライブハンドオフをサポートしません。
  
  Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
  
 diff --git a/docs/next/website/src/content/docs/persistence-remote.mdx b/docs/next/website/src/content/docs/persistence-remote.mdx
-index a365ac8838673144952ce0b6dcf92d3125e27360..c633892cf07f6659c83bb9c0ebef05bea09e0ff2 100644
+index a365ac8838673144952ce0b6dcf92d3125e27360..65ce85a31eed641fc005124bda0ff589b8677adb 100644
 --- a/docs/next/website/src/content/docs/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/persistence-remote.mdx
-@@ -65,9 +65,13 @@ herdr --remote workbox
+@@ -65,9 +65,21 @@ herdr --remote workbox
  
  Remote attach supports Linux and macOS hosts on x86_64 and aarch64. Herdr checks the remote platform, prefers a matching `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no matching binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install.
  
 -Native Windows `herdr --remote` is not part of the Windows beta. From Windows, SSH into the server and run `herdr` there.
-+Every supported client can also attach to x86_64 Windows hosts. Herdr first uses an exact version- and protocol-matching `herdr.exe` from the SSH user's `PATH` or its versioned per-user sidecar. If neither matches, an interactive run offers to transfer the complete digest-verified Windows portable ZIP into the SSH user's profile without running an installer or changing `PATH`; a non-interactive run fails without modifying the host. Live handoff remains Unix-host-only.
++Every supported client can also attach to x86_64 and ARM64 Windows hosts. Herdr first uses an exact version- and protocol-matching `herdr.exe` from the SSH user's `PATH` or its versioned per-user sidecar. If neither matches, an interactive run offers to transfer the complete digest-verified Windows portable ZIP into the SSH user's profile without running an installer or changing `PATH`; an ordinary non-interactive attach fails without modifying the host. Live handoff remains Unix-host-only.
  
 -By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings and a private per-attach control socket for connection reuse. Existing user keepalive settings win. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
++Use explicit provisioning when automation should own binary deployment and server activation:
++
++```bash
++herdr --remote workbox --provision --yes --json
++```
++
++Unattended provisioning requires `--yes`; `--json` is optional. Herdr deploys the matching binary, validates the remote configuration before activation, starts a missing server, reloads configuration when the running server already uses that exact binary, and saves then restarts only when another binary must be activated. A non-package-managed local Windows x86_64 build can provision its current executable to x86_64 or ARM64 Windows through Windows emulation. Published Windows builds still use the complete portable ZIP.
++
 +On a remote attach from Windows, the default `ctrl+v` remote-image binding sends a registered PNG or DIB clipboard image through the existing client protocol, stages it on the remote host, and pastes the remote path. Dragging or pasting one absolute PNG, JPEG, GIF, WebP, or BMP path uses the same bounded transport. Text input falls through unchanged when the clipboard has no supported image. Change or disable the shortcut with `keys.remote_image_paste`.
 +
 +By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings. Existing user keepalive settings win. Unix clients also add a private per-attach control socket for connection reuse. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
@@ -236,24 +270,24 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..c633892cf07f6659c83bb9c0ebef05be
  
  Remote attach uses your normal OpenSSH authentication. If the target uses a passphrase-protected key in a non-interactive shell, script, CI job, or mobile terminal that cannot show the passphrase prompt, load the key into ssh-agent first:
  
-@@ -88,7 +92,7 @@ If you SSH into the server first and run `herdr` there, Herdr runs entirely on t
+@@ -88,7 +100,7 @@ If you SSH into the server first and run `herdr` there, Herdr runs entirely on t
  
  When your local and remote platforms match, Herdr can copy the current local binary for direct installs. For Homebrew, mise, and Nix installs, or when the platforms differ, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
  
 -For local builds or custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach.
-+For local builds or custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Windows hosts require the complete portable ZIP, while Unix hosts use a single executable.
++For custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Windows overrides require the complete portable ZIP, while Unix hosts use a single executable. A non-package-managed local Windows development build is selected automatically when it can run on the Windows target.
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
-index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..ae8e0bf06fb0b25831495df06eefac2ace2e6593 100644
+index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..f63f118e376247e7abb3461434dd23267a952969 100644
 --- a/docs/next/website/src/content/docs/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/windows-beta.mdx
 @@ -36,6 +36,7 @@ For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a cus
  | Plugins | preview |
  | Pane screen history | beta |
  | Nested launch override | beta |
-+| `herdr --remote` to Linux/macOS and x86_64 Windows hosts | beta |
++| `herdr --remote` to Linux/macOS and x86_64 or ARM64 Windows hosts | beta |
  
  Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers. It is useful for Codex, Claude, and similar agents, but it is not the same as Unix foreground process-group detection.
  
@@ -274,7 +308,7 @@ index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..ae8e0bf06fb0b25831495df06eefac2a
  
  Kitty graphics remains experimental and is not claimed as Windows-supported yet. Leave `experimental.kitty_graphics = false` unless you are specifically testing image rendering in Windows Terminal.
  
-@@ -92,22 +93,19 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is
+@@ -92,22 +93,20 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is
  | Capability | Status |
  | --- | --- |
  | Direct terminal attach | unsupported |
@@ -287,18 +321,48 @@ index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..ae8e0bf06fb0b25831495df06eefac2a
  | Signed binary / SmartScreen avoidance | unsupported |
  
 -For remote work from Windows, SSH into the server and run `herdr` there:
-+The native Windows binary can act as a thin client for Linux, macOS, and x86_64 Windows Herdr hosts:
++The native Windows binary can act as a thin client for Linux, macOS, and x86_64 or ARM64 Windows Herdr hosts:
  
  ```powershell
 -ssh you@server
 -herdr
 +herdr --remote workbox
++herdr --remote workbox --provision --yes --json
  ```
  
 -That mode runs Herdr on the remote host. Native Windows `herdr --remote` is not part of the beta.
-+Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or a versioned per-user sidecar. When one is needed, an interactive attach can transfer the complete digest-verified portable ZIP without running an installer or changing remote `PATH`; non-interactive attach never installs it. Windows remote hosts do not support live handoff.
++Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or a versioned per-user sidecar. When one is needed, an interactive attach can transfer the complete digest-verified portable ZIP without running an installer or changing remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` validates configuration and owns start, reload, or controlled restart activation. Windows remote hosts do not support live handoff.
  
  Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
+ 
+diff --git a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
+index baebfcc85d48db391ebb51ca4c0ec7961b534139..c2342c75cccebdc9c370f88b7fe0249edbdb45f5 100644
+--- a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
+@@ -13,6 +13,7 @@ Herdr 的 CLI 通过与集成和智能体相同的本地 socket API 与运行中
+ herdr                         # 启动或连接默认会话
+ herdr --session work          # 启动或连接命名会话
+ herdr --remote workbox        # 通过 SSH 连接,使用本地按键绑定
++herdr --remote workbox --provision --yes --json
+ herdr --remote workbox --remote-keybindings server
+ herdr --remote workbox --handoff
+ herdr --no-session            # 单进程逃生舱
+@@ -80,6 +81,7 @@ compinit
+ 
+ ```bash
+ herdr server
++herdr server start
+ herdr server stop
+ herdr server reload-config
+ herdr server agent-manifests [--json]
+@@ -87,7 +89,7 @@ herdr server update-agent-manifests [--json]
+ herdr server reload-agent-manifests
+ ```
+ 
+-`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示生效的智能体检测清单来源、缓存的远程版本和最近的远程更新结果。`update-agent-manifests` 立即拉取远程清单更新,重载到运行中的服务器,并打印更新后的清单状态;要原始状态响应就加 `--json`。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。
++`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`herdr server start` 会在需要时启动持久后台服务器，并在服务器就绪后返回。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示生效的智能体检测清单来源、缓存的远程版本和最近的远程更新结果。`update-agent-manifests` 立即拉取远程清单更新,重载到运行中的服务器,并打印更新后的清单状态;要原始状态响应就加 `--json`。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。
+ 
+ ## 通知
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/configuration.mdx b/docs/next/website/src/content/docs/zh-cn/configuration.mdx
 index 237c53b484abb82ecc21052ffc9e68291fbbf86b..15cfd738d0d39a302937d9875762c67cd385f635 100644
@@ -322,10 +386,10 @@ index 237c53b484abb82ecc21052ffc9e68291fbbf86b..15cfd738d0d39a302937d9875762c67c
  ## 按键绑定
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
-index a81a8469e54aba464c1daa01638ac651f31c7e73..6117a816c724aabf9c84e2261c78be8c6e9a0d12 100644
+index a81a8469e54aba464c1daa01638ac651f31c7e73..bfe7633b9d350719c7dea00de02ba7b219bf7253 100644
 --- a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
-@@ -63,11 +63,15 @@ Host workbox
+@@ -63,11 +63,23 @@ Host workbox
  herdr --remote workbox
  ```
  
@@ -333,9 +397,17 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..6117a816c724aabf9c84e2261c78be8c
 +远程连接支持 x86_64 和 aarch64 的 Linux 与 macOS 主机。Herdr 会检查远程平台,优先使用远程 `PATH` 上已有的匹配 `herdr`,然后检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。如果没有匹配的二进制文件,交互式运行会询问是否安装到 `~/.local/bin/herdr`;非交互式运行则直接失败,不会修改主机。如果 `~/.local/bin` 不在远程 `PATH` 上,Herdr 会在安装后发出警告。
  
 -Windows 原生的 `herdr --remote` 不在 Windows 测试版范围内。在 Windows 上请 SSH 到服务器并在那里运行 `herdr`。
-+所有受支持的客户端也可以连接 x86_64 Windows 主机。Herdr 会先使用 SSH 用户 `PATH` 中或用户自有的版本化 sidecar 中版本和协议完全匹配的 `herdr.exe`。如果两者都不匹配，交互式运行会询问是否把完整且经过摘要验证的 Windows 便携 ZIP 传输到 SSH 用户的配置文件中；它不会运行安装器或修改 `PATH`。非交互式运行会直接失败，不修改主机。实时交接仍仅支持 Unix 主机。
++所有受支持的客户端也可以连接 x86_64 和 ARM64 Windows 主机。Herdr 会先使用 SSH 用户 `PATH` 中或用户自有的版本化 sidecar 中版本和协议完全匹配的 `herdr.exe`。如果两者都不匹配，交互式运行会询问是否把完整且经过摘要验证的 Windows 便携 ZIP 传输到 SSH 用户的配置文件中；它不会运行安装器或修改 `PATH`。普通非交互式连接会直接失败，不修改主机。实时交接仍仅支持 Unix 主机。
  
 -默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的桥接配置,而使用普通 `ssh`。
++需要让自动化负责二进制部署和服务器激活时，请使用显式配置命令:
++
++```bash
++herdr --remote workbox --provision --yes --json
++```
++
++无人值守配置必须使用 `--yes`，`--json` 可选。Herdr 会部署匹配的二进制文件，在激活前验证远程配置，在没有服务器时启动服务器，在运行中的服务器已经使用该精确二进制文件时只重新加载配置，并且仅在需要激活另一个二进制文件时保存会话并重启。未由包管理器管理的本地 Windows x86_64 构建可以通过 Windows 模拟，将当前可执行文件配置到 x86_64 或 ARM64 Windows。已发布的 Windows 构建仍使用完整便携 ZIP。
++
 +从 Windows 远程连接时,默认的 `ctrl+v` 远程图像按键会通过现有客户端协议发送已注册的 PNG 或 DIB 剪贴板图像,将其暂存在远程主机并粘贴远程路径。拖放或粘贴一个 PNG、JPEG、GIF、WebP 或 BMP 的绝对路径也会使用同样的受限传输。剪贴板中没有受支持的图像时,文本输入会原样发送。可通过 `keys.remote_image_paste` 更改或禁用此快捷键。
 +
 +默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行远程设置和桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。Unix 客户端还会添加一个私有的单次连接 control socket 来复用连接。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的配置或 control socket,而使用普通 `ssh`。
@@ -344,24 +416,24 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..6117a816c724aabf9c84e2261c78be8c
  
  默认情况下,如果需要替换或重启运行中的远程服务器,远程连接使用常规的重启/停止流程。要对受支持的运行中远程服务器启用实验性实时交接,加上 `--handoff`:
  
-@@ -79,7 +83,7 @@ herdr --remote workbox --handoff
+@@ -79,7 +91,7 @@ herdr --remote workbox --handoff
  
  当本地和远程平台一致时,对于直接安装,Herdr 可以直接复制当前本地二进制文件。对于 Homebrew、mise 和 Nix 安装,或平台不一致时,它会从 `https://herdr.dev/latest.json` 下载与当前客户端版本匹配的发布产物。
  
 -对于本地构建或自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。
-+对于本地构建或自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。Windows 主机要求完整便携 ZIP，Unix 主机使用单个可执行文件。
++对于自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。Windows 覆盖要求完整便携 ZIP，Unix 主机使用单个可执行文件。未由包管理器管理的本地 Windows 开发构建只要能在 Windows 目标上运行，就会被自动选择。
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-index 781a6f969416873de8ca131f6fdb35600fe7615a..69ca4f5a3891c689bf9ad3d570770208381f0d74 100644
+index 781a6f969416873de8ca131f6fdb35600fe7615a..b568d7eb5e8b48ac00f215054a39c99abe75dbb0 100644
 --- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默
  | 插件 | 预览 |
  | 窗格屏幕历史 | 测试版 |
  | 嵌套启动覆盖 | 测试版 |
-+| 连接 Linux/macOS 和 x86_64 Windows 主机的 `herdr --remote` | 测试版 |
++| 连接 Linux/macOS 和 x86_64 或 ARM64 Windows 主机的 `herdr --remote` | 测试版 |
  
  Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器。它对 Codex、Claude 等智能体很有用,但和 Unix 前台进程组检测不是一回事。
  
@@ -382,7 +454,7 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..69ca4f5a3891c689bf9ad3d570770208
  
  Kitty graphics 仍是实验性功能,尚未宣称支持 Windows。除非你专门在 Windows Terminal 中测试图像渲染,否则保持 `experimental.kitty_graphics = false`。
  
-@@ -92,22 +93,19 @@ Herdr 的窗格文本复制在 Windows 测试版上可用。在窗格内拖选
+@@ -92,22 +93,20 @@ Herdr 的窗格文本复制在 Windows 测试版上可用。在窗格内拖选
  | 能力 | 状态 |
  | --- | --- |
  | 直接终端附加 | 不支持 |
@@ -395,19 +467,118 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..69ca4f5a3891c689bf9ad3d570770208
  | 签名二进制 / 规避 SmartScreen | 不支持 |
  
 -在 Windows 上进行远程工作,请 SSH 到服务器并在那里运行 `herdr`:
-+原生 Windows 二进制可以作为 Linux、macOS 和 x86_64 Windows Herdr 主机的瘦客户端:
++原生 Windows 二进制可以作为 Linux、macOS 和 x86_64 或 ARM64 Windows Herdr 主机的瘦客户端:
  
  ```powershell
 -ssh you@server
 -herdr
 +herdr --remote workbox
++herdr --remote workbox --provision --yes --json
  ```
  
 -这种模式下 Herdr 运行在远程主机上。Windows 原生的 `herdr --remote` 不在测试版范围内。
-+Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或用户自有的版本化 sidecar 中完全匹配的 `herdr.exe`。需要时，交互式连接可以传输完整且经过摘要验证的便携 ZIP，但不会运行安装器或修改远程 `PATH`；非交互式连接不会安装。Windows 远程主机不支持实时交接。
++Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或用户自有的版本化 sidecar 中完全匹配的 `herdr.exe`。需要时，交互式连接可以传输完整且经过摘要验证的便携 ZIP，但不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会验证配置，并负责通过启动、重新加载或受控重启来激活服务器。Windows 远程主机不支持实时交接。
  
  Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
  
+diff --git a/src/api/client.rs b/src/api/client.rs
+index 326ebc7db4d913192a7eb202630d07b647f7699d..cc6051c5e770c5a05be4916959d80b00e0a40f36 100644
+--- a/src/api/client.rs
++++ b/src/api/client.rs
+@@ -83,10 +83,12 @@ impl ApiClient {
+             ResponseResult::Pong {
+                 version,
+                 protocol,
++                binary,
+                 capabilities,
+             } => Ok(crate::api::RuntimeStatus {
+                 version: Some(version),
+                 protocol: Some(protocol),
++                binary,
+                 capabilities,
+             }),
+             result => Err(ApiClientError::UnexpectedResult(format!("{result:?}"))),
+diff --git a/src/api/schema/response.rs b/src/api/schema/response.rs
+index db8cfc7bdb5217833e97f97a5813100f93402945..476c741c9d83dc2aea9430f4650f24c7d9ba0b1d 100644
+--- a/src/api/schema/response.rs
++++ b/src/api/schema/response.rs
+@@ -46,6 +46,8 @@ pub enum ResponseResult {
+         version: String,
+         protocol: u32,
+         #[serde(default)]
++        binary: Option<String>,
++        #[serde(default)]
+         capabilities: Option<ServerCapabilities>,
+     },
+     SessionSnapshot {
+diff --git a/src/api/schema/tests.rs b/src/api/schema/tests.rs
+index 5fe6dd27bee1ecacd18d886abc917779939fbc96..a4377e899f9a5f66c86641ee71a6d9e5d48f866f 100644
+--- a/src/api/schema/tests.rs
++++ b/src/api/schema/tests.rs
+@@ -637,6 +637,7 @@ fn success_response_round_trips() {
+         result: ResponseResult::Pong {
+             version: "0.1.2".into(),
+             protocol: 6,
++            binary: Some("/opt/herdr/bin/herdr".into()),
+             capabilities: Some(ServerCapabilities {
+                 live_handoff: true,
+                 detached_server_daemon: true,
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 0598faea4a528f9893a35af6ec0013eef9cc29b1..fc47e7b94629cf972dd102ab52c0c2ce8774a444 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -325,6 +325,9 @@ fn handle_request(
+             result: ResponseResult::Pong {
+                 version: crate::build_info::version(),
+                 protocol: crate::protocol::PROTOCOL_VERSION,
++                binary: std::env::current_exe()
++                    .ok()
++                    .map(|path| path.display().to_string()),
+                 capabilities,
+             },
+         })
+@@ -1013,7 +1016,15 @@ mod tests {
+ 
+         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
+         assert_eq!(parsed.id, "req_1");
+-        assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
++        let ResponseResult::Pong { binary, .. } = parsed.result else {
++            panic!("ping did not return pong");
++        };
++        assert_eq!(
++            binary,
++            std::env::current_exe()
++                .ok()
++                .map(|path| path.display().to_string())
++        );
+     }
+ 
+     #[test]
+diff --git a/src/api/status.rs b/src/api/status.rs
+index 209b93df337b52c78a8205c679b9231f1d01e9e8..cc00c412f17982c9b6076bcb0e5ce575f0a50c8c 100644
+--- a/src/api/status.rs
++++ b/src/api/status.rs
+@@ -8,6 +8,7 @@ use crate::api::schema::{Method, Request, ResponseResult};
+ pub struct RuntimeStatus {
+     pub version: Option<String>,
+     pub protocol: Option<u32>,
++    pub binary: Option<String>,
+     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
+ }
+ 
+@@ -47,10 +48,12 @@ pub fn read_runtime_status_at(
+         ResponseResult::Pong {
+             version,
+             protocol,
++            binary,
+             capabilities,
+         } => Ok(Some(RuntimeStatus {
+             version: Some(version),
+             protocol: Some(protocol),
++            binary,
+             capabilities,
+         })),
+         result => Err(io::Error::other(format!(
 diff --git a/src/app/agent_resume.rs b/src/app/agent_resume.rs
 index 1b4596287b324f0e126d38cd134cd3b878cfc4b0..3bf211682d5e721b260c7e7cc02a3ef0820556df 100644
 --- a/src/app/agent_resume.rs
@@ -1054,11 +1225,253 @@ index e6c23c4c09becdd279d4e970e73ddf16daf00b9d..dd7e1140a4e697d4b59bc94337457172
          } else {
              (24, 80)
          }
+diff --git a/src/cli/server.rs b/src/cli/server.rs
+index ff87cab1339b7b115b0f4e526102ec2028d3832c..03bd3d154ef89d31677e50cf1e17fbce5a856c7b 100644
+--- a/src/cli/server.rs
++++ b/src/cli/server.rs
+@@ -1,4 +1,6 @@
+-use crate::api::schema::{EmptyParams, Method, Request, ServerLiveHandoffParams};
++use crate::api::schema::{
++    EmptyParams, Method, Request, ResponseResult, ServerLiveHandoffParams, SuccessResponse,
++};
+ 
+ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>> {
+     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
+@@ -6,6 +8,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
+     };
+ 
+     match subcommand {
++        "start" => server_start(&args[1..]).map(Some),
+         "stop" => server_stop(&args[1..]).map(Some),
+         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
+         "--handoff-import" => Ok(None),
+@@ -24,6 +27,21 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
+     }
+ }
+ 
++fn server_start(args: &[String]) -> std::io::Result<i32> {
++    if !args.is_empty() {
++        eprintln!("usage: herdr server start");
++        return Ok(2);
++    }
++    let exe = crate::managed_install::command_executable()?;
++    match crate::server::autodetect::start_server_daemon_with_exe(exe) {
++        Ok(()) => Ok(0),
++        Err(err) => {
++            eprintln!("{err}");
++            Ok(1)
++        }
++    }
++}
++
+ fn server_stop(args: &[String]) -> std::io::Result<i32> {
+     if !args.is_empty() {
+         eprintln!("usage: herdr server stop");
+@@ -40,15 +58,54 @@ fn server_stop(args: &[String]) -> std::io::Result<i32> {
+ }
+ 
+ fn server_reload_config(args: &[String]) -> std::io::Result<i32> {
+-    if !args.is_empty() {
+-        eprintln!("usage: herdr server reload-config");
+-        return Ok(2);
+-    }
++    let json = match args {
++        [] => false,
++        [flag] if flag == "--json" => true,
++        _ => {
++            eprintln!("usage: herdr server reload-config [--json]");
++            return Ok(2);
++        }
++    };
+ 
+-    super::print_response(&super::send_request(&Request {
++    let response = super::send_request(&Request {
+         id: "cli:server:reload-config".into(),
+         method: Method::ServerReloadConfig(EmptyParams::default()),
+-    })?)
++    })?;
++    config_reload_exit_code(&response, json)
++}
++
++fn config_reload_exit_code(response: &serde_json::Value, json: bool) -> std::io::Result<i32> {
++    if response.get("error").is_some() {
++        return super::print_response(response);
++    }
++    let parsed: SuccessResponse = serde_json::from_value(response.clone()).map_err(|err| {
++        std::io::Error::new(
++            std::io::ErrorKind::InvalidData,
++            format!("invalid config reload response: {err}"),
++        )
++    })?;
++    let ResponseResult::ConfigReload { status, .. } = &parsed.result else {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidData,
++            "server reload-config returned an unexpected response",
++        ));
++    };
++    if json {
++        println!(
++            "{}",
++            serde_json::to_string(&parsed.result).map_err(std::io::Error::other)?
++        );
++    } else {
++        println!(
++            "{}",
++            serde_json::to_string(&parsed).map_err(std::io::Error::other)?
++        );
++    }
++    Ok(if *status == crate::config::ConfigReloadStatus::Applied {
++        0
++    } else {
++        1
++    })
+ }
+ 
+ fn server_agent_manifests(args: &[String]) -> std::io::Result<i32> {
+@@ -255,9 +312,10 @@ fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams>
+ fn print_server_help() {
+     eprintln!("herdr server commands:");
+     eprintln!("  herdr server                run as headless server");
++    eprintln!("  herdr server start          start the persistent server if needed");
+     eprintln!("  herdr server stop           stop the running server via the API socket");
+     eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
+-    eprintln!("  herdr server reload-config  reload config.toml in the running server");
++    eprintln!("  herdr server reload-config [--json]  reload config.toml in the running server");
+     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");
+     eprintln!("  herdr server update-agent-manifests [--json]  fetch and reload agent detection manifests");
+     eprintln!("  herdr server reload-agent-manifests  reload agent detection manifests in the running server");
+@@ -267,6 +325,43 @@ fn print_server_help() {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn server_start_rejects_arguments_without_starting() {
++        assert_eq!(server_start(&["extra".into()]).unwrap(), 2);
++    }
++
++    fn config_reload_response(status: crate::config::ConfigReloadStatus) -> serde_json::Value {
++        serde_json::to_value(SuccessResponse {
++            id: "reload".into(),
++            result: ResponseResult::ConfigReload {
++                status,
++                diagnostics: Vec::new(),
++            },
++        })
++        .unwrap()
++    }
++
++    #[test]
++    fn config_reload_exit_status_is_success_only_when_fully_applied() {
++        assert_eq!(
++            config_reload_exit_code(
++                &config_reload_response(crate::config::ConfigReloadStatus::Applied),
++                false
++            )
++            .unwrap(),
++            0
++        );
++        for status in [
++            crate::config::ConfigReloadStatus::Partial,
++            crate::config::ConfigReloadStatus::Failed,
++        ] {
++            assert_eq!(
++                config_reload_exit_code(&config_reload_response(status), false).unwrap(),
++                1
++            );
++        }
++    }
++
+     #[test]
+     fn update_agent_manifest_status_fetches_reloads_then_reads_status() {
+         let mut methods = Vec::new();
+diff --git a/src/cli/spec.rs b/src/cli/spec.rs
+index 3be833286c6629caf8c03dbbb9335fef59521a05..95657dd6aa932a3c025c07efcaebf1209d786b35 100644
+--- a/src/cli/spec.rs
++++ b/src/cli/spec.rs
+@@ -158,8 +158,13 @@ fn channel_command() -> Command {
+ fn server_command() -> Command {
+     Command::new("server")
+         .about("Run or control the headless server")
++        .subcommand(Command::new("start").about("Start the persistent server if needed"))
+         .subcommand(Command::new("stop").about("Stop the running server"))
+-        .subcommand(Command::new("reload-config").about("Reload config in the running server"))
++        .subcommand(
++            Command::new("reload-config")
++                .about("Reload config in the running server")
++                .arg(json_flag()),
++        )
+         .subcommand(
+             Command::new("agent-manifests")
+                 .about("Show active agent detection manifests")
 diff --git a/src/cli/status.rs b/src/cli/status.rs
-index 74bb3e2a15f5f62264c26de70707179affc6fb43..8594fd1b7117d0d1952f74f8e092f20741a9e77c 100644
+index 74bb3e2a15f5f62264c26de70707179affc6fb43..ea3efeeeb2dcf7382a6bd06519b23534588ceafb 100644
 --- a/src/cli/status.rs
 +++ b/src/cli/status.rs
-@@ -322,3 +322,15 @@ fn print_status_help() {
+@@ -74,6 +74,7 @@ enum ServerRuntimeStatus {
+     Running {
+         version: Option<String>,
+         protocol: Option<u32>,
++        binary: Option<String>,
+         capabilities: Option<crate::api::schema::ServerCapabilities>,
+     },
+     NotRunning,
+@@ -137,11 +138,15 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
+ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
+     match server {
+         ServerRuntimeStatus::Running {
+-            version, protocol, ..
++            version,
++            protocol,
++            binary,
++            ..
+         } => {
+             println!("{indent}status: running");
+             println!("{indent}version: {}", option_label(version.as_deref()));
+             println!("{indent}protocol: {}", protocol_label(*protocol));
++            println!("{indent}binary: {}", option_label(binary.as_deref()));
+             println!("{indent}compatible: {}", compatibility_label(*protocol));
+             println!("{indent}socket: {}", api::socket_path().display());
+         }
+@@ -157,6 +162,7 @@ fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
+         Ok(status) => Ok(ServerRuntimeStatus::Running {
+             version: status.version,
+             protocol: status.protocol,
++            binary: status.binary,
+             capabilities: status.capabilities,
+         }),
+         Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
+@@ -224,6 +230,7 @@ struct ServerStatusJson {
+     running: bool,
+     version: Option<String>,
+     protocol: Option<u32>,
++    binary: Option<String>,
+     capabilities: Option<ServerCapabilitiesJson>,
+     compatible: Option<bool>,
+     socket: String,
+@@ -257,12 +264,14 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
+         ServerRuntimeStatus::Running {
+             version,
+             protocol,
++            binary,
+             capabilities,
+         } => ServerStatusJson {
+             status: "running",
+             running: true,
+             version: version.clone(),
+             protocol: *protocol,
++            binary: binary.clone(),
+             capabilities: capabilities
+                 .as_ref()
+                 .map(|capabilities| ServerCapabilitiesJson {
+@@ -279,6 +288,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
+             running: false,
+             version: None,
+             protocol: None,
++            binary: None,
+             capabilities: None,
+             compatible: None,
+             socket: api::socket_path().display().to_string(),
+@@ -322,3 +332,28 @@ fn print_status_help() {
      eprintln!("  herdr status server [--json]  show running server status");
      eprintln!("  herdr status client [--json]  show local client binary status");
  }
@@ -1072,6 +1485,19 @@ index 74bb3e2a15f5f62264c26de70707179affc6fb43..8594fd1b7117d0d1952f74f8e092f207
 +        let value = serde_json::to_value(client_status_json()).unwrap();
 +
 +        assert!(value.get("windows_remote_guest_executable").is_none());
++    }
++    #[test]
++    fn server_status_projects_running_binary_identity() {
++        let binary = r"C:\Program Files\Herdr\herdr.exe".to_string();
++        let value = serde_json::to_value(server_status_json(&ServerRuntimeStatus::Running {
++            version: Some(crate::build_info::version()),
++            protocol: Some(crate::protocol::PROTOCOL_VERSION),
++            binary: Some(binary.clone()),
++            capabilities: None,
++        }))
++        .unwrap();
++
++        assert_eq!(value["binary"], binary);
 +    }
 +}
 diff --git a/src/client/mod.rs b/src/client/mod.rs
@@ -1854,7 +2280,7 @@ index c293a2785130207740ab610c60998c607eb994bc..fc2f93b0c2bb8e369aac9ea7cdd0a5cc
      fn temp_socket_marker_path(name: &str) -> PathBuf {
          std::env::temp_dir().join(format!("herdr-{name}-{}.sock", std::process::id()))
 diff --git a/src/main.rs b/src/main.rs
-index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..8f4c9c420379b90914b6e892ddd27cf9c7e6e787 100644
+index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf76fa165d4 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -58,7 +58,6 @@ mod agent_resume;
@@ -1877,6 +2303,60 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..8f4c9c420379b90914b6e892ddd27cf9
  
      if remote_launch.is_some()
          && args.get(1).is_some()
+@@ -512,7 +516,7 @@ fn main() -> io::Result<()> {
+             )
+         })
+     {
+-        eprintln!("error: --remote can only be used with the default launch command");
++        eprintln!("error: --remote can only be used for attach or with --provision");
+         eprintln!("run 'herdr --help' for usage");
+         std::process::exit(2);
+     }
+@@ -580,10 +584,12 @@ fn main() -> io::Result<()> {
+         println!("Usage: herdr [options]");
+         println!("       herdr --session <name> [options]");
+         println!("       herdr --remote <ssh-target> [--session <name>]");
++        println!("       herdr --remote <ssh-target> --provision [--yes] [--json]");
+         println!("       herdr session attach <name>");
+         println!("       herdr completion zsh");
+         println!("       herdr update [--handoff]");
+         println!("       herdr channel set <stable|preview>");
++        println!("       herdr server start");
+         println!("       herdr server stop");
+         println!("       herdr server reload-config");
+         println!("       herdr api <subcommand> ...");
+@@ -608,6 +614,10 @@ fn main() -> io::Result<()> {
+             ),
+             ("herdr update", "Download and install the latest version"),
+             ("herdr completion zsh", "Generate shell completions for zsh"),
++            (
++                "herdr server start",
++                "Start the persistent server if it is not running",
++            ),
+             (
+                 "herdr server stop",
+                 "Stop the running server via the API socket",
+@@ -672,6 +682,9 @@ fn main() -> io::Result<()> {
+         println!("  --no-session        Run monolithically (no server/client, escape hatch)");
+         println!("  --session <name>    Use or create a named persistent session");
+         println!("  --remote <target>   Attach through SSH to a remote Herdr server");
++        println!("  --provision         Provision and activate the matching remote Herdr");
++        println!("  --yes, -y           Approve unattended remote installation or restart");
++        println!("  --json              Print remote provision result as JSON");
+         println!("  --remote-keybindings <local|server>");
+         println!("                      Keybindings for --remote app attach (default: local)");
+         println!("  --handoff           Opt into live handoff for update or remote attach");
+@@ -709,6 +722,10 @@ fn main() -> io::Result<()> {
+         "--session",
+         "--remote",
+         "--remote-keybindings",
++        "--provision",
++        "--yes",
++        "-y",
++        "--json",
+         "--version",
+         "-V",
+         "--default-config",
 diff --git a/src/platform/fallback.rs b/src/platform/fallback.rs
 index 30bea5ebc94bb83213ebbc0f6530903c5a19574a..abb5417dff289e371dbf127adbf3862216ee9d36 100644
 --- a/src/platform/fallback.rs
@@ -2166,7 +2646,7 @@ index 0000000000000000000000000000000000000000..1944e3595feb737a38055bad0b0f6256
 +    }
 +}
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded952a2480 100644
+index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480e0db11b9 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
 @@ -7,7 +7,7 @@ use std::{
@@ -2190,7 +2670,13 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
              Diagnostics::{
                  Debug::ReadProcessMemory,
                  ToolHelp::{
-@@ -35,10 +38,10 @@ use windows_sys::{
+@@ -31,14 +34,15 @@ use windows_sys::{
+                 },
+             },
+             JobObjects::{
+-                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
++                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
++                JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
                  JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
              },
              Memory::{
@@ -2203,7 +2689,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
              Threading::{
                  GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
                  QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
-@@ -68,6 +71,8 @@ use windows_sys::{
+@@ -68,6 +72,8 @@ use windows_sys::{
  
  use super::{ClipboardImage, ForegroundJob, Signal};
  
@@ -2212,7 +2698,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
  const STILL_ACTIVE: u32 = 259;
  const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
  const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
-@@ -146,6 +151,92 @@ struct CachedGitBashProcess {
+@@ -146,6 +152,92 @@ struct CachedGitBashProcess {
  
  static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
      Mutex::new(ProcessSnapshotCache { cached: None });
@@ -2305,7 +2791,53 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
  
  pub(crate) fn should_draw_host_cursor_by_default() -> bool {
      true
-@@ -556,6 +647,14 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+@@ -327,11 +419,11 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
+ }
+ 
+ pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
+-    if current_job_kills_processes_on_close()? {
+-        launch_server_daemon_with_wmi(command)
+-    } else {
+-        command.spawn().map(|child| child.id())
+-    }
++    // Cross a system-owned process boundary so the persistent server cannot
++    // inherit an invoking terminal, OpenSSH channel, or job. A direct detached
++    // CreateProcess can keep an SSH command channel open after the launching
++    // CLI exits even when its three standard streams are null.
++    launch_server_daemon_with_wmi(command)
+ }
+ 
+ fn launch_server_daemon_with_wmi(command: &std::process::Command) -> std::io::Result<u32> {
+@@ -476,28 +568,6 @@ fn current_process_is_in_job() -> std::io::Result<bool> {
+     Ok(in_job != 0)
+ }
+ 
+-fn current_job_kills_processes_on_close() -> std::io::Result<bool> {
+-    if !current_process_is_in_job()? {
+-        return Ok(false);
+-    }
+-
+-    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+-    // SAFETY: `limits` is writable and its exact buffer size is supplied.
+-    if unsafe {
+-        QueryInformationJobObject(
+-            null_mut(),
+-            JobObjectExtendedLimitInformation,
+-            &mut limits as *mut _ as *mut c_void,
+-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+-            null_mut(),
+-        )
+-    } == 0
+-    {
+-        return Err(std::io::Error::last_os_error());
+-    }
+-    Ok(limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0)
+-}
+-
+ pub fn detach_server_daemon_command(command: &mut std::process::Command) {
+     use std::os::windows::process::CommandExt;
+ 
+@@ -556,6 +626,14 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
          .filter(|path| path.is_absolute())
  }
  
@@ -2320,7 +2852,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
  fn select_pane_foreground_job(
      shell_pid: u32,
      entries: &[WindowsProcessEntry],
-@@ -1242,9 +1341,68 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
+@@ -1242,9 +1320,68 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
      }
  }
  
@@ -2391,7 +2923,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
      None
  }
  
-@@ -1362,6 +1520,8 @@ struct ProcessHandle(HANDLE);
+@@ -1362,6 +1499,8 @@ struct ProcessHandle(HANDLE);
  
  struct ClipboardGuard;
  
@@ -2400,7 +2932,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
  impl Drop for ClipboardGuard {
      fn drop(&mut self) {
          unsafe {
-@@ -1370,6 +1530,14 @@ impl Drop for ClipboardGuard {
+@@ -1370,6 +1509,14 @@ impl Drop for ClipboardGuard {
      }
  }
  
@@ -2415,7 +2947,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..e3d9761014b79e10ae5a0c8e91a9fded
  impl ProcessHandle {
      fn open(pid: u32, access: u32) -> Option<Self> {
          if pid == 0 {
-@@ -1893,6 +2061,18 @@ mod tests {
+@@ -1893,6 +2040,18 @@ mod tests {
          );
      }
  
@@ -2990,15 +3522,17 @@ index 6b639f0de9bbce17beeefd4c5e8daf90aa49c278..b42da399dcf96093a61be2bd08a1843f
          return None;
      }
 diff --git a/src/remote.rs b/src/remote.rs
-index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..243f7b342223a43fa136d499e810e131fe8a7d02 100644
+index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc6156abd17b2 100644
 --- a/src/remote.rs
 +++ b/src/remote.rs
-@@ -1,150 +1,30 @@
+@@ -1,150 +1,32 @@
 +mod attach;
  #[cfg(unix)]
  mod unix;
 +mod windows;
-+pub(crate) use windows::{adopt_remote_sidecar_lease, remote_sidecar_active};
++pub(crate) use windows::{
++    adopt_remote_sidecar_lease, configure_remote_sidecar_child, remote_sidecar_active,
++};
  
 +pub(crate) use attach::*;
  #[cfg(unix)]
@@ -3162,7 +3696,7 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..243f7b342223a43fa136d499e810e131
  }
  
  pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
-@@ -191,6 +71,21 @@ fn shell_quote(value: &str) -> String {
+@@ -191,6 +73,21 @@ fn shell_quote(value: &str) -> String {
  mod tests {
      use super::*;
  
@@ -3186,10 +3720,10 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..243f7b342223a43fa136d499e810e131
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cefdd3efc58
+index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb5855998f39
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,4307 @@
+@@ -0,0 +1,4938 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::collections::BTreeMap;
@@ -3202,6 +3736,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +use interprocess::local_socket::ListenerNonblockingMode;
 +use interprocess::TryClone as _;
 +use serde::Deserialize;
++use serde::Serialize;
 +use sha2::{Digest as _, Sha256};
 +use std::sync::{
 +    atomic::{AtomicBool, Ordering},
@@ -3252,11 +3787,19 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    pub(crate) target: String,
 +    pub(crate) keybindings: RemoteKeybindings,
 +    pub(crate) live_handoff: bool,
++    pub(crate) provision: bool,
++    pub(crate) yes: bool,
++    pub(crate) json: bool,
 +}
 +
 +pub(crate) fn extract_remote_args(
 +    args: &[String],
 +) -> Result<(Vec<String>, Option<RemoteLaunch>), String> {
++    let remote_requested = args
++        .iter()
++        .skip(1)
++        .take_while(|arg| arg.as_str() != "--")
++        .any(|arg| arg == "--remote" || arg.starts_with("--remote="));
 +    let mut cleaned = Vec::with_capacity(args.len());
 +    if let Some(program) = args.first() {
 +        cleaned.push(program.clone());
@@ -3266,6 +3809,9 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    let mut keybindings = RemoteKeybindings::Local;
 +    let mut keybindings_seen = false;
 +    let mut live_handoff = false;
++    let mut provision = false;
++    let mut yes = false;
++    let mut json = false;
 +    let mut index = 1;
 +    while index < args.len() {
 +        let arg = &args[index];
@@ -3275,6 +3821,21 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        }
 +        if arg == "--handoff" {
 +            live_handoff = true;
++            index += 1;
++            continue;
++        }
++        if remote_requested && arg == "--provision" {
++            provision = true;
++            index += 1;
++            continue;
++        }
++        if remote_requested && matches!(arg.as_str(), "--yes" | "-y") {
++            yes = true;
++            index += 1;
++            continue;
++        }
++        if remote_requested && arg == "--json" {
++            json = true;
 +            index += 1;
 +            continue;
 +        }
@@ -3327,12 +3888,21 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        target,
 +        keybindings,
 +        live_handoff,
++        provision,
++        yes,
++        json,
 +    });
 +    if remote.is_none() && keybindings_seen {
 +        return Err("--remote-keybindings requires --remote".to_string());
 +    }
 +    if remote.is_none() && live_handoff {
 +        cleaned.push("--handoff".to_string());
++    }
++    if !provision && (yes || json) {
++        return Err("--yes and --json require --remote with --provision".to_string());
++    }
++    if provision && live_handoff {
++        return Err("--provision cannot be combined with --handoff".to_string());
 +    }
 +
 +    Ok((cleaned, remote))
@@ -3373,7 +3943,13 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        .remote
 +        .manage_ssh_config;
 +    let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
-+    let remote_command = match detect_remote_platform(&remote_ssh)? {
++    let remote_host = detect_remote_platform(&remote_ssh)?;
++    if remote.provision {
++        let result = provision_remote(&remote_ssh, remote_host, remote.yes)?;
++        print_remote_provision_result(&result, remote.json)?;
++        return Ok(());
++    }
++    let remote_command = match remote_host {
 +        RemoteHostPlatform::Unix(platform) => {
 +            let prepared_remote = prepare_remote_herdr(&remote_ssh, platform, remote.live_handoff)?;
 +            ensure_remote_server_ready(
@@ -3451,6 +4027,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    fn windows(arch: &str) -> Option<Self> {
 +        let arch = match arch.trim().to_ascii_uppercase().as_str() {
 +            "AMD64" | "X86_64" => "x86_64",
++            "ARM64" | "AARCH64" => "aarch64",
 +            _ => return None,
 +        };
 +        Some(Self {
@@ -3460,7 +4037,9 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    }
 +
 +    fn local() -> Self {
-+        let os = if cfg!(target_os = "linux") {
++        let os = if cfg!(target_os = "windows") {
++            "windows"
++        } else if cfg!(target_os = "linux") {
 +            "linux"
 +        } else if cfg!(target_os = "macos") {
 +            "macos"
@@ -3512,8 +4091,8 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        }
 +    }
 +
-+    fn for_windows(platform: RemotePlatform, user_profile: &str) -> Self {
-+        let install_suffix = format!(".herdr\\remote\\{}\\herdr.exe", windows_sidecar_identity());
++    fn for_windows(platform: RemotePlatform, user_profile: &str, identity: &str) -> Self {
++        let install_suffix = format!(".herdr\\remote\\{identity}\\herdr.exe");
 +        let executable = format!(
 +            "{}\\{}",
 +            user_profile.trim_end_matches(['\\', '/']),
@@ -3685,6 +4264,39 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    stop_after_install_approved: bool,
 +}
 +
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++enum RemoteBinaryOutcome {
++    AlreadyMatching,
++    Installed,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++enum RemoteServerOutcome {
++    Started,
++    Reloaded,
++    Restarted,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum RemoteProvisionServerAction {
++    Start,
++    Reload,
++    Restart,
++}
++
++#[derive(Debug, Serialize)]
++struct RemoteProvisionResult {
++    target: String,
++    platform: String,
++    binary: String,
++    binary_outcome: RemoteBinaryOutcome,
++    server_outcome: RemoteServerOutcome,
++    version: String,
++    protocol: u32,
++}
++
 +#[derive(Clone)]
 +struct ManagedSshOptions {
 +    config_path: PathBuf,
@@ -3846,8 +4458,9 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        remote_herdr: &RemoteHerdr,
 +        source_path: &Path,
 +        expected_sha256: &str,
++        kind: InstallSourceKind,
 +    ) -> io::Result<()> {
-+        let archive_name = windows_payload_archive_name()?;
++        let archive_name = windows_payload_archive_name(kind)?;
 +        let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
 +        let script = windows_install_prepare_script(remote_herdr, &archive_name);
 +        let output = self.user_shell_output(&script)?;
@@ -3883,6 +4496,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +            remote_herdr,
 +            &temporary_archive,
 +            expected_sha256,
++            kind,
 +        ))?;
 +        if output.status.success() {
 +            Ok(())
@@ -3942,21 +4556,23 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    )
 +}
 +
-+fn windows_sidecar_identity() -> String {
-+    crate::build_info::build_id()
-+        .map(str::to_string)
-+        .unwrap_or_else(|| {
-+            current_version()
-+                .chars()
-+                .map(|character| {
-+                    if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-+                        character
-+                    } else {
-+                        '-'
-+                    }
-+                })
-+                .collect()
++fn windows_sidecar_identity(source_sha256: Option<&str>) -> String {
++    if let Some(build_id) = crate::build_info::build_id() {
++        return build_id.to_string();
++    }
++    if let Some(sha256) = source_sha256 {
++        return format!("dev-{}", &sha256[..24]);
++    }
++    current_version()
++        .chars()
++        .map(|character| {
++            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
++                character
++            } else {
++                '-'
++            }
 +        })
++        .collect()
 +}
 +
 +fn windows_sidecar_root(remote_herdr: &RemoteHerdr) -> String {
@@ -3967,12 +4583,19 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        .to_string()
 +}
 +
-+fn windows_payload_archive_name() -> io::Result<String> {
++fn windows_payload_archive_name(kind: InstallSourceKind) -> io::Result<String> {
 +    let timestamp = std::time::SystemTime::now()
 +        .duration_since(std::time::UNIX_EPOCH)
 +        .map_err(|err| io::Error::other(format!("system clock precedes Unix epoch: {err}")))?
 +        .as_nanos();
-+    Ok(format!("payload-{}-{timestamp:x}.zip", std::process::id()))
++    let extension = match kind {
++        InstallSourceKind::Executable => "exe",
++        InstallSourceKind::WindowsZip => "zip",
++    };
++    Ok(format!(
++        "payload-{}-{timestamp:x}.{extension}",
++        std::process::id()
++    ))
 +}
 +
 +fn windows_payload_archive_path(
@@ -4018,15 +4641,20 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    remote_herdr: &RemoteHerdr,
 +    archive_path: &str,
 +    expected_sha256: &str,
++    kind: InstallSourceKind,
 +) -> String {
 +    let root = windows_sidecar_root(remote_herdr);
 +    super::windows::powershell_bootstrap_command(&format!(
-+        "Invoke-HerdrRemoteCommitInstall -Archive {} -Destination {} -ExpectedSha256 {} -ExpectedVersion {} -ExpectedProtocol {}",
++        "Invoke-HerdrRemoteCommitInstall -Archive {} -Destination {} -ExpectedSha256 {} -ExpectedRuntimeVersion {} -ExpectedProtocol {} -PayloadKind {}",
 +        super::windows::powershell_quote(archive_path),
 +        super::windows::powershell_quote(&root),
 +        super::windows::powershell_quote(expected_sha256),
-+        super::windows::powershell_quote(&format!("herdr {}", current_version())),
++        super::windows::powershell_quote(&current_version()),
 +        CURRENT_PROTOCOL,
++        super::windows::powershell_quote(match kind {
++            InstallSourceKind::Executable => "executable",
++            InstallSourceKind::WindowsZip => "zip",
++        }),
 +    ))
 +}
 +
@@ -4116,6 +4744,15 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        }
 +    }
 +
++    fn windows_executable(path: PathBuf, sha256: String) -> Self {
++        Self {
++            path,
++            temporary_dir: None,
++            kind: InstallSourceKind::Executable,
++            sha256: Some(sha256),
++        }
++    }
++
 +    fn cleanup(&self) {
 +        if let Some(dir) = &self.temporary_dir {
 +            let _ = fs::remove_dir_all(dir);
@@ -4127,6 +4764,16 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    ssh: &RemoteSsh,
 +    platform: RemotePlatform,
 +    live_handoff_enabled: bool,
++) -> io::Result<PreparedRemoteHerdr> {
++    prepare_remote_herdr_with_consent(ssh, platform, live_handoff_enabled, false, false)
++}
++
++fn prepare_remote_herdr_with_consent(
++    ssh: &RemoteSsh,
++    platform: RemotePlatform,
++    live_handoff_enabled: bool,
++    yes: bool,
++    defer_server_activation: bool,
 +) -> io::Result<PreparedRemoteHerdr> {
 +    let remote_herdr = RemoteHerdr::for_platform(platform);
 +    let override_binary = remote_binary_override_path()?;
@@ -4152,21 +4799,24 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    }
 +
 +    let mut stop_after_install_approved = false;
-+    if let Some(status_probe_herdr) = remote_binary_candidates.first().or_else(|| {
-+        remote_binary_exists(ssh, &remote_herdr)
-+            .ok()
-+            .and_then(|exists| exists.then_some(&remote_herdr))
-+    }) {
-+        stop_after_install_approved = confirm_remote_install_with_running_server(
-+            ssh,
-+            status_probe_herdr,
-+            live_handoff_enabled,
-+        )?;
++    if !defer_server_activation {
++        if let Some(status_probe_herdr) = remote_binary_candidates.first().or_else(|| {
++            remote_binary_exists(ssh, &remote_herdr)
++                .ok()
++                .and_then(|exists| exists.then_some(&remote_herdr))
++        }) {
++            stop_after_install_approved = confirm_remote_install_with_running_server(
++                ssh,
++                status_probe_herdr,
++                live_handoff_enabled,
++            )?;
++        }
 +    }
 +    confirm_remote_install(
 +        ssh.target(),
 +        &remote_herdr,
 +        &install_source_description(&remote_herdr.platform, override_binary.as_deref()),
++        yes,
 +    )?;
 +    let source = resolve_install_source(&remote_herdr.platform, override_binary)?;
 +    let install_result = ssh.install_herdr(&remote_herdr, &source.path);
@@ -4194,8 +4844,30 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    platform: RemotePlatform,
 +    user_profile: &str,
 +) -> io::Result<PreparedRemoteHerdr> {
-+    let managed = RemoteHerdr::for_windows(platform, user_profile);
-+    let path_candidate = windows_remote_binary_on_path(ssh, &managed)?;
++    prepare_remote_windows_herdr_with_consent(ssh, platform, user_profile, false, false)
++}
++
++fn prepare_remote_windows_herdr_with_consent(
++    ssh: &RemoteSsh,
++    platform: RemotePlatform,
++    user_profile: &str,
++    yes: bool,
++    defer_server_activation: bool,
++) -> io::Result<PreparedRemoteHerdr> {
++    let override_payload = remote_binary_override_path()?;
++    let source_identity = windows_install_source_identity(&platform, override_payload.as_deref())?;
++    let local_development_source =
++        source_identity.is_some() && crate::build_info::build_id().is_none();
++    let managed = RemoteHerdr::for_windows(
++        platform.clone(),
++        user_profile,
++        &windows_sidecar_identity(source_identity.as_deref()),
++    );
++    let path_candidate = if local_development_source {
++        None
++    } else {
++        windows_remote_binary_on_path(ssh, &managed)?
++    };
 +    if let Some(candidate) = path_candidate.as_ref() {
 +        if remote_binary_matches(ssh, candidate)? {
 +            return Ok(PreparedRemoteHerdr {
@@ -4213,32 +4885,34 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        });
 +    }
 +
-+    let status_probe = match path_candidate.as_ref() {
-+        Some(candidate) => Some(candidate),
-+        None if remote_binary_exists(ssh, &managed)? => Some(&managed),
-+        None => None,
-+    };
-+    let stop_before_install = match status_probe {
-+        Some(remote) => confirm_remote_install_with_running_server(ssh, remote, false)?,
-+        None => false,
-+    };
-+    if let Some(remote) = status_probe.filter(|_| stop_before_install) {
-+        stop_remote_server(ssh, remote)?;
++    if !defer_server_activation {
++        let status_probe = match path_candidate.as_ref() {
++            Some(candidate) => Some(candidate),
++            None if remote_binary_exists(ssh, &managed)? => Some(&managed),
++            None => None,
++        };
++        let stop_before_install = match status_probe {
++            Some(remote) => confirm_remote_install_with_running_server(ssh, remote, false)?,
++            None => false,
++        };
++        if let Some(remote) = status_probe.filter(|_| stop_before_install) {
++            stop_remote_server(ssh, remote)?;
++        }
 +    }
-+    let override_payload = remote_binary_override_path()?;
 +    confirm_remote_install(
 +        ssh.target(),
 +        &managed,
 +        &install_source_description(&managed.platform, override_payload.as_deref()),
++        yes,
 +    )?;
-+    let source = resolve_windows_install_source(override_payload)?;
-+    if source.kind != InstallSourceKind::WindowsZip {
-+        return Err(io::Error::new(
-+            io::ErrorKind::InvalidInput,
-+            format!(
-+                "{REMOTE_BINARY_ENV_VAR} must identify the complete Windows portable ZIP for a Windows remote host"
-+            ),
-+        ));
++    let source = resolve_windows_install_source(&platform, override_payload)?;
++    if let Some(identity) = source_identity.as_deref() {
++        if source.sha256.as_deref() != Some(identity) {
++            source.cleanup();
++            return Err(io::Error::other(
++                "local Windows remote payload changed while provisioning; rebuild and retry",
++            ));
++        }
 +    }
 +    let expected_sha256 = source.sha256.as_deref().ok_or_else(|| {
 +        io::Error::new(
@@ -4246,7 +4920,8 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +            "Windows remote portable payload is missing its verified SHA-256 identity",
 +        )
 +    })?;
-+    let install_result = ssh.install_windows_payload(&managed, &source.path, expected_sha256);
++    let install_result =
++        ssh.install_windows_payload(&managed, &source.path, expected_sha256, source.kind);
 +    source.cleanup();
 +    install_result?;
 +    if !remote_binary_matches(ssh, &managed)? {
@@ -4530,10 +5205,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    let mut lines = stdout.lines();
 +    let version = lines.next().unwrap_or_default().trim();
 +    let status = lines.next().unwrap_or_default();
-+    Ok(version == format!("herdr {}", current_version())
-+        && parse_client_status_json(status)
-+            .map(|status| status.protocol == CURRENT_PROTOCOL)
-+            .unwrap_or(false))
++    Ok(version == crate::build_info::cli_version() && remote_client_status_matches_current(status))
 +}
 +
 +fn remote_binary_exists(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
@@ -4633,11 +5305,21 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    download_release_asset(platform)
 +}
 +
-+fn resolve_windows_install_source(override_payload: Option<PathBuf>) -> io::Result<InstallSource> {
++fn resolve_windows_install_source(
++    platform: &RemotePlatform,
++    override_payload: Option<PathBuf>,
++) -> io::Result<InstallSource> {
 +    if let Some(path) = override_payload {
 +        validate_windows_zip_path(&path)?;
 +        let sha256 = file_sha256(&path)?;
 +        return Ok(InstallSource::windows_zip(path, None, sha256));
++    }
++    if local_binary_compatible_with_remote(platform) {
++        let path = std::env::current_exe()?;
++        if !crate::update::is_package_manager_managed_exe_path(&path) {
++            let sha256 = file_sha256(&path)?;
++            return Ok(InstallSource::windows_executable(path, sha256));
++        }
 +    }
 +    let source = download_release_asset(&RemotePlatform {
 +        os: "windows",
@@ -4650,6 +5332,22 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        ));
 +    }
 +    Ok(source)
++}
++
++fn windows_install_source_identity(
++    platform: &RemotePlatform,
++    override_payload: Option<&Path>,
++) -> io::Result<Option<String>> {
++    if let Some(path) = override_payload {
++        return file_sha256(path).map(Some);
++    }
++    if local_binary_compatible_with_remote(platform) {
++        let path = std::env::current_exe()?;
++        if !crate::update::is_package_manager_managed_exe_path(&path) {
++            return file_sha256(&path).map(Some);
++        }
++    }
++    Ok(None)
 +}
 +
 +fn validate_windows_zip_path(path: &Path) -> io::Result<()> {
@@ -4691,7 +5389,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +}
 +
 +fn local_binary_can_seed_remote(platform: &RemotePlatform) -> bool {
-+    if *platform != RemotePlatform::local() {
++    if !local_binary_compatible_with_remote(platform) {
 +        return false;
 +    }
 +
@@ -4700,11 +5398,21 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +        .unwrap_or(false)
 +}
 +
++fn local_binary_compatible_with_remote(platform: &RemotePlatform) -> bool {
++    let local = RemotePlatform::local();
++    *platform == local
++        || (local.os == "windows"
++            && local.arch == "x86_64"
++            && platform.os == "windows"
++            && platform.arch == "aarch64")
++}
++
 +#[derive(Debug, Clone, PartialEq, Eq)]
 +enum RemoteServerStatus {
 +    Running {
 +        version: Option<String>,
 +        protocol: Option<u32>,
++        binary: Option<String>,
 +        live_handoff: bool,
 +        detached_server_daemon: bool,
 +    },
@@ -4737,6 +5445,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    let RemoteServerStatus::Running {
 +        version,
 +        protocol,
++        binary: _,
 +        live_handoff,
 +        detached_server_daemon,
 +    } = status
@@ -4830,6 +5539,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    let RemoteServerStatus::Running {
 +        version,
 +        protocol,
++        binary: _,
 +        live_handoff,
 +        detached_server_daemon,
 +    } = &status
@@ -4930,6 +5640,268 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    RemoteInstallRunningServerPlan::StopRequired(reason)
 +}
 +
++fn provision_remote(
++    ssh: &RemoteSsh,
++    host: RemoteHostPlatform,
++    yes: bool,
++) -> io::Result<RemoteProvisionResult> {
++    if !yes && !io::stdin().is_terminal() {
++        return Err(io::Error::other(
++            "non-interactive remote provisioning requires --yes",
++        ));
++    }
++    let (platform, prepared) = match host {
++        RemoteHostPlatform::Unix(platform) => {
++            let prepared =
++                prepare_remote_herdr_with_consent(ssh, platform.clone(), false, yes, true)?;
++            (platform, prepared)
++        }
++        RemoteHostPlatform::Windows {
++            platform,
++            user_profile,
++        } => {
++            let prepared = prepare_remote_windows_herdr_with_consent(
++                ssh,
++                platform.clone(),
++                &user_profile,
++                yes,
++                true,
++            )?;
++            (platform, prepared)
++        }
++    };
++    validate_remote_config(ssh, &prepared.remote_herdr)?;
++    let server_outcome = activate_provisioned_remote(
++        ssh,
++        &prepared.remote_herdr,
++        prepared.installed_or_replaced,
++        yes,
++    )?;
++
++    Ok(RemoteProvisionResult {
++        target: ssh.target().to_string(),
++        platform: platform.asset_key(),
++        binary: prepared.remote_herdr.shell_path.clone(),
++        binary_outcome: if prepared.installed_or_replaced {
++            RemoteBinaryOutcome::Installed
++        } else {
++            RemoteBinaryOutcome::AlreadyMatching
++        },
++        server_outcome,
++        version: crate::build_info::cli_version(),
++        protocol: CURRENT_PROTOCOL,
++    })
++}
++
++fn validate_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    let output = remote_herdr_output(ssh, remote_herdr, &["config", "check"])?;
++    if output.status.success() {
++        Ok(())
++    } else {
++        Err(command_failed(
++            "remote herdr configuration is invalid",
++            &output,
++        ))
++    }
++}
++
++fn activate_provisioned_remote(
++    ssh: &RemoteSsh,
++    remote_herdr: &RemoteHerdr,
++    binary_changed: bool,
++    yes: bool,
++) -> io::Result<RemoteServerOutcome> {
++    let status = remote_server_status(ssh, remote_herdr)?;
++    let binary_matches = if binary_changed {
++        false
++    } else if let RemoteServerStatus::Running {
++        binary: Some(running_binary),
++        ..
++    } = &status
++    {
++        let selected_binary = remote_client_binary(ssh, remote_herdr)?;
++        remote_binary_paths_match(remote_herdr.shell, running_binary, &selected_binary)
++    } else {
++        false
++    };
++    match remote_provision_server_action(&status, binary_changed, binary_matches) {
++        RemoteProvisionServerAction::Start => {
++            start_remote_server(ssh, remote_herdr)?;
++            Ok(RemoteServerOutcome::Started)
++        }
++        RemoteProvisionServerAction::Reload => {
++            reload_remote_config(ssh, remote_herdr)?;
++            Ok(RemoteServerOutcome::Reloaded)
++        }
++        RemoteProvisionServerAction::Restart => {
++            if !yes && !confirm_remote_provision_restart(ssh.target(), &status)? {
++                return Err(io::Error::new(
++                    io::ErrorKind::Interrupted,
++                    "remote herdr server restart cancelled",
++                ));
++            }
++            stop_remote_server(ssh, remote_herdr)?;
++            start_remote_server(ssh, remote_herdr)?;
++            Ok(RemoteServerOutcome::Restarted)
++        }
++    }
++}
++
++fn remote_provision_server_action(
++    status: &RemoteServerStatus,
++    binary_changed: bool,
++    binary_matches: bool,
++) -> RemoteProvisionServerAction {
++    match status {
++        RemoteServerStatus::NotRunning => RemoteProvisionServerAction::Start,
++        RemoteServerStatus::Running {
++            version,
++            protocol: Some(CURRENT_PROTOCOL),
++            binary: Some(binary),
++            detached_server_daemon: true,
++            ..
++        } if !binary_changed
++            && version.as_deref() == Some(current_version().as_str())
++            && binary_matches
++            && !binary.is_empty() =>
++        {
++            RemoteProvisionServerAction::Reload
++        }
++        RemoteServerStatus::Running { .. } => RemoteProvisionServerAction::Restart,
++    }
++}
++
++fn remote_client_binary(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<String> {
++    let output = remote_herdr_output(ssh, remote_herdr, &["status", "client", "--json"])?;
++    if !output.status.success() {
++        return Err(command_failed(
++            "remote client binary identity check failed",
++            &output,
++        ));
++    }
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    let status: RemoteClientStatusJson = serde_json::from_str(stdout.trim()).map_err(|err| {
++        io::Error::other(format!(
++            "could not parse remote client status JSON from `{}`: {err}",
++            stdout.trim()
++        ))
++    })?;
++    status.binary.ok_or_else(|| {
++        io::Error::other("remote client status did not report its executable identity")
++    })
++}
++
++fn remote_binary_paths_match(shell: RemoteShell, running: &str, selected: &str) -> bool {
++    match shell {
++        RemoteShell::WindowsPowerShell => normalize_windows_binary_path(running)
++            .eq_ignore_ascii_case(&normalize_windows_binary_path(selected)),
++        RemoteShell::Posix => running == selected,
++    }
++}
++
++fn normalize_windows_binary_path(path: &str) -> String {
++    path.trim()
++        .replace('/', "\\")
++        .strip_prefix(r"\\?\")
++        .unwrap_or(path.trim())
++        .replace('/', "\\")
++}
++
++fn confirm_remote_provision_restart(target: &str, status: &RemoteServerStatus) -> io::Result<bool> {
++    if !io::stdin().is_terminal() {
++        return Err(io::Error::other(format!(
++            "remote herdr server on {target} must restart to activate the provisioned binary; rerun with --yes to approve stopping its pane processes"
++        )));
++    }
++    let version = match status {
++        RemoteServerStatus::Running { version, .. } => version_label(version.as_deref()),
++        RemoteServerStatus::NotRunning => "not running",
++    };
++    eprintln!("remote herdr server on {target} is running v{version}.");
++    eprintln!("restarting saves the Herdr session but stops its active pane processes.");
++    eprint!("restart the remote server now? [y/N] ");
++    io::stderr().flush()?;
++    let mut answer = String::new();
++    io::stdin().read_line(&mut answer)?;
++    Ok(matches!(
++        answer.trim().to_ascii_lowercase().as_str(),
++        "y" | "yes"
++    ))
++}
++
++fn reload_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    let output = remote_herdr_output(ssh, remote_herdr, &["server", "reload-config", "--json"])?;
++    if !output.status.success() {
++        return Err(command_failed(
++            "remote server config reload failed",
++            &output,
++        ));
++    }
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    let result: RemoteConfigReloadJson = serde_json::from_str(stdout.trim()).map_err(|err| {
++        io::Error::other(format!(
++            "could not parse remote config reload JSON from `{}`: {err}",
++            stdout.trim()
++        ))
++    })?;
++    if result.status == RemoteConfigReloadStatus::Applied {
++        return Ok(());
++    }
++    Err(io::Error::other(format!(
++        "remote server config reload was {:?}: {}",
++        result.status,
++        result.diagnostics.join("; ")
++    )))
++}
++
++fn start_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    let output = remote_herdr_output(ssh, remote_herdr, &["server", "start"])?;
++    if !output.status.success() {
++        return Err(command_failed("remote server start failed", &output));
++    }
++    let status = remote_server_status(ssh, remote_herdr)?;
++    let selected_binary = remote_client_binary(ssh, remote_herdr)?;
++    match status {
++        RemoteServerStatus::Running {
++            version,
++            protocol: Some(CURRENT_PROTOCOL),
++            binary: Some(running_binary),
++            detached_server_daemon: true,
++            ..
++        } if version.as_deref() == Some(current_version().as_str())
++            && remote_binary_paths_match(
++                remote_herdr.shell,
++                &running_binary,
++                &selected_binary,
++            ) =>
++        {
++            Ok(())
++        }
++        _ => Err(io::Error::other(
++            "remote server did not report the provisioned binary, version, and protocol after start",
++        )),
++    }
++}
++
++fn print_remote_provision_result(result: &RemoteProvisionResult, json: bool) -> io::Result<()> {
++    if json {
++        println!(
++            "{}",
++            serde_json::to_string(result).map_err(io::Error::other)?
++        );
++    } else {
++        println!("remote provision: ok");
++        println!("target: {}", result.target);
++        println!("platform: {}", result.platform);
++        println!("binary: {}", result.binary);
++        println!("binary outcome: {:?}", result.binary_outcome);
++        println!("server outcome: {:?}", result.server_outcome);
++        println!("version: {}", result.version);
++        println!("protocol: {}", result.protocol);
++    }
++    Ok(())
++}
++
 +fn remote_server_status(
 +    ssh: &RemoteSsh,
 +    remote_herdr: &RemoteHerdr,
@@ -4945,7 +5917,24 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +
 +#[derive(Debug, Deserialize)]
 +struct RemoteClientStatusJson {
++    version: String,
 +    protocol: u32,
++    binary: Option<String>,
++}
++
++#[derive(Debug, Deserialize)]
++struct RemoteConfigReloadJson {
++    status: RemoteConfigReloadStatus,
++    #[serde(default)]
++    diagnostics: Vec<String>,
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++enum RemoteConfigReloadStatus {
++    Applied,
++    Partial,
++    Failed,
 +}
 +
 +#[derive(Debug, Deserialize)]
@@ -4953,6 +5942,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    running: bool,
 +    version: Option<String>,
 +    protocol: Option<u32>,
++    binary: Option<String>,
 +    capabilities: Option<RemoteServerCapabilitiesJson>,
 +}
 +
@@ -4965,6 +5955,12 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +
 +fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
 +    serde_json::from_str(status).ok()
++}
++
++fn remote_client_status_matches_current(status: &str) -> bool {
++    parse_client_status_json(status).is_some_and(|status| {
++        status.version == current_version() && status.protocol == CURRENT_PROTOCOL
++    })
 +}
 +
 +fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatus> {
@@ -4982,6 +5978,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    Ok(RemoteServerStatus::Running {
 +        version: parsed.version,
 +        protocol: parsed.protocol,
++        binary: parsed.binary,
 +        live_handoff: capabilities
 +            .as_ref()
 +            .is_some_and(|capabilities| capabilities.live_handoff),
@@ -5320,10 +6317,14 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    target: &str,
 +    remote_herdr: &RemoteHerdr,
 +    source_description: &str,
++    yes: bool,
 +) -> io::Result<()> {
++    if yes {
++        return Ok(());
++    }
 +    if !io::stdin().is_terminal() {
 +        return Err(io::Error::other(format!(
-+            "matching remote herdr {} is not installed at {}; run from an interactive terminal to approve installation",
++            "matching remote herdr {} is not installed at {}; run from an interactive terminal or pass --yes with --provision to approve installation",
 +            current_version(),
 +            remote_herdr.shell_path
 +        )));
@@ -6503,6 +7504,64 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    }
 +
 +    #[test]
++    fn extract_remote_args_accepts_unattended_provision() {
++        let args = vec![
++            "herdr".into(),
++            "--remote=dev".into(),
++            "--provision".into(),
++            "--yes".into(),
++            "--json".into(),
++        ];
++
++        let (cleaned, remote) = extract_remote_args(&args).unwrap();
++
++        assert_eq!(cleaned, vec!["herdr"]);
++        let remote = remote.unwrap();
++        assert!(remote.provision);
++        assert!(remote.yes);
++        assert!(remote.json);
++        assert!(!remote.live_handoff);
++    }
++
++    #[test]
++    fn extract_remote_args_requires_provision_for_yes_and_json() {
++        for flag in ["--yes", "--json"] {
++            let args = vec!["herdr".into(), "--remote=dev".into(), flag.into()];
++            assert_eq!(
++                extract_remote_args(&args).unwrap_err(),
++                "--yes and --json require --remote with --provision"
++            );
++        }
++    }
++
++    #[test]
++    fn extract_remote_args_preserves_non_remote_yes_and_json_flags() {
++        for args in [
++            vec!["herdr".into(), "status".into(), "--json".into()],
++            vec![
++                "herdr".into(),
++                "plugin".into(),
++                "install".into(),
++                "owner/repo".into(),
++                "--yes".into(),
++            ],
++        ] {
++            let (cleaned, remote) = extract_remote_args(&args).unwrap();
++            assert_eq!(cleaned, args);
++            assert!(remote.is_none());
++        }
++    }
++
++    #[test]
++    fn windows_x64_local_payload_is_compatible_with_arm64_host() {
++        assert_eq!(RemotePlatform::local().os, "windows");
++        assert_eq!(RemotePlatform::local().arch, "x86_64");
++        assert!(local_binary_compatible_with_remote(
++            &RemotePlatform::windows("ARM64").unwrap()
++        ));
++    }
++
++    #[test]
 +    fn extract_remote_args_preserves_child_remote_options_after_separator() {
 +        let args = vec![
 +            "herdr".into(),
@@ -6629,7 +7688,16 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +                user_profile: "C:\\Users\\can".to_string(),
 +            })
 +        );
-+        assert!(remote_host_platform_from_probe("Windows_NT\nARM64\nC:\\Users\\can\n").is_none());
++        assert_eq!(
++            remote_host_platform_from_probe("Windows_NT\nARM64\nC:\\Users\\can\n"),
++            Some(RemoteHostPlatform::Windows {
++                platform: RemotePlatform {
++                    os: "windows",
++                    arch: "aarch64",
++                },
++                user_profile: "C:\\Users\\can".to_string(),
++            })
++        );
 +    }
 +
 +    #[test]
@@ -6646,7 +7714,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    #[test]
 +    fn windows_sidecar_uses_exact_build_identity_and_portable_asset_key() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
-+        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can");
++        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can", "build");
 +
 +        assert_eq!(platform.asset_key(), "windows-x86_64");
 +        assert!(remote.shell_path.ends_with("\\herdr.exe"));
@@ -6657,13 +7725,14 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    #[test]
 +    fn windows_install_scripts_use_staged_complete_payload_and_exact_validation() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
-+        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can");
++        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can", "build");
 +        let prepare = windows_install_prepare_script(&remote, "payload-42-abcd.zip");
 +        let cleanup = windows_install_cleanup_script("C:\\Temp\\payload.zip");
 +        let commit = windows_install_commit_script(
 +            &remote,
 +            "C:\\Temp\\payload.zip",
 +            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
++            InstallSourceKind::WindowsZip,
 +        );
 +        let bootstrap = crate::remote::windows::powershell_bootstrap_source();
 +
@@ -6798,8 +7867,11 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +
 +    #[test]
 +    fn windows_path_bridge_does_not_require_a_sidecar_lease() {
-+        let managed =
-+            RemoteHerdr::for_windows(RemotePlatform::windows("AMD64").unwrap(), "C:\\Users\\can");
++        let managed = RemoteHerdr::for_windows(
++            RemotePlatform::windows("AMD64").unwrap(),
++            "C:\\Users\\can",
++            "build",
++        );
 +        let path_binary = managed
 +            .with_shell_path("C:\\Program Files\\Herdr\\herdr.exe".to_string())
 +            .into_path_candidate();
@@ -6989,25 +8061,64 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +    }
 +
 +    #[test]
-+    fn parse_client_status_json_reads_protocol() {
-+        assert_eq!(
++    fn parse_client_status_json_reads_exact_runtime_identity_and_protocol() {
++        let status =
 +            parse_client_status_json(r#"{"version":"x","protocol":8,"binary":"/bin/herdr"}"#)
-+                .map(|status| status.protocol),
-+            Some(8)
-+        );
++                .unwrap();
++        assert_eq!(status.version, "x");
++        assert_eq!(status.protocol, 8);
++        assert!(parse_client_status_json(r#"{"protocol":8,"binary":"/bin/herdr"}"#).is_none());
 +        assert!(parse_client_status_json(r#"{"protocol":"unknown"}"#).is_none());
++    }
++
++    #[test]
++    fn remote_client_status_rejects_same_release_with_a_stale_build() {
++        let current = current_version();
++        assert!(remote_client_status_matches_current(&format!(
++            r#"{{"version":"{current}","protocol":{CURRENT_PROTOCOL},"binary":"/bin/herdr"}}"#
++        )));
++        let stale = if current == "2026.08.13.1+0123456789ab.cdef01234567" {
++            "2026.08.13.1+fedcba987654.76543210fedc"
++        } else {
++            "2026.08.13.1+0123456789ab.cdef01234567"
++        };
++        assert!(!remote_client_status_matches_current(&format!(
++            r#"{{"version":"{stale}","protocol":{CURRENT_PROTOCOL},"binary":"/bin/herdr"}}"#
++        )));
++    }
++
++    #[test]
++    fn remote_config_reload_json_requires_applied_terminal_status() {
++        for (json, expected) in [
++            (
++                r#"{"status":"applied","diagnostics":[]}"#,
++                RemoteConfigReloadStatus::Applied,
++            ),
++            (
++                r#"{"status":"partial","diagnostics":["restart required"]}"#,
++                RemoteConfigReloadStatus::Partial,
++            ),
++            (
++                r#"{"status":"failed","diagnostics":["invalid config"]}"#,
++                RemoteConfigReloadStatus::Failed,
++            ),
++        ] {
++            let result: RemoteConfigReloadJson = serde_json::from_str(json).unwrap();
++            assert_eq!(result.status, expected);
++        }
 +    }
 +
 +    #[test]
 +    fn parse_remote_server_status_json_reads_running_server() {
 +        assert_eq!(
 +            parse_remote_server_status_json(
-+                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true}}"#
++                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"binary":"C:\\Herdr\\herdr.exe","capabilities":{"live_handoff":true,"detached_server_daemon":true}}"#
 +            )
 +            .unwrap(),
 +            RemoteServerStatus::Running {
 +                version: Some("0.6.0".into()),
 +                protocol: Some(8),
++                binary: Some(r"C:\Herdr\herdr.exe".into()),
 +                live_handoff: true,
 +                detached_server_daemon: true
 +            }
@@ -7024,6 +8135,7 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +            RemoteServerStatus::Running {
 +                version: Some("0.6.0".into()),
 +                protocol: Some(8),
++                binary: None,
 +                live_handoff: false,
 +                detached_server_daemon: false
 +            }
@@ -7341,6 +8453,59 @@ index 0000000000000000000000000000000000000000..612aba7df222d4eda69ec9a6533a9cef
 +            ),
 +            RemoteInstallRunningServerPlan::LiveHandoff
 +        );
++    }
++
++    #[test]
++    fn provision_reloads_only_an_unchanged_matching_server() {
++        let matching = RemoteServerStatus::Running {
++            version: Some(current_version()),
++            protocol: Some(CURRENT_PROTOCOL),
++            binary: Some(r"C:\Users\can\.herdr\remote\build\herdr.exe".into()),
++            live_handoff: false,
++            detached_server_daemon: true,
++        };
++        assert_eq!(
++            remote_provision_server_action(&matching, false, true),
++            RemoteProvisionServerAction::Reload
++        );
++        assert_eq!(
++            remote_provision_server_action(&matching, true, true),
++            RemoteProvisionServerAction::Restart
++        );
++        assert_eq!(
++            remote_provision_server_action(&matching, false, false),
++            RemoteProvisionServerAction::Restart
++        );
++
++        let mismatched = RemoteServerStatus::Running {
++            version: Some("older".into()),
++            protocol: Some(CURRENT_PROTOCOL),
++            binary: Some(r"C:\Users\can\.herdr\remote\build\herdr.exe".into()),
++            live_handoff: false,
++            detached_server_daemon: true,
++        };
++        assert_eq!(
++            remote_provision_server_action(&mismatched, false, true),
++            RemoteProvisionServerAction::Restart
++        );
++        assert_eq!(
++            remote_provision_server_action(&RemoteServerStatus::NotRunning, false, false),
++            RemoteProvisionServerAction::Start
++        );
++    }
++
++    #[test]
++    fn remote_binary_identity_normalizes_windows_paths_only() {
++        assert!(remote_binary_paths_match(
++            RemoteShell::WindowsPowerShell,
++            r"\\?\C:\Users\Can\.herdr\remote\build\herdr.exe",
++            "C:/Users/can/.herdr/remote/build/herdr.exe"
++        ));
++        assert!(!remote_binary_paths_match(
++            RemoteShell::Posix,
++            "/opt/Herdr",
++            "/opt/herdr"
++        ));
 +    }
 +
 +    #[test]
@@ -10617,10 +11782,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..c8fea160e856a256762db0f0d1540ee7831dbf6f
+index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be8ecc553e
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,278 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -10704,6 +11869,16 @@ index 0000000000000000000000000000000000000000..c8fea160e856a256762db0f0d1540ee7
 +pub(crate) fn remote_sidecar_active() -> bool {
 +    REMOTE_SIDECAR_ACTIVE.get().copied().unwrap_or(false)
 +}
++
++#[cfg(windows)]
++pub(crate) fn configure_remote_sidecar_child(command: &mut std::process::Command) {
++    if remote_sidecar_active() {
++        command.env(sidecar_environment_name(), "1");
++    }
++}
++
++#[cfg(not(windows))]
++pub(crate) fn configure_remote_sidecar_child(_command: &mut std::process::Command) {}
 +
 +#[cfg(windows)]
 +fn ensure_remote_server_running() -> io::Result<()> {
@@ -10891,10 +12066,10 @@ index 0000000000000000000000000000000000000000..c8fea160e856a256762db0f0d1540ee7
 +}
 diff --git a/src/remote/windows_bootstrap.ps1 b/src/remote/windows_bootstrap.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef96545b98966a
+index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585af5abecb
 --- /dev/null
 +++ b/src/remote/windows_bootstrap.ps1
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,173 @@
 +Set-StrictMode -Version Latest
 +$ErrorActionPreference = 'Stop'
 +
@@ -10974,7 +12149,7 @@ index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef9654
 +
 +    $parent = Split-Path -Parent $Destination
 +    [IO.Directory]::CreateDirectory($parent) | Out-Null
-+    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.zip$') {
++    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.(zip|exe)$') {
 +        throw 'invalid remote payload archive name'
 +    }
 +    $archive = Join-Path $parent $ArchiveName
@@ -10996,8 +12171,9 @@ index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef9654
 +        [Parameter(Mandatory = $true)][string] $Archive,
 +        [Parameter(Mandatory = $true)][string] $Destination,
 +        [Parameter(Mandatory = $true)][string] $ExpectedSha256,
-+        [Parameter(Mandatory = $true)][string] $ExpectedVersion,
-+        [Parameter(Mandatory = $true)][int] $ExpectedProtocol
++        [Parameter(Mandatory = $true)][string] $ExpectedRuntimeVersion,
++        [Parameter(Mandatory = $true)][int] $ExpectedProtocol,
++        [Parameter(Mandatory = $true)][ValidateSet('executable', 'zip')][string] $PayloadKind
 +    )
 +
 +    $parent = Split-Path -Parent $Destination
@@ -11008,24 +12184,27 @@ index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef9654
 +            throw 'transferred portable payload checksum mismatch'
 +        }
 +
-+        Expand-Archive -LiteralPath $Archive -DestinationPath $stage -Force
++        if ($PayloadKind -ceq 'zip') {
++            Expand-Archive -LiteralPath $Archive -DestinationPath $stage -Force
++        } else {
++            [IO.Directory]::CreateDirectory($stage) | Out-Null
++            [IO.File]::Copy($Archive, (Join-Path $stage 'herdr.exe'), $false)
++        }
 +        Assert-HerdrRemotePlainDirectory -Path $stage
 +        $exe = Join-Path $stage 'herdr.exe'
 +        $marker = Join-Path $stage 'conpty\herdr-conpty.json'
 +        if (-not [IO.File]::Exists($exe)) {
 +            throw 'portable payload is missing herdr.exe'
 +        }
-+        if (-not [IO.File]::Exists($marker)) {
++        if ($PayloadKind -ceq 'zip' -and -not [IO.File]::Exists($marker)) {
 +            throw 'portable payload is missing its ConPTY ownership marker'
 +        }
 +
-+        $version = & $exe --version
-+        if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
-+            throw ('portable payload identity mismatch: ' + ($version -join ' '))
-+        }
 +        $status = & $exe status client --json | ConvertFrom-Json
-+        if ($LASTEXITCODE -ne 0 -or [int]$status.protocol -ne $ExpectedProtocol) {
-+            throw 'portable payload protocol mismatch'
++        if ($LASTEXITCODE -ne 0 -or
++            [string]$status.version -cne $ExpectedRuntimeVersion -or
++            [int]$status.protocol -ne $ExpectedProtocol) {
++            throw 'portable payload runtime identity or protocol mismatch'
 +        }
 +
 +        [IO.File]::WriteAllBytes((Join-Path $stage '.lease'), [byte[]]@())
@@ -11065,7 +12244,7 @@ index 0000000000000000000000000000000000000000..8d10c1985a324a2c25f0c2cc81ef9654
 +    }
 +}
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
-index 337c388f9a2bedd4e72159317e160e8bab6d92d0..63239b1f622c11ca4cb22446c67f7e0fe6ea319d 100644
+index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63fe36a919c 100644
 --- a/src/server/autodetect.rs
 +++ b/src/server/autodetect.rs
 @@ -31,7 +31,6 @@ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -11103,7 +12282,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..63239b1f622c11ca4cb22446c67f7e0f
  
      match crate::protocol::write_message(&mut stream, &hello) {
          Ok(()) => Ok(true),
-@@ -147,6 +137,40 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
+@@ -147,6 +137,46 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
      }
  }
  
@@ -11139,11 +12318,50 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..63239b1f622c11ca4cb22446c67f7e0f
 +            crate::protocol::ClientLaunchMode::TerminalAttach
 +        );
 +    }
++
++    #[test]
++    fn explicit_server_start_uses_the_requested_binary() {
++        let exe = PathBuf::from(r"C:\remote-sidecar\herdr.exe");
++        assert_eq!(server_daemon_program_for_test(exe.clone()), exe);
++    }
 +}
 +
  fn validate_running_server_compatibility() -> io::Result<()> {
      let Some(status) = read_server_status()? else {
          return Err(io::Error::other(format!(
+@@ -207,6 +237,24 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
+     Ok(pid)
+ }
+ 
++pub fn start_server_daemon_with_exe(exe: PathBuf) -> io::Result<()> {
++    let socket_path = client_socket_path();
++    if is_server_listening_at(&socket_path) {
++        validate_running_server_compatibility()?;
++        return Ok(());
++    }
++    let mut command = build_server_daemon_command(exe);
++    crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
++        io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
++    })?;
++    wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT)
++}
++
++#[cfg(test)]
++fn server_daemon_program_for_test(exe: PathBuf) -> PathBuf {
++    build_server_daemon_command(exe).get_program().into()
++}
++
+ fn build_server_daemon_command(exe: PathBuf) -> Command {
+     let mut command = Command::new(&exe);
+     command
+@@ -216,6 +264,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
+         .stdout(std::process::Stdio::null())
+         .stderr(std::process::Stdio::null());
+     crate::platform::detach_server_daemon_command(&mut command);
++    crate::remote::configure_remote_sidecar_child(&mut command);
+ 
+     match std::env::current_dir() {
+         Ok(cwd) => {
 diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
 index ec41ec13afba50ef17509527249d39a0b5810e72..198b91c7a5f9869d489f5a3f0200e3f7aa2274ed 100644
 --- a/src/server/client_transport.rs
@@ -12042,7 +13260,7 @@ index 60143fe448a9db1ab64bf8bcb3fc121f718d3574..c9de720840c9b3c5dd6a86a0e49ffc06
      if app.mode == Mode::Navigate {
          let switcher_viewport_h = area.height.saturating_sub(header_h + 1);
 diff --git a/src/update.rs b/src/update.rs
-index 3455841d2a90da519499f0c41daf5557c899cb95..2120fb3c9cad9fd20cfae7dee307298120d7fca6 100644
+index 3455841d2a90da519499f0c41daf5557c899cb95..294aa1cc22211f40c280069a62ba894cdb827f13 100644
 --- a/src/update.rs
 +++ b/src/update.rs
 @@ -1830,6 +1830,11 @@ pub(crate) fn is_package_manager_managed_exe_path(path: &Path) -> bool {
@@ -12057,6 +13275,30 @@ index 3455841d2a90da519499f0c41daf5557c899cb95..2120fb3c9cad9fd20cfae7dee3072981
  fn is_homebrew_managed_exe_path_following_links(path: &Path) -> bool {
      if is_homebrew_managed_exe_path(path) {
          return true;
+@@ -2686,6 +2691,7 @@ mod tests {
+         let server = crate::api::RuntimeStatus {
+             version: Some("0.5.5".to_string()),
+             protocol: Some(2),
++            binary: None,
+             capabilities: None,
+         };
+         let compatible_release = ReleaseInfo {
+@@ -2740,6 +2746,7 @@ mod tests {
+             server: crate::api::RuntimeStatus {
+                 version: Some("0.6.2".to_string()),
+                 protocol: Some(76),
++                binary: None,
+                 capabilities: Some(crate::api::schema::ServerCapabilities {
+                     live_handoff: true,
+                     detached_server_daemon: true,
+@@ -2928,6 +2935,7 @@ mod tests {
+         let server = crate::api::RuntimeStatus {
+             version: Some("0.5.5".to_string()),
+             protocol: Some(2),
++            binary: None,
+             capabilities: None,
+         };
+         let release = ReleaseInfo {
 -- 
 2.55.0.windows.3
 

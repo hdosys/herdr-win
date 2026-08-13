@@ -219,6 +219,8 @@ class DeltaPatchTests(unittest.TestCase):
             "https://github.com/herdrdev/herdr/pull/2329",
             "https://github.com/herdrdev/herdr/discussions/2409",
             "https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png",
+            "https://github.com/hdosys/herdr-win/releases",
+            "herdr-win_v<version>_windows_amd64_setup.exe",
             "has not shipped in a stable release yet",
             "never terminates active Herdr sessions",
             "Upstreamed in Herdr v0.6.9",
@@ -242,6 +244,7 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertNotIn("github.com/ogulcancelik/herdr", readme)
         self.assertNotIn("## Identity and compatibility", readme)
         self.assertNotIn("Get-FileHash", readme)
+        self.assertNotIn("herdr.dev/install.ps1", readme)
         self.assertNotIn("platform-Windows%20x64", readme)
         self.assertIn(
             '<img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">',

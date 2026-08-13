@@ -20,4 +20,11 @@ configuration repository.
 
 ## Proposals
 
-None.
+- **Status: proposed. Add a repository-owned Windows mailbox replay helper.**
+  Evidence: this milestone repeated manual `worktree`/`format-patch` commands,
+  encountered linked-worktree safe-directory errors, and required a second cleanup
+  path after Git hit Windows path-length limits. Proposed change: add one bounded
+  helper that creates a task worktree, folds one logical mailbox, verifies its
+  patch, and removes it with long-path support. Expected benefit: fewer recovery
+  branches, safer cleanup, and faster repeatable mailbox refreshes. Owner:
+  `CONTRIBUTING.md` plus the future helper and focused tests.

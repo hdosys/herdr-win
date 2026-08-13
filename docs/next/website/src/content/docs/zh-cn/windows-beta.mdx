@@ -7,15 +7,9 @@ Windows 原生支持已正式发布。
 
 Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不是 Herdr 最初围绕构建的 Unix PTY 模型。大多数核心工作流已受支持,但部分能力与 Linux/macOS 不同或取决于平台。随着这些剩余差距逐步缩小,Windows 可能会收到更多平台专用修复。
 
-使用 PowerShell 在 Windows 上原生安装 Herdr:
+安装 Windows 原生构建时,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe`。按用户安装的 NSIS 安装程序无需管理员权限,在已安装的应用中注册 **Herdr Win**,并将 `%LOCALAPPDATA%\Programs\Herdr\bin` 添加到用户 `PATH`。一个稳定启动器会选择 `%LOCALAPPDATA%\Programs\Herdr\runtime` 下的不可变运行时,因此活动会话可以在启用新运行时之前正常结束。
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
-```
-
-Windows 构建同时通过稳定版和预览版更新通道提供。新安装默认使用稳定版,常规使用也建议选择稳定版。现有预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。如果旧预览构建拒绝该命令,请先在预览通道运行一次 `herdr update`,再重试。预览版会提供来自 `master` 的更新、测试较少的修复,也可能出现回归;只有在接受这一取舍时,才应通过 `herdr channel set preview` 主动启用。
-
-安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
+已安装的 Windows 发行版拥有该分支的 CalVer 更新源,不能通过配置切换到官方 Herdr 或其他通道。
 
 对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。使用自定义预览清单时还应设置 `HERDR_CHANNEL=preview`。
 
@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
 
 此选项暂不支持其他 Windows 输入法。参见[配置](/zh-cn/docs/configuration/#前缀输入源切换)。
 
-Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过连接 Linux/macOS 主机的 `herdr --remote` 单独受支持。
+Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过 `herdr --remote` 单独受支持,包括 Windows 目标主机。
 
 Kitty graphics 是实验性功能,并取决于外层终端。设置 `experimental.kitty_graphics = true` 后,Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证,但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。除非外层终端支持 Kitty graphics 且你正在测试该组合,否则请保持此选项禁用。
 
@@ -112,7 +106,6 @@ Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即�
 | 能力 | 状态 |
 | --- | --- |
 | 直接终端附加 (`herdr terminal attach`) | 不支持 |
-| Windows 作为 `herdr --remote` 的目标主机 | 不支持 |
 | 实时服务器交接 | 不支持 |
 | Unix 文件描述符交接 | 不支持 |
 | Unix 前台进程组 | 不支持 |
@@ -123,11 +116,12 @@ Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即�
 
 ```powershell
 herdr --remote workbox
+herdr --remote workbox --provision --yes --json
 ```
 
-目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
+所有受支持的客户端都可以连接 x86_64 和 ARM64 Windows 主机。Herdr 使用 `PATH` 或稳定的 `%USERPROFILE%\.herdr\remote\herdr.exe` 负载中版本与协议完全匹配的二进制。显式配置会传输并验证完整的便携 ZIP,不会运行受管理安装程序或更改远程 `PATH`;普通非交互式连接永远不会安装。Windows OpenSSH 的默认 shell 必须是 `cmd.exe` 或 PowerShell 7,服务器会在 SSH 用户现有的活动桌面会话中启动,因此 SSH 断开后仍可继续运行。Windows PowerShell 5.1、未知 shell 或不明确的桌面会话都会 fail-closed。Windows 目标主机不支持实时交接。
 
-Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
+Windows 更新使用受管理的安装程序资产。现有会话继续使用当前的不可变运行时,活动租约结束后,后续启动会切换到新运行时。实时交接仅限 Unix。
 
 ## 报告 Windows 问题
 

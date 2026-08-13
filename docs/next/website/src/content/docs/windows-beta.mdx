@@ -7,15 +7,9 @@ Native Windows support is generally available.
 
 Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the Unix PTY model Herdr was originally built around. Most core workflows are supported, but some capabilities differ from Linux and macOS or remain platform-dependent. Windows may receive more platform-specific fixes as those remaining gaps close.
 
-Install Herdr natively on Windows with PowerShell:
+Install native Windows builds by downloading the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases). The per-user NSIS setup requires no administrator access, registers **Herdr Win** in Installed Apps, and puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user `PATH`. One stable launcher selects immutable runtimes under `%LOCALAPPDATA%\Programs\Herdr\runtime` so active sessions can finish before a newer runtime is activated.
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
-```
-
-Windows builds are available through both stable and preview update channels. New installs use stable by default, and stable is recommended for normal use. Existing preview installs stay on preview until you run `herdr channel set stable`. If an older preview build rejects that command, run `herdr update` once on preview and retry. Preview provides newer, less-tested fixes from `master` and may regress; opt in with `herdr channel set preview` only when you want that tradeoff.
-
-The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
+The installed Windows distribution owns its fork CalVer update feed and cannot be redirected to official Herdr or another channel through config.
 
 For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest. Set `HERDR_CHANNEL=preview` with a custom preview manifest.
 
@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
 
 Other Windows IMEs are not supported by this option yet. See [Configuration](/docs/configuration/#prefix-input-source-switching).
 
-Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux and macOS hosts.
+Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote`, including Windows target hosts.
 
 Kitty graphics is experimental and depends on the outer terminal. When `experimental.kitty_graphics = true`, Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Leave the option disabled unless the outer terminal supports Kitty graphics and you are testing that combination.
 
@@ -112,7 +106,6 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is 
 | Capability | Status |
 | --- | --- |
 | Direct terminal attach (`herdr terminal attach`) | unsupported |
-| Windows as a `herdr --remote` target host | unsupported |
 | Live server handoff | unsupported |
 | Unix file-descriptor handoff | unsupported |
 | Unix foreground process groups | unsupported |
@@ -123,11 +116,12 @@ From Windows Terminal, use the same remote command as Linux and macOS:
 
 ```powershell
 herdr --remote workbox
+herdr --remote workbox --provision --yes --json
 ```
 
-The target host must run Linux or macOS. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
+Every supported client can attach to x86_64 and ARM64 Windows hosts. Herdr uses an exact version- and protocol-matching binary from `PATH` or the stable `%USERPROFILE%\.herdr\remote\herdr.exe` payload. Explicit provisioning transfers and validates the complete portable ZIP without running the managed installer or changing remote `PATH`; ordinary non-interactive attach never installs. The Windows OpenSSH default shell must be `cmd.exe` or PowerShell 7, and the server starts in the SSH user's existing active desktop session so it survives SSH closure. Windows PowerShell 5.1, an unknown shell, or an ambiguous desktop session fails closed. Windows remote hosts do not support live handoff.
 
-Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
+Windows updates run through the managed setup asset. Existing sessions keep their current immutable runtime, and future launches switch after active leases exit. Live handoff is Unix-only.
 
 ## Reporting Windows issues
 

@@ -29,6 +29,43 @@ fn env_bool(name: &str) -> Option<bool> {
     }
 }
 
+fn valid_release_version(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    if parts.len() != 4
+        || parts[0].len() != 4
+        || parts[1].len() != 2
+        || parts[2].len() != 2
+        || parts[3].is_empty()
+        || parts
+            .iter()
+            .any(|part| part.bytes().any(|byte| !byte.is_ascii_digit()))
+        || parts[3].starts_with('0')
+    {
+        return false;
+    }
+    let Ok(year) = parts[0].parse::<u16>() else {
+        return false;
+    };
+    let Ok(month) = parts[1].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = parts[2].parse::<u8>() else {
+        return false;
+    };
+    let Ok(sequence) = parts[3].parse::<u16>() else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day > 0 && day <= max_day && sequence > 0
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
@@ -41,13 +78,34 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
-    println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=HERDR_RELEASE_VERSION");
     println!("cargo:rerun-if-env-changed=ZIG");
     println!(
         "cargo:warning=external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work."
     );
+
+    if let Ok(release_version) = env::var("HERDR_RELEASE_VERSION") {
+        assert!(
+            valid_release_version(&release_version),
+            "HERDR_RELEASE_VERSION must be a real YYYY.MM.DD.N CalVer with a 1-65535 sequence"
+        );
+        let build_id = env::var("HERDR_BUILD_ID")
+            .expect("HERDR_RELEASE_VERSION requires HERDR_BUILD_ID provenance");
+        let (upstream, control) = build_id
+            .split_once('.')
+            .expect("HERDR_BUILD_ID must contain two components");
+        assert!(
+            upstream.len() == 12
+                && control.len() == 12
+                && upstream
+                    .bytes()
+                    .chain(control.bytes())
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+            "HERDR_BUILD_ID must contain two 12-character lowercase hexadecimal components"
+        );
+    }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let vendored_dir = manifest_dir.join("vendor/libghostty-vt");

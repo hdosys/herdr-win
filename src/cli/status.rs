@@ -94,10 +94,8 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
 
     println!("client:");
     println!("  version: {}", crate::build_info::version());
-    println!(
-        "  channel: {}",
-        crate::config::Config::load().config.update.channel.as_str()
-    );
+    println!("  herdr: {}", crate::build_info::BASE_VERSION);
+    println!("  build: {}", build_id_label());
     println!("  protocol: {}", crate::protocol::PROTOCOL_VERSION);
     println!();
     println!("server:");
@@ -126,10 +124,8 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
     }
 
     println!("version: {}", crate::build_info::version());
-    println!(
-        "channel: {}",
-        crate::config::Config::load().config.update.channel.as_str()
-    );
+    println!("herdr: {}", crate::build_info::BASE_VERSION);
+    println!("build: {}", build_id_label());
     println!("protocol: {}", crate::protocol::PROTOCOL_VERSION);
     println!("binary: {}", current_exe_label());
     Ok(())
@@ -218,7 +214,8 @@ struct FullStatusJson {
 #[derive(Serialize)]
 struct ClientStatusJson {
     version: String,
-    channel: &'static str,
+    herdr_version: &'static str,
+    build_id: Option<&'static str>,
     protocol: u32,
     binary: String,
     session: Option<String>,
@@ -252,7 +249,8 @@ struct UpdateStatusJson {
 fn client_status_json() -> ClientStatusJson {
     ClientStatusJson {
         version: crate::build_info::version(),
-        channel: crate::config::Config::load().config.update.channel.as_str(),
+        herdr_version: crate::build_info::BASE_VERSION,
+        build_id: crate::build_info::build_id(),
         protocol: crate::protocol::PROTOCOL_VERSION,
         binary: current_exe_label(),
         session: crate::session::active_name(),
@@ -326,6 +324,10 @@ fn current_exe_label() -> String {
         .unwrap_or_else(|err| format!("unknown ({err})"))
 }
 
+fn build_id_label() -> &'static str {
+    crate::build_info::build_id().unwrap_or("none")
+}
+
 fn print_status_help() {
     eprintln!("herdr status commands:");
     eprintln!("  herdr status [--json]         show local client and running server status");
@@ -349,5 +351,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["binary"], binary);
+    }
+
+    #[test]
+    fn client_status_separates_release_compatibility_and_build_identity() {
+        let value = serde_json::to_value(client_status_json()).unwrap();
+
+        assert_eq!(value["version"], crate::build_info::version());
+        assert_eq!(value["herdr_version"], crate::build_info::BASE_VERSION);
+        assert_eq!(
+            value["build_id"],
+            crate::build_info::build_id()
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null)
+        );
+        assert!(value.get("channel").is_none());
     }
 }

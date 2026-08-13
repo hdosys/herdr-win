@@ -2801,12 +2801,30 @@ fn bundled_integration_assets_report_session_refs() {
     );
     assert!(!CODEX_HOOK_ASSET.contains("\"state\": action"));
     assert!(!CODEX_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(KIMI_HOOK_ASSET.contains("source\": \"herdr:kimi"));
-    assert!(KIMI_HOOK_ASSET.contains("agent_session_id"));
-    assert!(KIMI_HOOK_ASSET.contains("method = \"pane.report_agent_session\""));
-    assert!(KIMI_HOOK_ASSET.contains("params[\"session_start_source\"] = \"startup\""));
-    assert!(KIMI_HOOK_ASSET.contains("method = \"pane.report_agent\""));
-    assert!(KIMI_HOOK_ASSET.contains("params[\"state\"] = action"));
+    assert!(
+        KIMI_HOOK_ASSET.contains("source\": \"herdr:kimi")
+            || KIMI_HOOK_ASSET.contains("--source herdr:kimi")
+    );
+    assert!(
+        KIMI_HOOK_ASSET.contains("agent_session_id")
+            || KIMI_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        KIMI_HOOK_ASSET.contains("method = \"pane.report_agent_session\"")
+            || KIMI_HOOK_ASSET.contains("report-agent-session")
+    );
+    assert!(
+        KIMI_HOOK_ASSET.contains("params[\"session_start_source\"] = \"startup\"")
+            || KIMI_HOOK_ASSET.contains("--session-start-source startup")
+    );
+    assert!(
+        KIMI_HOOK_ASSET.contains("method = \"pane.report_agent\"")
+            || KIMI_HOOK_ASSET.contains("pane report-agent ")
+    );
+    assert!(
+        KIMI_HOOK_ASSET.contains("params[\"state\"] = action")
+            || KIMI_HOOK_ASSET.contains("--state $Action")
+    );
     assert!(!KIMI_HOOK_ASSET.contains("pane.release_agent"));
     assert!(COPILOT_HOOK_ASSET.contains("agent_session_id"));
     assert!(COPILOT_HOOK_ASSET.contains("pane.report_agent_session"));

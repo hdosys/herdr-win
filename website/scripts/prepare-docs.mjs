@@ -67,7 +67,6 @@ async function preparePublicAssets() {
 
   for (const file of [
     'install.sh',
-    'install.ps1',
     'agent-guide.md',
     'latest.json',
     'preview.json',

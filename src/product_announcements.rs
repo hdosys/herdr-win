@@ -99,7 +99,7 @@ pub fn save_manifest_announcement(
 
 pub fn load_unseen_for_current_version() -> Option<ProductAnnouncement> {
     load_fake_for_current_version()
-        .or_else(|| load_unseen_from_path(&store_path(), &crate::build_info::version()))
+        .or_else(|| load_unseen_from_path(&store_path(), crate::build_info::release_identity()))
 }
 
 pub fn mark_seen(version: &str, id: &str) -> io::Result<()> {
@@ -155,7 +155,7 @@ fn load_fake_for_current_version() -> Option<ProductAnnouncement> {
         .unwrap_or_else(|| "product announcement preview".to_string());
 
     Some(ProductAnnouncement {
-        version: crate::build_info::version(),
+        version: crate::build_info::release_identity().to_string(),
         id,
         title,
         body,

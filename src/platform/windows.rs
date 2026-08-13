@@ -88,6 +88,15 @@ use windows_sys::{
 
 use super::{ClipboardImage, ForegroundJob, Signal};
 
+// This shared boundary also contains the dedicated launcher's pointer and
+// coordination operations, which are intentionally unreachable in `herdr.exe`.
+#[allow(dead_code)]
+mod managed_install;
+pub(crate) use managed_install::{
+    adopt_managed_runtime_lease_platform, managed_install_command_executable_platform,
+    ManagedRuntimeLease,
+};
+
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
 const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
@@ -3315,6 +3324,37 @@ mod tests {
             super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
             Some("& opencode")
         );
+    }
+
+    #[test]
+    fn child_process_job_assigns_and_terminates_within_deadline() {
+        let mut child = Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn job test child");
+        let job = super::ChildProcessJob::new_kill_on_close().expect("create child job");
+        if let Err(err) = job.assign(&child) {
+            let _ = child.kill();
+            let _ = super::wait_child_bounded(&mut child, Duration::from_secs(5));
+            panic!("assign job test child: {err}");
+        }
+        assert!(child.try_wait().expect("inspect job test child").is_none());
+        let started = Instant::now();
+        job.terminate_and_wait(&mut child, Duration::from_secs(5))
+            .expect("terminate job test child");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(child
+            .try_wait()
+            .expect("reinspect job test child")
+            .is_some());
     }
 
     #[test]

@@ -51,6 +51,31 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command) 
     configure_background_command_platform(command);
 }
 
+pub(crate) fn managed_install_command_executable(
+    current: std::path::PathBuf,
+) -> std::io::Result<std::path::PathBuf> {
+    managed_install_command_executable_platform(current)
+}
+
+pub(crate) fn adopt_managed_runtime_lease() -> std::io::Result<ManagedRuntimeLease> {
+    adopt_managed_runtime_lease_platform()
+}
+
+#[cfg(not(windows))]
+pub(crate) struct ManagedRuntimeLease;
+
+#[cfg(not(windows))]
+fn adopt_managed_runtime_lease_platform() -> std::io::Result<ManagedRuntimeLease> {
+    Ok(ManagedRuntimeLease)
+}
+
+#[cfg(not(windows))]
+fn managed_install_command_executable_platform(
+    current: std::path::PathBuf,
+) -> std::io::Result<std::path::PathBuf> {
+    Ok(current)
+}
+
 #[cfg(not(windows))]
 pub(crate) fn prepare_interactive_server_bootstrap(
     args: Vec<String>,
@@ -206,13 +231,10 @@ pub(crate) struct RemoteSshConfigPaths {
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
-pub(crate) use unix_common::{begin_cli_output, end_cli_output};
+pub(crate) use unix_common::begin_cli_output;
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
-
-#[cfg(not(unix))]
-pub(crate) fn end_cli_output() {}
 
 #[cfg(target_os = "linux")]
 mod linux;

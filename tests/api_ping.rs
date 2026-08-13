@@ -301,7 +301,16 @@ fn ping_over_socket_returns_version() {
     );
     assert_eq!(value["id"], "req_1");
     assert_eq!(value["result"]["type"], "pong");
-    assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
+    let expected_version = match (
+        option_env!("HERDR_RELEASE_VERSION"),
+        option_env!("HERDR_BUILD_ID"),
+    ) {
+        (Some(release), Some(build)) => format!("{release}+{build}"),
+        (Some(release), None) => release.to_string(),
+        (None, Some(build)) => format!("local+{build}"),
+        (None, None) => "local".to_string(),
+    };
+    assert_eq!(value["result"]["version"], expected_version);
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
     assert_eq!(value["result"]["protocol"], 20);

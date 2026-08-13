@@ -19,6 +19,7 @@ MARKER_PATH = PurePosixPath("conpty/herdr-conpty.json")
 PRODUCT_LICENSE_SOURCE = PROJECT_ROOT / "LICENSE"
 PRODUCT_LICENSE_PATH = PurePosixPath("LICENSE.txt")
 DOWNLOAD_TIMEOUT_SECONDS = 60
+ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -226,7 +227,13 @@ def archive_bundle(
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(stage_dir.rglob("*")):
             if path.is_file():
-                archive.write(path, path.relative_to(stage_dir).as_posix())
+                relative = path.relative_to(stage_dir).as_posix()
+                info = zipfile.ZipInfo(relative, date_time=ZIP_TIMESTAMP)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                mode = 0o100755 if path.suffix.lower() == ".exe" else 0o100644
+                info.external_attr = mode << 16
+                archive.writestr(info, path.read_bytes(), compresslevel=9)
 
 
 def parse_args() -> argparse.Namespace:
@@ -244,6 +251,10 @@ def parse_args() -> argparse.Namespace:
     archive.add_argument("--architecture", choices=("x86_64",), default="x86_64")
     archive.add_argument("--stage-dir", type=Path, required=True)
     archive.add_argument("--output", type=Path, required=True)
+
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("--architecture", choices=("x86_64",), default="x86_64")
+    validate.add_argument("--stage-dir", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -257,8 +268,10 @@ def main() -> None:
             args.herdr_exe,
             args.output_dir,
         )
-    else:
+    elif args.command == "archive":
         archive_bundle(args.metadata, args.architecture, args.stage_dir, args.output)
+    else:
+        validate_stage(args.metadata, args.architecture, args.stage_dir)
 
 
 if __name__ == "__main__":

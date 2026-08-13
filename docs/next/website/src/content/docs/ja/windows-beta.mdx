@@ -7,15 +7,9 @@ description: ネイティブ Windows 対応、サポートされるワークフ�
 
 Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モデルではなく、ConPTY と Windows のプロセス/ランタイム挙動を使います。主要なワークフローの多くはサポートされていますが、一部の機能は Linux/macOS と異なるか、プラットフォームに依存します。残っている差を埋める間、Windows 固有の修正がより多く提供されることがあります。
 
-Windows に Herdr をネイティブインストールするには PowerShell を使います:
+Windows ネイティブビルドは、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードしてインストールします。ユーザー単位の NSIS セットアップは管理者権限を必要とせず、インストールされているアプリに **Herdr Win** を登録し、`%LOCALAPPDATA%\Programs\Herdr\bin` をユーザーの `PATH` に追加します。1 つの安定したランチャーが `%LOCALAPPDATA%\Programs\Herdr\runtime` の不変ランタイムを選択するため、実行中のセッションは新しいランタイムが有効になる前に終了できます。
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
-```
-
-Windows ビルドは安定版とプレビューの両方のアップデートチャンネルで提供されます。新規インストールはデフォルトで安定版を使い、通常の利用には安定版を推奨します。既存のプレビューインストールは、`herdr channel set stable` を実行するまでプレビューに残ります。古いプレビュービルドでこのコマンドが拒否される場合は、プレビューのまま一度 `herdr update` を実行してから再試行してください。プレビューでは `master` からの新しく検証の少ない修正を受け取れますが、リグレッションが起きる可能性があります。そのトレードオフを望む場合に限り、`herdr channel set preview` でオプトインしてください。
-
-インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
+インストール済みの Windows ディストリビューションはフォークの CalVer 更新フィードを所有し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。
 
 内部テスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。カスタムプレビューマニフェストでは `HERDR_CHANNEL=preview` も設定してください。
 
@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
 
 その他の Windows IME はまだこのオプションに対応していません。[設定](/ja/docs/configuration/#プレフィックス入力ソースの切り替え)を参照してください。
 
-Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Linux/macOS ホストへの `herdr --remote` で別途サポートされます。
+Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Windows 接続先を含む `herdr --remote` で別途サポートされます。
 
 Kitty graphics は実験的機能で、外側のターミナルに依存します。`experimental.kitty_graphics = true` の場合、Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルが Kitty graphics に対応しており、その組み合わせをテストする場合を除いて、このオプションは無効のままにしてください。
 
@@ -112,7 +106,6 @@ Herdr のペインテキストコピーは Windows で動作します。ペイ�
 | 機能 | 状況 |
 | --- | --- |
 | ダイレクトターミナルアタッチ (`herdr terminal attach`) | 未サポート |
-| `herdr --remote` の接続先としての Windows | 未サポート |
 | ライブサーバーハンドオフ | 未サポート |
 | Unix ファイルディスクリプタのハンドオフ | 未サポート |
 | Unix フォアグラウンドプロセスグループ | 未サポート |
@@ -123,11 +116,12 @@ Windows Terminal からは、Linux や macOS と同じリモートコマンド�
 
 ```powershell
 herdr --remote workbox
+herdr --remote workbox --provision --yes --json
 ```
 
-接続先ホストは Linux または macOS である必要があります。Herdr はインストール済みの Windows OpenSSH クライアントと SSH 設定を使います。Windows OpenSSH では Herdr の Unix コントロールソケットによる接続再利用を使わないため、セットアップ中の繰り返しプロンプトを避けるには Windows の `ssh-agent` による鍵認証を推奨します。
+対応するすべてのクライアントから x86_64 および ARM64 Windows ホストへ接続できます。Herdr は `PATH` または安定した `%USERPROFILE%\.herdr\remote\herdr.exe` ペイロードから、バージョンとプロトコルが完全に一致するバイナリを使います。明示的なプロビジョニングは、管理対象インストーラーの実行やリモート `PATH` の変更を行わず、完全なポータブル ZIP を転送して検証します。通常の非対話アタッチはインストールしません。Windows OpenSSH のデフォルトシェルは `cmd.exe` または PowerShell 7 である必要があり、サーバーは SSH ユーザーの既存のアクティブなデスクトップセッションで起動するため、SSH 切断後も存続します。Windows PowerShell 5.1、未知のシェル、または曖昧なデスクトップセッションでは fail-closed します。Windows 接続先ではライブハンドオフをサポートしません。
 
-Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
+Windows のアップデートは管理対象のセットアップ資産を使います。既存のセッションは現在の不変ランタイムを使い続け、アクティブなリースが終了した後に今後の起動が切り替わります。ライブハンドオフは Unix 専用です。
 
 ## Windows の問題を報告する
 

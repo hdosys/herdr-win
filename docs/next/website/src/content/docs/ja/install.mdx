@@ -13,13 +13,7 @@ Linux または macOS では次を実行します:
 curl -fsSL https://herdr.dev/install.sh | sh
 ```
 
-Windows では次を実行します:
-
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
-```
-
-インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
+Windows では、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードして実行します。セットアップは管理者権限なしで現在のユーザー向けにインストールし、`herdr` をユーザーの `PATH` に追加して、インストールされているアプリに **Herdr Win** を登録します。安全な更新のため、`%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` に 1 つの安定したランチャーを置き、セッションが実行中の間は不変のランタイムディレクトリを使用します。
 
 ## Homebrew でインストール
 
@@ -115,23 +109,7 @@ herdr update
 
 `herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
 
-Linux、macOS、Windows の直接インストールは、デフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
-
-```bash
-herdr channel set preview
-```
-
-直接インストールを安定版に戻すのも同じ方法です:
-
-```bash
-herdr channel set stable
-```
-
-直接インストールの場合、チャンネルの変更はそのチャンネルをチェックして最新バイナリをインストールします。そのアップデートが失敗した場合は、`herdr update` を実行して設定済みチャンネルから再試行してください。
-
-プレビュービルドは、現在の開発ブランチから定期的に公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
-
-Windows の通常利用には安定版を推奨します。プレビューでは修正をより早く受け取れますが、リグレッションの可能性があるため、そのトレードオフを望む場合に限りオプトインしてください。既存の Windows プレビューインストールは、明示的に切り替えるまでプレビューに残ります。古いプレビュービルドで `herdr channel set stable` が拒否される場合は、プレビューのまま一度 `herdr update` を実行してから、チャンネル切り替えを再試行してください。
+インストール済みのディストリビューションが更新フィードを所有します。公式 Herdr の直接インストールは公式リリースを使用します。herdr-win ビルドはフォークの CalVer リリースフィードのみを使用し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。Homebrew、mise、Nix、WinGet のインストールは、それぞれのパッケージマネージャーで更新します。
 
 デフォルトでは、`herdr update` は新しいバイナリをインストールし、互換性のある実行中セッションには手を付けません。アップデートが Herdr のクライアント/サーバープロトコルを変更する場合、Herdr はインストール後に古いサーバーを停止するか尋ねます。新しいバージョンを使うには古いサーバーを停止してください。停止するとペインのプロセスは終了します。デフォルトセッションでは `herdr server stop` を実行してから再度 `herdr` を実行します。名前付きセッションでは `herdr session stop <name>` を実行してから再度 `herdr session attach <name>` を実行します。
 

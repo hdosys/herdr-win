@@ -69,7 +69,7 @@ An upstream refresh is deliberate: select the latest stable release, replay the 
 
 Windows x86_64 is the managed distribution target. Each release also carries matching Linux and macOS binaries for remote endpoints that must speak the same wire protocol.
 
-Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or a versioned per-user sidecar. When a sidecar is needed, an interactive attach can transfer the complete digest-verified Windows portable ZIP without running setup or changing remote `PATH`; ordinary non-interactive attach leaves the host unchanged. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
+Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or a versioned per-user sidecar. When a sidecar is needed, an interactive attach can transfer the complete digest-verified Windows portable ZIP without running setup or changing remote `PATH`; ordinary non-interactive attach leaves the host unchanged. The host's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`) so the interactive bridge remains byte-exact. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
 
 For explicit unattended deployment and activation, validate the remote configuration and provision the matching binary with:
 

@@ -1,4 +1,4 @@
-From 8cc296a10c6de1415ef78ea525d7d94130ca635d Mon Sep 17 00:00:00 2001
+From 3d4c4b24245a528c8d1e2287783de66302640b69 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -50,18 +50,18 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/platform/windows/clipboard_image.rs       |  535 ++
  src/plugin_command.rs                         |    3 +-
  src/remote.rs                                 |  173 +-
- src/remote/attach.rs                          | 5125 +++++++++++++++++
+ src/remote/attach.rs                          | 5151 +++++++++++++++++
  src/remote/unix.rs                            | 3091 +---------
- src/remote/windows.rs                         |  338 ++
- src/remote/windows_attach_probe.ps1           |   72 +
+ src/remote/windows.rs                         |  489 ++
+ src/remote/windows_attach_probe.ps1           |   83 +
  src/remote/windows_bootstrap.ps1              |  173 +
  src/server/autodetect.rs                      |  161 +-
  src/server/client_transport.rs                |   51 +-
  src/server/clipboard_image.rs                 |   12 +-
- src/server/headless.rs                        |  515 +-
+ src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 57 files changed, 8445 insertions(+), 3486 deletions(-)
+ 57 files changed, 8723 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -3785,10 +3785,10 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baac4db1a35
+index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21462eb389
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,5125 @@
+@@ -0,0 +1,5151 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::collections::BTreeMap;
@@ -4028,11 +4028,12 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                remote.live_handoff,
 +                None,
 +            )?;
-+            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
++            remote_bridge_command(&prepared_remote.remote_herdr, &session_name, None)?
 +        }
 +        RemoteHostPlatform::Windows {
 +            platform,
 +            user_profile,
++            ssh_shell,
 +        } => {
 +            if remote.live_handoff {
 +                return Err(io::Error::new(
@@ -4062,7 +4063,11 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                false,
 +                known_server_status,
 +            )?;
-+            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
++            remote_bridge_command(
++                &prepared_remote.remote_herdr,
++                &session_name,
++                Some(&ssh_shell),
++            )?
 +        }
 +    };
 +
@@ -4088,6 +4093,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +    Windows {
 +        platform: RemotePlatform,
 +        user_profile: String,
++        ssh_shell: super::windows::WindowsSshShell,
 +    },
 +}
 +
@@ -5046,7 +5052,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +
 +    // Invoke PowerShell explicitly so Windows detection works from every client
 +    // OS and does not depend on the account's configured OpenSSH default shell.
-+    let windows_probe = "$ErrorActionPreference = 'Stop'; [Console]::Out.WriteLine('Windows_NT'); [Console]::Out.WriteLine($env:PROCESSOR_ARCHITECTURE); [Console]::Out.WriteLine($env:USERPROFILE)";
++    let windows_probe = "$ErrorActionPreference = 'Stop'; $openSsh = Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\OpenSSH' -ErrorAction SilentlyContinue; $defaultShell = if ($null -ne $openSsh -and -not [string]::IsNullOrWhiteSpace([string]$openSsh.DefaultShell)) { [string]$openSsh.DefaultShell } else { 'cmd.exe' }; [Console]::Out.WriteLine('Windows_NT'); [Console]::Out.WriteLine($env:PROCESSOR_ARCHITECTURE); [Console]::Out.WriteLine($env:USERPROFILE); [Console]::Out.WriteLine($defaultShell)";
 +    if !windows_probe_already_failed {
 +        match ssh.powershell_output(windows_probe) {
 +            Ok(output) => {
@@ -5183,6 +5189,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +        host: RemoteHostPlatform::Windows {
 +            platform,
 +            user_profile: probe.user_profile,
++            ssh_shell: super::windows::WindowsSshShell::from_default_shell(&probe.default_shell),
 +        },
 +        warm_windows_attach,
 +    }))
@@ -5224,12 +5231,14 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +            .get(1)
 +            .and_then(|arch| RemotePlatform::windows(arch))?;
 +        let user_profile = lines.get(2).copied()?;
++        let default_shell = lines.get(3).copied()?;
 +        if !valid_windows_user_profile(user_profile) {
 +            return None;
 +        }
 +        return Some(RemoteHostPlatform::Windows {
 +            platform,
 +            user_profile: user_profile.to_string(),
++            ssh_shell: super::windows::WindowsSshShell::from_default_shell(default_shell),
 +        });
 +    }
 +
@@ -5887,6 +5896,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +        RemoteHostPlatform::Windows {
 +            platform,
 +            user_profile,
++            ..
 +        } => {
 +            let prepared = prepare_remote_windows_herdr_with_consent(
 +                ssh,
@@ -6158,6 +6168,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +    os: String,
 +    arch: String,
 +    user_profile: String,
++    default_shell: String,
 +    selected: Option<WindowsAttachSelectionJson>,
 +}
 +
@@ -6606,7 +6617,11 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +    Ok(())
 +}
 +
-+fn remote_bridge_command(remote_herdr: &RemoteHerdr, session_name: &str) -> String {
++fn remote_bridge_command(
++    remote_herdr: &RemoteHerdr,
++    session_name: &str,
++    windows_ssh_shell: Option<&super::windows::WindowsSshShell>,
++) -> io::Result<String> {
 +    match remote_herdr.shell {
 +        RemoteShell::Posix => {
 +            let mut command = format!("exec {}", remote_herdr.shell_path);
@@ -6615,7 +6630,7 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                command.push_str(&shell_quote(session_name));
 +            }
 +            command.push_str(" remote-client-bridge");
-+            command
++            Ok(command)
 +        }
 +        RemoteShell::WindowsPowerShell => {
 +            let mut arguments = Vec::new();
@@ -6624,10 +6639,16 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                arguments.push(session_name.to_string());
 +            }
 +            arguments.push("remote-client-bridge".to_string());
-+            super::windows::powershell_herdr_command(
-+                Some(&remote_herdr.shell_path),
++            super::windows::streaming_herdr_command(
++                &remote_herdr.shell_path,
 +                &arguments,
 +                remote_herdr.remote_sidecar,
++                windows_ssh_shell.ok_or_else(|| {
++                    io::Error::new(
++                        io::ErrorKind::InvalidInput,
++                        "Windows remote bridge is missing the OpenSSH default shell",
++                    )
++                })?,
 +            )
 +        }
 +    }
@@ -7185,7 +7206,6 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
-+    use base64::Engine as _;
 +
 +    #[cfg(unix)]
 +    #[test]
@@ -7929,25 +7949,29 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +    }
 +
 +    #[test]
-+    fn remote_platform_probe_identifies_windows_powershell() {
++    fn remote_platform_probe_identifies_windows_and_its_ssh_shell() {
 +        assert_eq!(
-+            remote_host_platform_from_probe("Windows_NT\nAMD64\nC:\\Users\\can\n"),
++            remote_host_platform_from_probe(
++                "Windows_NT\nAMD64\nC:\\Users\\can\nC:\\Program Files\\PowerShell\\7\\pwsh.exe\n"
++            ),
 +            Some(RemoteHostPlatform::Windows {
 +                platform: RemotePlatform {
 +                    os: "windows",
 +                    arch: "x86_64",
 +                },
 +                user_profile: "C:\\Users\\can".to_string(),
++                ssh_shell: super::super::windows::WindowsSshShell::Pwsh,
 +            })
 +        );
 +        assert_eq!(
-+            remote_host_platform_from_probe("Windows_NT\nARM64\nC:\\Users\\can\n"),
++            remote_host_platform_from_probe("Windows_NT\nARM64\nC:\\Users\\can\ncmd.exe\n"),
 +            Some(RemoteHostPlatform::Windows {
 +                platform: RemotePlatform {
 +                    os: "windows",
 +                    arch: "aarch64",
 +                },
 +                user_profile: "C:\\Users\\can".to_string(),
++                ssh_shell: super::super::windows::WindowsSshShell::Cmd,
 +            })
 +        );
 +    }
@@ -8112,7 +8136,8 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +            arch: "x86_64",
 +        });
 +        assert_eq!(
-+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
++            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None)
++                .unwrap(),
 +            "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
 +        );
 +    }
@@ -8127,19 +8152,16 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +        let path_binary = managed
 +            .with_shell_path("C:\\Program Files\\Herdr\\herdr.exe".to_string())
 +            .into_path_candidate();
-+        let command = remote_bridge_command(&path_binary, "work");
-+        let encoded = command.split_whitespace().last().unwrap();
-+        let bytes = base64::engine::general_purpose::STANDARD
-+            .decode(encoded)
-+            .unwrap();
-+        let utf16 = bytes
-+            .chunks_exact(2)
-+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-+            .collect::<Vec<_>>();
-+        let script = String::from_utf16(&utf16).unwrap();
++        let script = remote_bridge_command(
++            &path_binary,
++            "work",
++            Some(&super::super::windows::WindowsSshShell::Pwsh),
++        )
++        .unwrap();
 +
 +        assert!(!script.contains(super::super::windows::sidecar_environment_name()));
 +        assert!(script.contains("'--session' 'work' 'remote-client-bridge'"));
++        assert!(!script.contains("powershell.exe"));
 +    }
 +
 +    #[test]
@@ -8152,7 +8174,8 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +            .expect("path binary");
 +
 +        assert_eq!(
-+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
++            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None)
++                .unwrap(),
 +            "exec /usr/bin/herdr remote-client-bridge"
 +        );
 +    }
@@ -8168,7 +8191,8 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                .expect("path binary");
 +
 +        assert_eq!(
-+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
++            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None)
++                .unwrap(),
 +            "exec '/opt/herdr bin/herdr' remote-client-bridge"
 +        );
 +    }
@@ -8184,7 +8208,8 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                .expect("path binary");
 +
 +        assert_eq!(
-+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
++            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None)
++                .unwrap(),
 +            "exec /opt/homebrew/bin/herdr remote-client-bridge"
 +        );
 +        assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
@@ -8271,7 +8296,8 @@ index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baa
 +                .expect("path binary");
 +
 +        assert_eq!(
-+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
++            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None)
++                .unwrap(),
 +            "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
 +        );
 +    }
@@ -12034,10 +12060,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a5276f408e13
+index 0000000000000000000000000000000000000000..f0fe7eee4eae4171b2979a5d8e5225e06ca01702
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,489 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -12052,6 +12078,37 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +const WINDOWS_ATTACH_PROBE_SCRIPT: &str = include_str!("windows_attach_probe.ps1");
 +const WINDOWS_BOOTSTRAP_SCRIPT: &str = include_str!("windows_bootstrap.ps1");
 +static REMOTE_SIDECAR_ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub(super) enum WindowsSshShell {
++    Cmd,
++    Pwsh,
++    WindowsPowerShell,
++    Unsupported(String),
++}
++
++impl WindowsSshShell {
++    pub(super) fn from_default_shell(default_shell: &str) -> Self {
++        let executable = default_shell
++            .trim()
++            .rsplit(['\\', '/'])
++            .next()
++            .unwrap_or_default();
++        if executable.eq_ignore_ascii_case("cmd.exe") || executable.eq_ignore_ascii_case("cmd") {
++            Self::Cmd
++        } else if executable.eq_ignore_ascii_case("pwsh.exe")
++            || executable.eq_ignore_ascii_case("pwsh")
++        {
++            Self::Pwsh
++        } else if executable.eq_ignore_ascii_case("powershell.exe")
++            || executable.eq_ignore_ascii_case("powershell")
++        {
++            Self::WindowsPowerShell
++        } else {
++            Self::Unsupported(default_shell.trim().to_string())
++        }
++    }
++}
 +
 +#[cfg(windows)]
 +pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
@@ -12161,10 +12218,45 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +        arguments.push(session_name.to_string());
 +    }
 +    arguments.push("remote-client-bridge".to_string());
-+    powershell_herdr_command(None, &arguments, false)
++    streaming_herdr_command("herdr.exe", &arguments, false, &WindowsSshShell::Pwsh)
++        .expect("test bridge command")
++}
++
++pub(super) fn streaming_herdr_command(
++    executable: &str,
++    arguments: &[String],
++    sidecar: bool,
++    shell: &WindowsSshShell,
++) -> std::io::Result<String> {
++    match shell {
++        WindowsSshShell::Pwsh => Ok(powershell_herdr_script(
++            Some(executable),
++            arguments,
++            sidecar,
++        )),
++        WindowsSshShell::Cmd => cmd_herdr_command(executable, arguments, sidecar),
++        WindowsSshShell::WindowsPowerShell => Err(std::io::Error::new(
++            std::io::ErrorKind::Unsupported,
++            "Windows PowerShell 5.1 is configured as the OpenSSH DefaultShell and buffers Herdr's interactive byte stream; configure cmd.exe or pwsh.exe as the OpenSSH DefaultShell",
++        )),
++        WindowsSshShell::Unsupported(default_shell) => Err(std::io::Error::new(
++            std::io::ErrorKind::Unsupported,
++            format!(
++                "unsupported Windows OpenSSH DefaultShell {default_shell:?}; configure cmd.exe or pwsh.exe"
++            ),
++        )),
++    }
 +}
 +
 +pub(super) fn powershell_herdr_command(
++    executable: Option<&str>,
++    arguments: &[String],
++    sidecar: bool,
++) -> String {
++    encoded_powershell_command(&powershell_herdr_script(executable, arguments, sidecar))
++}
++
++fn powershell_herdr_script(
 +    executable: Option<&str>,
 +    arguments: &[String],
 +    sidecar: bool,
@@ -12188,7 +12280,39 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +        script.push_str(&powershell_quote(argument));
 +    }
 +    script.push_str("; exit $LASTEXITCODE");
-+    encoded_powershell_command(&script)
++    script
++}
++
++fn cmd_herdr_command(
++    executable: &str,
++    arguments: &[String],
++    sidecar: bool,
++) -> std::io::Result<String> {
++    if executable.contains(['"', '%', '\r', '\n', '\0'])
++        || arguments
++            .iter()
++            .any(|argument| argument.contains(['"', '%', '\r', '\n', '\0']))
++    {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "Windows remote bridge path or argument cannot be represented safely for cmd.exe",
++        ));
++    }
++
++    let mut command = String::new();
++    if sidecar {
++        command.push_str("set HERDR_REMOTE_SIDECAR_V1=1&&set HERDR_ENV=&&");
++    }
++    command.push('"');
++    command.push_str(executable);
++    command.push('"');
++    for argument in arguments {
++        command.push(' ');
++        command.push('"');
++        command.push_str(argument);
++        command.push('"');
++    }
++    Ok(command)
 +}
 +
 +pub(super) fn powershell_herdr_probe_command(executable: &str, sidecar: bool) -> String {
@@ -12251,9 +12375,10 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +}
 +
 +fn encoded_powershell_command(script: &str) -> String {
-+    // Windows OpenSSH accounts can use either cmd.exe or PowerShell as their
-+    // default shell. An encoded explicit PowerShell command avoids relying on
-+    // either shell's quoting and still leaves stdin/stdout attached to Herdr.
++    // Bounded probes and provisioning may use an explicit PowerShell process
++    // because their output is consumed only after exit. The interactive bridge
++    // deliberately bypasses this wrapper because Windows PowerShell buffers a
++    // native child's stdout and can serialize diagnostics as CLIXML.
 +    let encoded = base64::engine::general_purpose::STANDARD.encode(
 +        script
 +            .encode_utf16()
@@ -12294,18 +12419,73 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +    use super::*;
 +
 +    #[test]
-+    fn windows_remote_bridge_resolves_path_application_for_default_session() {
++    fn windows_pwsh_remote_bridge_invokes_explicit_binary_for_default_session() {
 +        assert_eq!(
-+            decoded_remote_bridge_script(crate::session::DEFAULT_SESSION_NAME),
-+            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr 'remote-client-bridge'; exit $LASTEXITCODE"
++            remote_bridge_command(crate::session::DEFAULT_SESSION_NAME),
++            "$herdr = 'herdr.exe'; & $herdr 'remote-client-bridge'; exit $LASTEXITCODE"
 +        );
 +    }
 +
 +    #[test]
-+    fn windows_remote_bridge_resolves_path_application_for_named_session() {
++    fn windows_pwsh_remote_bridge_quotes_named_session() {
 +        assert_eq!(
-+            decoded_remote_bridge_script("agent's work"),
-+            "$herdr = (Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction Stop).Source; & $herdr '--session' 'agent''s work' 'remote-client-bridge'; exit $LASTEXITCODE"
++            remote_bridge_command("agent's work"),
++            "$herdr = 'herdr.exe'; & $herdr '--session' 'agent''s work' 'remote-client-bridge'; exit $LASTEXITCODE"
++        );
++    }
++
++    #[test]
++    fn windows_cmd_remote_bridge_invokes_the_binary_without_powershell() {
++        let command = streaming_herdr_command(
++            r"C:\Users\Can D\herdr.exe",
++            &[
++                "--session".into(),
++                "work".into(),
++                "remote-client-bridge".into(),
++            ],
++            true,
++            &WindowsSshShell::Cmd,
++        )
++        .unwrap();
++
++        assert_eq!(
++            command,
++            r#"set HERDR_REMOTE_SIDECAR_V1=1&&set HERDR_ENV=&&"C:\Users\Can D\herdr.exe" "--session" "work" "remote-client-bridge""#
++        );
++        assert!(!command.contains("powershell.exe"));
++    }
++
++    #[test]
++    fn windows_powershell_5_remote_bridge_is_rejected_instead_of_buffered() {
++        let err = streaming_herdr_command(
++            r"C:\Users\Can\herdr.exe",
++            &["remote-client-bridge".into()],
++            true,
++            &WindowsSshShell::WindowsPowerShell,
++        )
++        .unwrap_err();
++
++        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
++        assert!(err
++            .to_string()
++            .contains("buffers Herdr's interactive byte stream"));
++    }
++
++    #[test]
++    fn windows_openssh_default_shell_is_classified_by_executable() {
++        assert_eq!(
++            WindowsSshShell::from_default_shell(r"C:\Windows\System32\cmd.exe"),
++            WindowsSshShell::Cmd
++        );
++        assert_eq!(
++            WindowsSshShell::from_default_shell(r"C:\Program Files\PowerShell\7\pwsh.exe"),
++            WindowsSshShell::Pwsh
++        );
++        assert_eq!(
++            WindowsSshShell::from_default_shell(
++                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
++            ),
++            WindowsSshShell::WindowsPowerShell
 +        );
 +    }
 +
@@ -12353,15 +12533,12 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +        assert!(script.contains("$HerdrAllowPathCandidate = $true"));
 +        assert!(script.contains("$HerdrServerArguments = @('--session', 'agent''s work')"));
 +        assert!(script.contains("PROCESSOR_ARCHITECTURE"));
++        assert!(script.contains("default_shell"));
++        assert!(script.contains("OpenSSH"));
 +        assert!(script.contains("Get-Command -Name 'herdr.exe'"));
 +        assert!(script.contains("'status' 'client' '--json'"));
 +        assert!(script.contains("@('status', 'server', '--json')"));
 +        assert!(script.contains("ConvertTo-Json -Compress"));
-+    }
-+
-+    fn decoded_remote_bridge_script(session_name: &str) -> String {
-+        let command = remote_bridge_command(session_name);
-+        decoded_powershell_command(&command)
 +    }
 +
 +    fn decoded_powershell_command(command: &str) -> String {
@@ -12378,12 +12555,22 @@ index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a527
 +}
 diff --git a/src/remote/windows_attach_probe.ps1 b/src/remote/windows_attach_probe.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..2c9f33e1caf6741cb99a5e85d3fc8e4d50e761d1
+index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53e552e310
 --- /dev/null
 +++ b/src/remote/windows_attach_probe.ps1
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,83 @@
 +$ErrorActionPreference = 'Stop'
 +$ProgressPreference = 'SilentlyContinue'
++
++$openSsh = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\OpenSSH' -ErrorAction SilentlyContinue
++$openSshDefaultShell = if (
++    $null -ne $openSsh -and
++    -not [string]::IsNullOrWhiteSpace([string]$openSsh.DefaultShell)
++) {
++    [string]$openSsh.DefaultShell
++} else {
++    'cmd.exe'
++}
 +
 +function Get-HerdrAttachCandidate([string]$Path, [bool]$Sidecar) {
 +    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.File]::Exists($Path)) {
@@ -12451,6 +12638,7 @@ index 0000000000000000000000000000000000000000..2c9f33e1caf6741cb99a5e85d3fc8e4d
 +    os = 'Windows_NT'
 +    arch = [string]$env:PROCESSOR_ARCHITECTURE
 +    user_profile = [string]$env:USERPROFILE
++    default_shell = $openSshDefaultShell
 +    selected = $selected
 +} | ConvertTo-Json -Compress -Depth 8
 +exit 0
@@ -12994,7 +13182,7 @@ index 70072f2d69aa06b8e17f7b743e0a2d5a1c2bf87e..5afe7bef934d7f79b51d367f8227df72
  }
  
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..f37b2b6c58bddbab40e05fde315d4f4dc667d64d 100644
+index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..6c50c83a9c7739ba1b8cf23e5590aaeaff2e03aa 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
 @@ -322,6 +322,12 @@ pub struct HeadlessServer {
@@ -13399,7 +13587,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..f37b2b6c58bddbab40e05fde315d4f4d
      fn test_client_writer() -> (
          ClientWriter,
          std::sync::mpsc::Receiver<Vec<u8>>,
-@@ -5411,6 +5672,247 @@ new_tab = "prefix+t"
+@@ -5411,6 +5672,337 @@ new_tab = "prefix+t"
              .any(|binding| binding.label == "prefix+c"));
      }
  
@@ -13592,6 +13780,96 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..f37b2b6c58bddbab40e05fde315d4f4d
 +        shutdown_test_runtimes(&mut server);
 +    }
 +
++    #[cfg(windows)]
++    #[tokio::test]
++    async fn startup_api_workspace_routes_windows_input_after_deferred_shell_launch() {
++        let mut server = test_headless_server();
++        let (respond_to, response_rx) = std::sync::mpsc::channel();
++        server.app.state.default_shell = "cmd.exe".into();
++        let sentinel = std::env::temp_dir().join(format!(
++            "herdr-deferred-input-{}-{}.txt",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .map(|duration| duration.as_nanos())
++                .unwrap_or(0)
++        ));
++        let _ = std::fs::remove_file(&sentinel);
++
++        assert!(
++            server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++                request: api::schema::Request {
++                    id: "startup-input".into(),
++                    method: api::schema::Method::WorkspaceCreate(
++                        api::schema::WorkspaceCreateParams {
++                            cwd: Some(std::env::temp_dir().display().to_string()),
++                            focus: true,
++                            label: None,
++                            env: Default::default(),
++                        },
++                    ),
++                },
++                respond_to,
++                response_write_complete: None,
++            })
++        );
++        let _: api::schema::SuccessResponse = serde_json::from_str(
++            &response_rx
++                .recv_timeout(Duration::from_millis(100))
++                .expect("workspace response before app attach"),
++        )
++        .expect("successful workspace response");
++        assert_eq!(server.pending_startup_workspace_launches.len(), 1);
++
++        let (app_writer, _app_control, _app_render) = test_client_writer();
++        assert!(server.handle_server_event(ServerEvent::ClientConnected {
++            client_id: 1,
++            cols: 120,
++            rows: 40,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            render_encoding: RenderEncoding::SemanticFrame,
++            keybindings: None,
++            direct_attach_requested: false,
++            writer: app_writer,
++        }));
++
++        let command = format!("echo deferred-input>{}", sentinel.display());
++        let mut events = command
++            .chars()
++            .map(|ch| crate::protocol::ClientInputEvent::Key {
++                code: crate::protocol::ClientKeyCode::Char(ch),
++                modifiers: 0,
++                kind: crate::protocol::ClientKeyKind::Press,
++                repeat_count: 1,
++                generated_text: Some(ch.to_string()),
++                source: crate::protocol::ClientKeySource::Synthesized,
++            })
++            .collect::<Vec<_>>();
++        events.push(crate::protocol::ClientInputEvent::Key {
++            code: crate::protocol::ClientKeyCode::Enter,
++            modifiers: 0,
++            kind: crate::protocol::ClientKeyKind::Press,
++            repeat_count: 1,
++            generated_text: None,
++            source: crate::protocol::ClientKeySource::Synthesized,
++        });
++        assert!(server.handle_server_event(ServerEvent::ClientInputEvents {
++            client_id: 1,
++            events,
++        }));
++
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while !sentinel.exists() && Instant::now() < deadline {
++            std::thread::sleep(Duration::from_millis(10));
++        }
++        let contents = std::fs::read_to_string(&sentinel).unwrap_or_default();
++
++        shutdown_test_runtimes(&mut server);
++        let _ = std::fs::remove_file(&sentinel);
++        assert_eq!(contents.trim(), "deferred-input");
++    }
++
 +    #[tokio::test]
 +    async fn workspace_api_after_first_app_attach_launches_immediately() {
 +        let mut server = test_headless_server();
@@ -13647,7 +13925,7 @@ index 30d1e3a5e7a392f8a9b6515654c03413539fb56b..f37b2b6c58bddbab40e05fde315d4f4d
      #[test]
      fn local_keybinding_client_hides_server_keybinding_warnings() {
          let mut server = test_headless_server();
-@@ -8194,6 +8696,7 @@ next_tab = ""
+@@ -8194,6 +8786,7 @@ next_tab = ""
                  .current_size(),
              expected
          );
@@ -13798,4 +14076,3 @@ index 3455841d2a90da519499f0c41daf5557c899cb95..294aa1cc22211f40c280069a62ba894c
          let release = ReleaseInfo {
 -- 
 2.55.0.windows.3
-

@@ -53,8 +53,13 @@ behavior; code and tests remain the detailed implementation truth.
   Because Windows OpenSSH control-socket reuse remains disabled, an ordinary
   attach combines platform, matching-binary, and named-session server inspection
   in one explicit PowerShell SSH command. Provisioning retains its separate
-  mutation and activation checks. A matching API status is not attachment
-  readiness until the binary client-protocol socket accepts a handshake.
+  mutation and activation checks. That finite probe also reads OpenSSH's
+  `DefaultShell`. The interactive bridge then invokes the selected Herdr binary
+  directly through `cmd.exe` or PowerShell 7 instead of nesting Windows PowerShell,
+  which buffers native stdout and may serialize diagnostics into the protocol.
+  Windows PowerShell 5.1 and unknown default shells fail before bridge creation. A
+  matching API status is not attachment readiness until the binary client-protocol
+  socket accepts a handshake.
   A non-package-managed local Windows x86_64 build instead uses its executable
   SHA-256 as a development sidecar identity and may run on Windows ARM64 through
   x64 emulation. Its missing app-local ConPTY bundle intentionally selects the
@@ -67,8 +72,8 @@ behavior; code and tests remain the detailed implementation truth.
   resolved server executable for that decision. Persistent Windows server launch
   always crosses the existing WMI process boundary so no invoking terminal,
   OpenSSH channel, or job is retained. A lease retains active payloads; inactive
-  exact sidecars may be pruned. The bridge propagates the PowerShell child exit
-  code. This path never runs the managed installer, changes remote `PATH`, adds
+  exact sidecars may be pruned. The bridge propagates the directly invoked Herdr
+  child exit code. This path never runs the managed installer, changes remote `PATH`, adds
   compatibility layouts, or enables Windows live handoff or OpenSSH control-socket
   reuse.
 - Mailbox 0004 owns deterministic ConPTY packaging, managed Windows distribution,

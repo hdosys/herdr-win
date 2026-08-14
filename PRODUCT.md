@@ -163,6 +163,10 @@ tests remain the detailed implementation truth.
   interactive attach offers to transfer the complete digest-verified Windows
   portable ZIP into that user's profile without running the managed installer or
   changing `PATH`; an ordinary non-interactive attach never modifies the host.
+  The Windows host's OpenSSH default shell must be `cmd.exe` or PowerShell 7
+  (`pwsh.exe`) so the interactive binary stream remains byte-exact. Herdr rejects
+  Windows PowerShell 5.1 and unrecognized default shells with a corrective action
+  instead of opening a buffered or corrupted terminal.
 - `herdr --remote <target> --provision` is the explicit configuration-management
   path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
   binary, rejects invalid remote configuration before server activation, starts a

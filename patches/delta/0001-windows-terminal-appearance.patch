@@ -1,4 +1,4 @@
-From 76842ca5f0b88ca9880c5c883eaf439031bced96 Mon Sep 17 00:00:00 2001
+From e9859baf6686a0b76bad4aef6f71c7b30316c1db Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
@@ -14,7 +14,7 @@ Transport bounded host color and appearance events, keep software and native cur
  src/app/mod.rs                                |  56 ++-
  src/client/input.rs                           |  98 +++++-
  src/client/input/windows_vti.rs               |  88 ++++-
- src/client/mod.rs                             | 185 +++++++---
+ src/client/mod.rs                             | 212 +++++++++---
  src/config/theme.rs                           |   6 +-
  src/main.rs                                   |   2 +-
  src/pane.rs                                   |   1 +
@@ -28,13 +28,14 @@ Transport bounded host color and appearance events, keep software and native cur
  src/server/client_transport.rs                |   4 +-
  src/server/headless.rs                        |  16 +-
  src/server/render_stream.rs                   |   3 +
+ src/terminal_modes.rs                         |  15 +-
  src/terminal_theme.rs                         |  33 +-
  src/ui/tab_surface.rs                         |   6 +-
  tests/cli/sessions.rs                         |   6 +-
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 29 files changed, 1250 insertions(+), 125 deletions(-)
+ 30 files changed, 1276 insertions(+), 141 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index da9c9b710258580c0f193f1c95d4065884accc17..218ef58f1d4628f0e0e087981a081b2d35485102 100644
@@ -513,7 +514,7 @@ index c95cbc43f7b3221315d3dd3a0421d1cb450e9d55..4c06adf588e05950fb92541af0b00261
      fn vti_win32_input_mode_bracketed_paste_key_records_emit_single_paste() {
          let records = win32_input_mode_encoded_key_bytes(
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dcacfe9a7d 100644
+index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65085c042d 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
 @@ -47,6 +47,7 @@ use crate::protocol::{
@@ -589,7 +590,16 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
  // ---------------------------------------------------------------------------
  // Error types
  // ---------------------------------------------------------------------------
-@@ -369,7 +421,7 @@ fn setup_terminal_with_capabilities(
+@@ -352,6 +404,8 @@ fn setup_terminal_with_capabilities(
+     enable_client_protocols: bool,
+     mouse_capture: bool,
+ ) -> io::Result<TerminalGuard> {
++    #[cfg(windows)]
++    let restore_windows_input_mode = windows_input_mode_value();
+     ratatui::init();
+     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+     let host_color_scheme_reports =
+@@ -369,7 +423,7 @@ fn setup_terminal_with_capabilities(
          }
          push_keyboard_enhancement_flags()?;
      } else {
@@ -598,13 +608,14 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
              write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
          }
          if mouse_capture {
-@@ -414,19 +466,25 @@ fn setup_terminal_with_capabilities(
+@@ -414,19 +468,25 @@ fn setup_terminal_with_capabilities(
      Ok(TerminalGuard {
          reset_modify_other_keys: modify_other_keys_mode.is_some(),
          reset_host_color_scheme_reports: host_color_scheme_reports,
 +        host_cursor_color: Arc::new(Mutex::new(None)),
          #[cfg(windows)]
-         restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
+-        restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
++        restore_windows_input_mode,
      })
  }
  
@@ -625,7 +636,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
      #[cfg(windows)]
      restore_windows_input_mode: Option<u32>,
  }
-@@ -447,13 +505,28 @@ fn write_host_color_scheme_report_mode(
+@@ -447,13 +507,28 @@ fn write_host_color_scheme_report_mode(
  fn write_terminal_restore_postlude(
      writer: &mut impl io::Write,
      reset_host_color_scheme_reports: bool,
@@ -655,7 +666,28 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
      writer.write_all(b"\x1b[?25h\x1b[0 q")?;
      writer.flush()
  }
-@@ -569,6 +642,7 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
+@@ -538,6 +613,20 @@ fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
+     mode | 0x0200
+ }
+ 
++#[cfg(windows)]
++fn windows_input_mode_value() -> Option<u32> {
++    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
++    use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
++
++    let handle: HANDLE = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
++    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
++        return None;
++    }
++
++    let mut mode = 0;
++    (unsafe { GetConsoleMode(handle, &mut mode) } != 0).then_some(mode)
++}
++
+ #[cfg(windows)]
+ fn restore_windows_input_mode_value(mode: u32) {
+     use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+@@ -569,6 +658,7 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
  fn restore_terminal_state(
      reset_modify_other_keys: bool,
      reset_host_color_scheme_reports: bool,
@@ -663,9 +695,15 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
      #[cfg(windows)] restore_windows_input_mode: Option<u32>,
  ) {
      let _ = clear_received_kitty_graphics(&mut io::stdout());
-@@ -595,7 +669,11 @@ fn restore_terminal_state(
-     }
- 
+@@ -589,18 +679,21 @@ fn restore_terminal_state(
+         DisableMouseCapture
+     );
+     let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
+-    #[cfg(windows)]
+-    if let Some(mode) = restore_windows_input_mode {
+-        restore_windows_input_mode_value(mode);
+-    }
+-
      ratatui::restore();
 -    let _ = write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
 +    let _ = write_terminal_restore_postlude(
@@ -676,7 +714,16 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
  
      #[cfg(windows)]
      if windows_vti_input_backend_enabled() && windows_win32_input_mode_enabled() {
-@@ -647,9 +725,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
+         let _ = disable_windows_win32_input_mode(&mut io::stdout());
+     }
++    #[cfg(windows)]
++    if let Some(mode) = restore_windows_input_mode {
++        restore_windows_input_mode_value(mode);
++    }
+ }
+ 
+ #[cfg(not(windows))]
+@@ -647,9 +740,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
  
  impl Drop for TerminalGuard {
      fn drop(&mut self) {
@@ -688,7 +735,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
              #[cfg(windows)]
              self.restore_windows_input_mode,
          );
-@@ -1204,13 +1284,16 @@ fn run_client_with_mode(
+@@ -1204,13 +1299,16 @@ fn run_client_with_mode(
      // Install a panic hook to restore the terminal on panic (same as monolithic).
      let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
      let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
@@ -705,7 +752,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
              #[cfg(windows)]
              panic_restore_windows_input_mode,
          );
-@@ -1245,6 +1328,7 @@ fn run_client_with_mode(
+@@ -1245,6 +1343,7 @@ fn run_client_with_mode(
              loop_config,
              negotiated_encoding,
              attach_escape,
@@ -713,7 +760,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
          )
          .await
      });
-@@ -1291,6 +1375,7 @@ async fn run_client_loop(
+@@ -1291,6 +1390,7 @@ async fn run_client_loop(
      config: ClientLoopConfig,
      negotiated_encoding: RenderEncoding,
      attach_escape: Option<AttachEscapeState>,
@@ -721,7 +768,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
  ) -> Result<(), ClientError> {
      #[cfg(windows)]
      let _ = config.mouse_scroll_lines;
-@@ -1313,6 +1398,7 @@ async fn run_client_loop(
+@@ -1313,6 +1413,7 @@ async fn run_client_loop(
          redraw_on_focus_gained: config.redraw_on_focus_gained,
          repaint_pending: false,
          draw_host_cursor,
@@ -729,7 +776,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
      };
      debug!(?negotiated_encoding, "client render encoding active");
      let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
-@@ -1446,6 +1532,14 @@ async fn run_client_loop(
+@@ -1446,6 +1547,14 @@ async fn run_client_loop(
                      }
                  } else {
                      let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
@@ -744,7 +791,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
                      if crate::raw_input::events_require_host_surface_redraw(
                          &events,
                          state.redraw_on_focus_gained,
-@@ -1513,10 +1607,31 @@ async fn run_client_loop(
+@@ -1513,10 +1622,31 @@ async fn run_client_loop(
                  }
              }
              #[cfg(windows)]
@@ -777,7 +824,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
                  let raw_events = events
                      .iter()
                      .map(crate::protocol::ClientInputEvent::to_raw_input_event)
-@@ -1527,6 +1642,9 @@ async fn run_client_loop(
+@@ -1527,6 +1657,9 @@ async fn run_client_loop(
                  ) {
                      state.request_repaint();
                  }
@@ -787,7 +834,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
                  let msg = ClientMessage::InputEvents { events };
                  if let Err(e) = write_to_server(&mut write_stream, &msg) {
                      return Err(ClientError::ConnectionLost(e));
-@@ -1548,32 +1666,7 @@ async fn run_client_loop(
+@@ -1548,32 +1681,7 @@ async fn run_client_loop(
              }
              ClientLoopEvent::ServerMessage(msg) => match msg {
                  ServerMessage::Frame(frame_data) => {
@@ -821,7 +868,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
                  }
                  ServerMessage::Terminal(frame) => {
                      if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
-@@ -2225,7 +2318,7 @@ fn query_host_terminal_theme() {
+@@ -2225,7 +2333,7 @@ fn query_host_terminal_theme() {
  }
  
  fn should_query_host_terminal_theme() -> bool {
@@ -830,7 +877,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
  }
  
  fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
-@@ -2589,8 +2682,8 @@ mod tests {
+@@ -2589,8 +2697,8 @@ mod tests {
      }
  
      #[test]
@@ -841,7 +888,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..4469e8ad73f6eba879df7da8b53e42dc
      }
  
      #[test]
-@@ -2635,20 +2728,36 @@ mod tests {
+@@ -2635,20 +2743,36 @@ mod tests {
      #[test]
      fn terminal_restore_postlude_restores_visible_default_cursor() {
          let mut output = Vec::new();
@@ -2476,6 +2523,46 @@ index f1f6c428d6627ec050334d5ad82aacaacdbdb038..8253a4ba95a3cbfb91ec1a45b68aa74b
          })
          .or_else(|| {
              (!suppress_cursor)
+diff --git a/src/terminal_modes.rs b/src/terminal_modes.rs
+index 8f0276e00d272e1e7694ca40b85b8ab6f6b21699..43888ee82643aa8edd29d06e93375d70fb3c00e0 100644
+--- a/src/terminal_modes.rs
++++ b/src/terminal_modes.rs
+@@ -1,20 +1,13 @@
+ use std::io::{self, Write};
+ 
+-#[cfg(any(not(windows), test))]
+ const DISABLE_HOST_MOUSE_REPORTING_SEQUENCE: &[u8] =
+-    b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
++    b"\x1b[?1016l\x1b[?1015l\x1b[?1006l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l";
+ 
+-#[cfg(not(windows))]
+ pub(crate) fn clear_host_mouse_reporting<W: Write>(writer: &mut W) -> io::Result<()> {
+     writer.write_all(DISABLE_HOST_MOUSE_REPORTING_SEQUENCE)?;
+     writer.flush()
+ }
+ 
+-#[cfg(windows)]
+-pub(crate) fn clear_host_mouse_reporting<W: Write>(_writer: &mut W) -> io::Result<()> {
+-    Ok(())
+-}
+-
+ #[cfg(not(windows))]
+ pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
+     writer: &mut W,
+@@ -52,9 +45,11 @@ mod tests {
+ 
+     #[test]
+     fn clears_all_known_host_mouse_modes() {
+-        let sequence = std::str::from_utf8(DISABLE_HOST_MOUSE_REPORTING_SEQUENCE).unwrap();
++        let mut output = Vec::new();
++        clear_host_mouse_reporting(&mut output).unwrap();
++        let sequence = std::str::from_utf8(&output).unwrap();
+ 
+-        for mode in ["1000", "1002", "1003", "1005", "1006", "1015", "1016"] {
++        for mode in ["9", "1000", "1002", "1003", "1005", "1006", "1015", "1016"] {
+             assert!(
+                 sequence.contains(&format!("\x1b[?{mode}l")),
+                 "missing mouse mode {mode}"
 diff --git a/src/terminal_theme.rs b/src/terminal_theme.rs
 index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e36cc5f688 100644
 --- a/src/terminal_theme.rs
@@ -2725,3 +2812,4 @@ index 6e367eaf61d3394fa9d99b1fe8187fb245d69c5c..278e56ea49f376ae66b5b1206fe886db
  fn decode_frame_payload(payload: &[u8]) -> io::Result<FrameWire> {
 -- 
 2.55.0.windows.3
+

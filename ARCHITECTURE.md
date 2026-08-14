@@ -50,6 +50,11 @@ behavior; code and tests remain the detailed implementation truth.
   `PATH`, then a build-identity sidecar. Published bootstrap transfers the complete
   digest-bearing portable ZIP with OpenSSH, validates its digest, layout, version,
   and protocol, and atomically publishes it in a user-owned versioned directory.
+  Because Windows OpenSSH control-socket reuse remains disabled, an ordinary
+  attach combines platform, matching-binary, and named-session server inspection
+  in one explicit PowerShell SSH command. Provisioning retains its separate
+  mutation and activation checks. A matching API status is not attachment
+  readiness until the binary client-protocol socket accepts a handshake.
   A non-package-managed local Windows x86_64 build instead uses its executable
   SHA-256 as a development sidecar identity and may run on Windows ARM64 through
   x64 emulation. Its missing app-local ConPTY bundle intentionally selects the

@@ -1,8 +1,73 @@
-From 8f077e895c5403a2d7b68029430ee128857ba375 Mon Sep 17 00:00:00 2001
+From 8cc296a10c6de1415ef78ea525d7d94130ca635d Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
 
+---
+ Cargo.lock                                    |    1 +
+ Cargo.toml                                    |    1 +
+ docs/next/api/herdr-api.schema.json           |    7 +
+ .../src/content/docs/cli-reference.mdx        |    4 +-
+ .../src/content/docs/configuration.mdx        |    4 +-
+ .../src/content/docs/ja/cli-reference.mdx     |    4 +-
+ .../src/content/docs/ja/configuration.mdx     |    4 +-
+ .../content/docs/ja/persistence-remote.mdx    |   20 +-
+ .../src/content/docs/ja/windows-beta.mdx      |   15 +-
+ .../src/content/docs/persistence-remote.mdx   |   18 +-
+ .../website/src/content/docs/windows-beta.mdx |   15 +-
+ .../src/content/docs/zh-cn/cli-reference.mdx  |    4 +-
+ .../src/content/docs/zh-cn/configuration.mdx  |    4 +-
+ .../content/docs/zh-cn/persistence-remote.mdx |   20 +-
+ .../src/content/docs/zh-cn/windows-beta.mdx   |   15 +-
+ src/api/client.rs                             |    2 +
+ src/api/schema/response.rs                    |    2 +
+ src/api/schema/tests.rs                       |    1 +
+ src/api/server.rs                             |   13 +-
+ src/api/status.rs                             |    3 +
+ src/app/agent_resume.rs                       |   11 +-
+ src/app/api.rs                                |    3 +-
+ src/app/api/layouts.rs                        |    4 +-
+ src/app/api/panes.rs                          |    2 +-
+ src/app/api/tabs.rs                           |    2 +-
+ src/app/api/workspaces.rs                     |   44 +-
+ src/app/creation.rs                           |  211 +-
+ src/app/input/modal.rs                        |   22 +-
+ src/app/mod.rs                                |   42 +-
+ src/app/session.rs                            |   18 +-
+ src/app/state.rs                              |   11 +-
+ src/cli/server.rs                             |  111 +-
+ src/cli/spec.rs                               |    7 +-
+ src/cli/status.rs                             |   37 +-
+ src/client/mod.rs                             |  294 +-
+ src/ipc.rs                                    |  176 +-
+ src/main.rs                                   |   21 +-
+ src/platform/fallback.rs                      |   54 +
+ src/platform/linux.rs                         |    6 +
+ src/platform/macos.rs                         |    6 +
+ src/platform/mod.rs                           |   16 +-
+ src/platform/unix_common.rs                   |  123 +
+ src/platform/windows.rs                       |  227 +-
+ src/platform/windows/clipboard_image.rs       |  535 ++
+ src/plugin_command.rs                         |    3 +-
+ src/remote.rs                                 |  173 +-
+ src/remote/attach.rs                          | 5125 +++++++++++++++++
+ src/remote/unix.rs                            | 3091 +---------
+ src/remote/windows.rs                         |  338 ++
+ src/remote/windows_attach_probe.ps1           |   72 +
+ src/remote/windows_bootstrap.ps1              |  173 +
+ src/server/autodetect.rs                      |  161 +-
+ src/server/client_transport.rs                |   51 +-
+ src/server/clipboard_image.rs                 |   12 +-
+ src/server/headless.rs                        |  515 +-
+ src/ui.rs                                     |   69 +-
+ src/update.rs                                 |    8 +
+ 57 files changed, 8445 insertions(+), 3486 deletions(-)
+ create mode 100644 src/platform/unix_common.rs
+ create mode 100644 src/platform/windows/clipboard_image.rs
+ create mode 100644 src/remote/attach.rs
+ create mode 100644 src/remote/windows.rs
+ create mode 100644 src/remote/windows_attach_probe.ps1
+ create mode 100644 src/remote/windows_bootstrap.ps1
 
 diff --git a/Cargo.lock b/Cargo.lock
 index 980fcb5d966bd6ce04bbe1445ff3a087636c5a7c..fbf3ebcfbea2f8cf905e5308780409f8ccefbef2 100644
@@ -3720,10 +3785,10 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb5855998f39
+index 0000000000000000000000000000000000000000..e6f745be8492a9ce5f160f12a5727baac4db1a35
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,4938 @@
+@@ -0,0 +1,5125 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::collections::BTreeMap;
@@ -3943,7 +4008,10 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +        .remote
 +        .manage_ssh_config;
 +    let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
-+    let remote_host = detect_remote_platform(&remote_ssh)?;
++    let DetectedRemoteHost {
++        host: remote_host,
++        warm_windows_attach,
++    } = detect_remote_host(&remote_ssh, !remote.provision)?;
 +    if remote.provision {
 +        let result = provision_remote(&remote_ssh, remote_host, remote.yes)?;
 +        print_remote_provision_result(&result, remote.json)?;
@@ -3958,6 +4026,7 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +                prepared_remote.installed_or_replaced,
 +                prepared_remote.stop_after_install_approved,
 +                remote.live_handoff,
++                None,
 +            )?;
 +            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
 +        }
@@ -3971,14 +4040,27 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +                    "live handoff is not supported for Windows remote hosts",
 +                ));
 +            }
-+            let prepared_remote =
-+                prepare_remote_windows_herdr(&remote_ssh, platform, &user_profile)?;
++            let (prepared_remote, known_server_status) = match warm_windows_attach {
++                Some((remote_herdr, server_status)) => (
++                    PreparedRemoteHerdr {
++                        remote_herdr,
++                        installed_or_replaced: false,
++                        stop_after_install_approved: false,
++                    },
++                    Some(server_status),
++                ),
++                None => (
++                    prepare_remote_windows_herdr(&remote_ssh, platform, &user_profile)?,
++                    None,
++                ),
++            };
 +            ensure_remote_server_ready(
 +                &remote_ssh,
 +                &prepared_remote.remote_herdr,
 +                prepared_remote.installed_or_replaced,
 +                prepared_remote.stop_after_install_approved,
 +                false,
++                known_server_status,
 +            )?;
 +            remote_bridge_command(&prepared_remote.remote_herdr, &session_name)
 +        }
@@ -4007,6 +4089,11 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +        platform: RemotePlatform,
 +        user_profile: String,
 +    },
++}
++
++struct DetectedRemoteHost {
++    host: RemoteHostPlatform,
++    warm_windows_attach: Option<(RemoteHerdr, RemoteServerStatus)>,
 +}
 +
 +impl RemotePlatform {
@@ -4937,35 +5024,62 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +    })
 +}
 +
-+fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemoteHostPlatform> {
++fn detect_remote_host(
++    ssh: &RemoteSsh,
++    consolidate_windows_attach: bool,
++) -> io::Result<DetectedRemoteHost> {
++    #[cfg(windows)]
++    let windows_probe_already_failed = if consolidate_windows_attach {
++        if let Some(detected) = detect_remote_windows_attach(ssh)? {
++            return Ok(detected);
++        }
++        true
++    } else {
++        false
++    };
++
++    #[cfg(not(windows))]
++    let windows_probe_already_failed = {
++        let _ = consolidate_windows_attach;
++        false
++    };
++
 +    // Invoke PowerShell explicitly so Windows detection works from every client
 +    // OS and does not depend on the account's configured OpenSSH default shell.
 +    let windows_probe = "$ErrorActionPreference = 'Stop'; [Console]::Out.WriteLine('Windows_NT'); [Console]::Out.WriteLine($env:PROCESSOR_ARCHITECTURE); [Console]::Out.WriteLine($env:USERPROFILE)";
-+    match ssh.powershell_output(windows_probe) {
-+        Ok(output) => {
-+            let stdout = String::from_utf8_lossy(&output.stdout);
-+            if let Some(platform @ RemoteHostPlatform::Windows { .. }) =
-+                remote_host_platform_from_probe(&stdout)
-+            {
-+                return Ok(platform);
++    if !windows_probe_already_failed {
++        match ssh.powershell_output(windows_probe) {
++            Ok(output) => {
++                let stdout = String::from_utf8_lossy(&output.stdout);
++                if let Some(platform @ RemoteHostPlatform::Windows { .. }) =
++                    remote_host_platform_from_probe(&stdout)
++                {
++                    return Ok(DetectedRemoteHost {
++                        host: platform,
++                        warm_windows_attach: None,
++                    });
++                }
++                let stderr = String::from_utf8_lossy(&output.stderr);
++                if output.status.success() || !windows_probe_command_missing(&stderr) {
++                    return Err(command_failed(
++                        "Windows remote platform detection failed",
++                        &output,
++                    ));
++                }
 +            }
-+            let stderr = String::from_utf8_lossy(&output.stderr);
-+            if output.status.success() || !windows_probe_command_missing(&stderr) {
-+                return Err(command_failed(
-+                    "Windows remote platform detection failed",
-+                    &output,
-+                ));
-+            }
++            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
++            Err(_) => {}
 +        }
-+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-+        Err(_) => {}
 +    }
 +
 +    let output = ssh.sh_output("uname -s\nuname -m\n")?;
 +
 +    let stdout = String::from_utf8_lossy(&output.stdout);
 +    if let Some(platform) = remote_host_platform_from_probe(&stdout) {
-+        return Ok(platform);
++        return Ok(DetectedRemoteHost {
++            host: platform,
++            warm_windows_attach: None,
++        });
 +    }
 +    if !output.status.success() {
 +        return Err(command_failed("remote platform detection failed", &output));
@@ -4975,6 +5089,116 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +        "unsupported remote platform: {}",
 +        stdout.trim()
 +    )))
++}
++
++#[cfg(windows)]
++fn detect_remote_windows_attach(ssh: &RemoteSsh) -> io::Result<Option<DetectedRemoteHost>> {
++    let (sidecar_identity, allow_path_candidate) = local_windows_attach_identity()?;
++    let session_name =
++        crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME);
++    let command = super::windows::powershell_attach_probe_command(
++        &sidecar_identity,
++        crate::build_info::BASE_VERSION,
++        &current_version(),
++        CURRENT_PROTOCOL,
++        allow_path_candidate,
++        session_name.as_deref(),
++    );
++    let output = ssh.user_shell_output(&command)?;
++    if !output.status.success() {
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        if windows_probe_command_missing(&stderr) {
++            return Ok(None);
++        }
++        return Err(command_failed(
++            "Windows remote attach probe failed",
++            &output,
++        ));
++    }
++
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    let probe: WindowsAttachProbeJson = serde_json::from_str(stdout.trim()).map_err(|err| {
++        io::Error::other(format!(
++            "could not parse Windows remote attach probe JSON from `{}`: {err}",
++            stdout.trim()
++        ))
++    })?;
++    if !probe.os.eq_ignore_ascii_case("Windows_NT") {
++        return Err(io::Error::other(format!(
++            "Windows remote attach probe reported unsupported OS {}",
++            probe.os
++        )));
++    }
++    let platform = RemotePlatform::windows(&probe.arch).ok_or_else(|| {
++        io::Error::other(format!(
++            "unsupported Windows remote architecture: {}",
++            probe.arch
++        ))
++    })?;
++    if !valid_windows_user_profile(&probe.user_profile) {
++        return Err(io::Error::other(format!(
++            "Windows remote attach probe reported invalid user profile {}",
++            probe.user_profile
++        )));
++    }
++
++    let mut warm_windows_attach = None;
++    if let Some(selected) = probe.selected {
++        if selected.client.version != current_version()
++            || selected.client.herdr_version.as_deref() != Some(crate::build_info::BASE_VERSION)
++            || selected.client.protocol != CURRENT_PROTOCOL
++        {
++            return Err(io::Error::other(
++                "Windows remote attach probe selected a mismatched Herdr binary",
++            ));
++        }
++        let managed =
++            RemoteHerdr::for_windows(platform.clone(), &probe.user_profile, &sidecar_identity);
++        let remote_herdr = if selected.sidecar {
++            if !remote_binary_paths_match(
++                RemoteShell::WindowsPowerShell,
++                &selected.path,
++                &managed.shell_path,
++            ) {
++                return Err(io::Error::other(
++                    "Windows remote attach probe reported an unexpected sidecar path",
++                ));
++            }
++            managed
++        } else {
++            if !allow_path_candidate {
++                return Err(io::Error::other(
++                    "Windows remote attach probe selected PATH for a local development build",
++                ));
++            }
++            managed.with_shell_path(selected.path).into_path_candidate()
++        };
++        warm_windows_attach = Some((
++            remote_herdr,
++            remote_server_status_from_json(selected.server),
++        ));
++    }
++
++    Ok(Some(DetectedRemoteHost {
++        host: RemoteHostPlatform::Windows {
++            platform,
++            user_profile: probe.user_profile,
++        },
++        warm_windows_attach,
++    }))
++}
++
++#[cfg(windows)]
++fn local_windows_attach_identity() -> io::Result<(String, bool)> {
++    if crate::build_info::build_id().is_some() {
++        return Ok((windows_sidecar_identity(None), true));
++    }
++    let executable = std::env::current_exe()?;
++    if crate::update::is_package_manager_managed_exe_path(&executable) {
++        return Ok((windows_sidecar_identity(None), true));
++    }
++    let sha256 = file_sha256(&executable)?;
++    Ok((windows_sidecar_identity(Some(&sha256)), false))
 +}
 +
 +fn windows_probe_command_missing(stderr: &str) -> bool {
@@ -5440,8 +5664,12 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +    remote_binary_changed: bool,
 +    stop_after_install_approved: bool,
 +    live_handoff_enabled: bool,
++    known_status: Option<RemoteServerStatus>,
 +) -> io::Result<()> {
-+    let status = remote_server_status(ssh, remote_herdr)?;
++    let status = match known_status {
++        Some(status) => status,
++        None => remote_server_status(ssh, remote_herdr)?,
++    };
 +    let RemoteServerStatus::Running {
 +        version,
 +        protocol,
@@ -5918,8 +6146,28 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +#[derive(Debug, Deserialize)]
 +struct RemoteClientStatusJson {
 +    version: String,
++    #[cfg(windows)]
++    herdr_version: Option<String>,
 +    protocol: u32,
 +    binary: Option<String>,
++}
++
++#[derive(Debug, Deserialize)]
++#[cfg(windows)]
++struct WindowsAttachProbeJson {
++    os: String,
++    arch: String,
++    user_profile: String,
++    selected: Option<WindowsAttachSelectionJson>,
++}
++
++#[derive(Debug, Deserialize)]
++#[cfg(windows)]
++struct WindowsAttachSelectionJson {
++    path: String,
++    sidecar: bool,
++    client: RemoteClientStatusJson,
++    server: RemoteServerStatusJson,
 +}
 +
 +#[derive(Debug, Deserialize)]
@@ -5969,13 +6217,17 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +            "could not parse remote server status JSON from `{status}`: {err}"
 +        ))
 +    })?;
++    Ok(remote_server_status_from_json(parsed))
++}
++
++fn remote_server_status_from_json(parsed: RemoteServerStatusJson) -> RemoteServerStatus {
 +    if !parsed.running {
-+        return Ok(RemoteServerStatus::NotRunning);
++        return RemoteServerStatus::NotRunning;
 +    }
 +
 +    let capabilities = parsed.capabilities;
 +
-+    Ok(RemoteServerStatus::Running {
++    RemoteServerStatus::Running {
 +        version: parsed.version,
 +        protocol: parsed.protocol,
 +        binary: parsed.binary,
@@ -5985,7 +6237,7 @@ index 0000000000000000000000000000000000000000..886468e56545992f2bfbfcc19292fb58
 +        detached_server_daemon: capabilities
 +            .as_ref()
 +            .is_some_and(|capabilities| capabilities.detached_server_daemon),
-+    })
++    }
 +}
 +
 +fn confirm_remote_server_stop(
@@ -11782,10 +12034,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be8ecc553e
+index 0000000000000000000000000000000000000000..8d292fca334bca005060a888dc93a5276f408e13
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,338 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -11796,6 +12048,8 @@ index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be
 +use interprocess::local_socket::traits::Stream as _;
 +
 +const WINDOWS_REMOTE_SIDECAR_ENV: &str = "HERDR_REMOTE_SIDECAR_V1";
++#[cfg(windows)]
++const WINDOWS_ATTACH_PROBE_SCRIPT: &str = include_str!("windows_attach_probe.ps1");
 +const WINDOWS_BOOTSTRAP_SCRIPT: &str = include_str!("windows_bootstrap.ps1");
 +static REMOTE_SIDECAR_ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 +
@@ -11884,12 +12138,15 @@ index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be
 +fn ensure_remote_server_running() -> io::Result<()> {
 +    let socket_path = crate::server::socket_paths::client_socket_path();
 +    if let Some(status) = crate::server::autodetect::read_server_status()? {
-+        if status.protocol == Some(crate::protocol::PROTOCOL_VERSION) {
-+            return Ok(());
++        if status.protocol != Some(crate::protocol::PROTOCOL_VERSION) {
++            return Err(io::Error::other(
++                "remote herdr server must restart before this bridge can attach",
++            ));
 +        }
-+        return Err(io::Error::other(
-+            "remote herdr server must restart before this bridge can attach",
-+        ));
++        return crate::server::autodetect::wait_for_server_socket(
++            &socket_path,
++            Duration::from_secs(15),
++        );
 +    }
 +
 +    crate::server::autodetect::spawn_server_daemon()?;
@@ -11949,6 +12206,35 @@ index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be
 +        powershell_quote(executable)
 +    );
 +    encoded_powershell_command(&script)
++}
++
++#[cfg(windows)]
++pub(super) fn powershell_attach_probe_command(
++    sidecar_identity: &str,
++    expected_herdr_version: &str,
++    expected_runtime_version: &str,
++    expected_protocol: u32,
++    allow_path_candidate: bool,
++    session_name: Option<&str>,
++) -> String {
++    let server_arguments = match session_name {
++        Some(session_name) => format!("@('--session', {})", powershell_quote(session_name)),
++        None => "@()".to_string(),
++    };
++    let variables = format!(
++        "$HerdrSidecarIdentity = {}\n$HerdrExpectedVersion = {}\n$HerdrExpectedRuntime = {}\n$HerdrExpectedProtocol = {}\n$HerdrAllowPathCandidate = {}\n$HerdrServerArguments = {}\n",
++        powershell_quote(sidecar_identity),
++        powershell_quote(expected_herdr_version),
++        powershell_quote(expected_runtime_version),
++        expected_protocol,
++        if allow_path_candidate {
++            "$true"
++        } else {
++            "$false"
++        },
++        server_arguments,
++    );
++    encoded_powershell_command(&format!("{variables}{WINDOWS_ATTACH_PROBE_SCRIPT}"))
 +}
 +
 +pub(super) fn powershell_script_command(script: &str) -> String {
@@ -12047,6 +12333,32 @@ index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be
 +        assert!(script.ends_with("exit 0"));
 +    }
 +
++    #[cfg(windows)]
++    #[test]
++    fn windows_attach_probe_combines_platform_binary_and_server_inspection() {
++        let command = powershell_attach_probe_command(
++            "build-identity",
++            "0.8.0",
++            "local",
++            20,
++            true,
++            Some("agent's work"),
++        );
++        let script = decoded_powershell_command(&command);
++
++        assert!(command.encode_utf16().count() < 8191);
++        assert!(script.contains("$HerdrSidecarIdentity = 'build-identity'"));
++        assert!(script.contains("$HerdrExpectedVersion = '0.8.0'"));
++        assert!(script.contains("$HerdrExpectedProtocol = 20"));
++        assert!(script.contains("$HerdrAllowPathCandidate = $true"));
++        assert!(script.contains("$HerdrServerArguments = @('--session', 'agent''s work')"));
++        assert!(script.contains("PROCESSOR_ARCHITECTURE"));
++        assert!(script.contains("Get-Command -Name 'herdr.exe'"));
++        assert!(script.contains("'status' 'client' '--json'"));
++        assert!(script.contains("@('status', 'server', '--json')"));
++        assert!(script.contains("ConvertTo-Json -Compress"));
++    }
++
 +    fn decoded_remote_bridge_script(session_name: &str) -> String {
 +        let command = remote_bridge_command(session_name);
 +        decoded_powershell_command(&command)
@@ -12064,6 +12376,84 @@ index 0000000000000000000000000000000000000000..81e5e4dd6b6a96591997b9209594b7be
 +        String::from_utf16(&utf16).unwrap()
 +    }
 +}
+diff --git a/src/remote/windows_attach_probe.ps1 b/src/remote/windows_attach_probe.ps1
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c9f33e1caf6741cb99a5e85d3fc8e4d50e761d1
+--- /dev/null
++++ b/src/remote/windows_attach_probe.ps1
+@@ -0,0 +1,72 @@
++$ErrorActionPreference = 'Stop'
++$ProgressPreference = 'SilentlyContinue'
++
++function Get-HerdrAttachCandidate([string]$Path, [bool]$Sidecar) {
++    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.File]::Exists($Path)) {
++        return $null
++    }
++    if ($Sidecar) {
++        $env:HERDR_REMOTE_SIDECAR_V1 = '1'
++        Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
++    } else {
++        Remove-Item Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
++    }
++    $clientLines = @(& $Path 'status' 'client' '--json')
++    if ($LASTEXITCODE -ne 0) {
++        return $null
++    }
++    try {
++        $client = (($clientLines -join "`n").Trim() | ConvertFrom-Json)
++    } catch {
++        return $null
++    }
++    if (
++        [string]$client.herdr_version -cne $HerdrExpectedVersion -or
++        [string]$client.version -cne $HerdrExpectedRuntime -or
++        [uint32]$client.protocol -ne $HerdrExpectedProtocol
++    ) {
++        return $null
++    }
++    $serverArguments = @($HerdrServerArguments) + @('status', 'server', '--json')
++    $serverLines = @(& $Path @serverArguments)
++    $serverExit = $LASTEXITCODE
++    if ($serverExit -ne 0) {
++        exit $serverExit
++    }
++    try {
++        $server = (($serverLines -join "`n").Trim() | ConvertFrom-Json)
++    } catch {
++        throw 'matching Herdr binary returned invalid server status JSON'
++    }
++    return [pscustomobject]@{
++        path = $Path
++        sidecar = $Sidecar
++        client = $client
++        server = $server
++    }
++}
++
++$selected = $null
++if ($HerdrAllowPathCandidate) {
++    $pathCommands = @(Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue)
++    if ($pathCommands.Count -gt 0) {
++        $selected = Get-HerdrAttachCandidate ([string]$pathCommands[0].Source) $false
++    }
++}
++$sidecarPath = [IO.Path]::Combine(
++    $env:USERPROFILE,
++    '.herdr',
++    'remote',
++    $HerdrSidecarIdentity,
++    'herdr.exe'
++)
++if ($null -eq $selected) {
++    $selected = Get-HerdrAttachCandidate $sidecarPath $true
++}
++[ordered]@{
++    os = 'Windows_NT'
++    arch = [string]$env:PROCESSOR_ARCHITECTURE
++    user_profile = [string]$env:USERPROFILE
++    selected = $selected
++} | ConvertTo-Json -Compress -Depth 8
++exit 0
 diff --git a/src/remote/windows_bootstrap.ps1 b/src/remote/windows_bootstrap.ps1
 new file mode 100644
 index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585af5abecb
@@ -12244,10 +12634,19 @@ index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585
 +    }
 +}
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
-index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63fe36a919c 100644
+index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9df7a72ff 100644
 --- a/src/server/autodetect.rs
 +++ b/src/server/autodetect.rs
-@@ -31,7 +31,6 @@ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+@@ -25,13 +25,15 @@ const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(15);
+ /// Poll interval when waiting for the server socket to appear.
+ const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
+ 
++/// Maximum time one Windows readiness connection may wait for Welcome.
++const CLIENT_PROTOCOL_READINESS_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
++
+ /// Timeout for checking the stable JSON API before attaching to the binary protocol socket.
+ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+ 
  /// Private daemon-start hint used to seed a fresh headless server from the
  /// directory where the user ran `herdr`.
  pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
@@ -12255,7 +12654,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
  // ---------------------------------------------------------------------------
  // Server detection
  // ---------------------------------------------------------------------------
-@@ -91,7 +90,7 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
+@@ -91,12 +93,12 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
      }
  }
  
@@ -12264,7 +12663,13 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
      crate::api::read_runtime_status_at(&crate::api::socket_path(), STATUS_REQUEST_TIMEOUT)
  }
  
-@@ -117,16 +116,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
+ #[cfg(windows)]
+-fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
++fn client_protocol_accepts_hello(socket_path: &Path, read_timeout: Duration) -> io::Result<bool> {
+     if !socket_path.exists() {
+         return Ok(false);
+     }
+@@ -117,19 +119,43 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
          Err(err) => return Err(err),
      };
  
@@ -12281,8 +12686,45 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
 +    let hello = client_protocol_readiness_hello();
  
      match crate::protocol::write_message(&mut stream, &hello) {
-         Ok(()) => Ok(true),
-@@ -147,6 +137,46 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
+-        Ok(()) => Ok(true),
++        Ok(()) => {}
++        Err(crate::protocol::FramingError::Io(err))
++            if matches!(
++                err.kind(),
++                io::ErrorKind::ConnectionRefused
++                    | io::ErrorKind::NotFound
++                    | io::ErrorKind::TimedOut
++                    | io::ErrorKind::WouldBlock
++                    | io::ErrorKind::BrokenPipe
++                    | io::ErrorKind::ConnectionReset
++            ) =>
++        {
++            return Ok(false);
++        }
++        Err(err) => return Err(io::Error::other(err.to_string())),
++    }
++
++    let mut reader = crate::ipc::LocalStreamDeadlineReader::new(&mut stream, read_timeout);
++    let welcome = crate::protocol::read_message(&mut reader, crate::protocol::MAX_FRAME_SIZE);
++    client_protocol_welcome_is_ready(welcome)
++}
++
++#[cfg(windows)]
++fn client_protocol_welcome_is_ready(
++    welcome: Result<crate::protocol::ServerMessage, crate::protocol::FramingError>,
++) -> io::Result<bool> {
++    match welcome {
++        Ok(crate::protocol::ServerMessage::Welcome {
++            version,
++            error: None,
++            ..
++        }) => Ok(version == crate::protocol::PROTOCOL_VERSION),
++        Ok(crate::protocol::ServerMessage::Welcome { error: Some(_), .. }) => Ok(false),
++        Ok(_) | Err(crate::protocol::FramingError::UnexpectedEof) => Ok(false),
+         Err(crate::protocol::FramingError::Io(err))
+             if matches!(
+                 err.kind(),
+@@ -147,6 +173,88 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
      }
  }
  
@@ -12320,6 +12762,48 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
 +    }
 +
 +    #[test]
++    fn readiness_probe_requires_matching_accepted_welcome() {
++        assert!(
++            client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
++                version: crate::protocol::PROTOCOL_VERSION,
++                encoding: crate::protocol::RenderEncoding::SemanticFrame,
++                error: None,
++            }))
++            .unwrap()
++        );
++        assert!(
++            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
++                version: crate::protocol::PROTOCOL_VERSION + 1,
++                encoding: crate::protocol::RenderEncoding::SemanticFrame,
++                error: None,
++            }))
++            .unwrap()
++        );
++        assert!(
++            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
++                version: crate::protocol::PROTOCOL_VERSION,
++                encoding: crate::protocol::RenderEncoding::SemanticFrame,
++                error: Some("rejected".into()),
++            }))
++            .unwrap()
++        );
++    }
++
++    #[test]
++    fn readiness_probe_treats_no_welcome_as_not_ready() {
++        assert!(
++            !client_protocol_welcome_is_ready(Err(crate::protocol::FramingError::Io(
++                io::ErrorKind::TimedOut.into()
++            )))
++            .unwrap()
++        );
++        assert!(!client_protocol_welcome_is_ready(Err(
++            crate::protocol::FramingError::UnexpectedEof
++        ))
++        .unwrap());
++    }
++
++    #[test]
 +    fn explicit_server_start_uses_the_requested_binary() {
 +        let exe = PathBuf::from(r"C:\remote-sidecar\herdr.exe");
 +        assert_eq!(server_daemon_program_for_test(exe.clone()), exe);
@@ -12329,7 +12813,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
  fn validate_running_server_compatibility() -> io::Result<()> {
      let Some(status) = read_server_status()? else {
          return Err(io::Error::other(format!(
-@@ -207,6 +237,24 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
+@@ -207,6 +315,24 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
      Ok(pid)
  }
  
@@ -12354,7 +12838,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
  fn build_server_daemon_command(exe: PathBuf) -> Command {
      let mut command = Command::new(&exe);
      command
-@@ -216,6 +264,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
+@@ -216,6 +342,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
          .stdout(std::process::Stdio::null())
          .stderr(std::process::Stdio::null());
      crate::platform::detach_server_daemon_command(&mut command);
@@ -12362,6 +12846,19 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..2ca72f332e4d702f08de19460733b63f
  
      match std::env::current_dir() {
          Ok(cwd) => {
+@@ -249,7 +376,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
+ 
+     while std::time::Instant::now() < deadline {
+         #[cfg(windows)]
+-        if client_protocol_accepts_hello(socket_path)? {
++        if client_protocol_accepts_hello(
++            socket_path,
++            CLIENT_PROTOCOL_READINESS_ATTEMPT_TIMEOUT
++                .min(deadline.saturating_duration_since(std::time::Instant::now())),
++        )? {
+             info!(path = %socket_path.display(), "server client protocol ready");
+             return Ok(());
+         }
 diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
 index ec41ec13afba50ef17509527249d39a0b5810e72..198b91c7a5f9869d489f5a3f0200e3f7aa2274ed 100644
 --- a/src/server/client_transport.rs

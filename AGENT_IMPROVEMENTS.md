@@ -28,3 +28,14 @@ configuration repository.
   patch, and removes it with long-path support. Expected benefit: fewer recovery
   branches, safer cleanup, and faster repeatable mailbox refreshes. Owner:
   `CONTRIBUTING.md` plus the future helper and focused tests.
+
+- **Status: proposed. Add a repository-owned local Windows input acceptance probe.**
+  Evidence: a task-local probe hardcoded the development state directory and used
+  a PATH-dependent sentinel that detached servers did not inherit, producing false
+  negatives before direct pane readback isolated the native ConPTY encoding fault.
+  Proposed change: add one bounded real-Windows-Terminal probe that derives state
+  ownership from the tested binary, verifies injected text through `pane read`,
+  reports the selected input backend, and cleans its named session. Expected
+  benefit: faster local-versus-remote attribution and reliable keyboard regression
+  evidence. Owner: a focused script and tests under `scripts/`, documented in
+  `CONTRIBUTING.md`.

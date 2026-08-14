@@ -39,3 +39,12 @@ configuration repository.
   benefit: faster local-versus-remote attribution and reliable keyboard regression
   evidence. Owner: a focused script and tests under `scripts/`, documented in
   `CONTRIBUTING.md`.
+
+- **Status: proposed. Isolate Windows PowerShell 5.1 packaging modules.**
+  Evidence: the ConPTY packager failed to load `Microsoft.PowerShell.Security`
+  when an inherited PowerShell 7 module path introduced duplicate type data;
+  restricting the child to native Windows PowerShell module roots made the same
+  package succeed. Proposed change: make the repository packaging entrypoint own
+  and test its Windows PowerShell 5.1 module environment. Expected benefit:
+  deterministic signature and archive validation across mixed PowerShell installs.
+  Owner: `scripts/package_windows_conpty.ps1` and its focused tests.

@@ -50,11 +50,16 @@ behavior; code and tests remain the detailed implementation truth.
   `PATH`, then a build-identity sidecar. Published bootstrap transfers the complete
   digest-bearing portable ZIP with OpenSSH, validates its digest, layout, version,
   and protocol, and atomically publishes it in a user-owned versioned directory.
-  Because Windows OpenSSH control-socket reuse remains disabled, an ordinary
-  attach combines platform, matching-binary, and named-session server inspection
-  in one explicit PowerShell SSH command. Provisioning retains its separate
-  mutation and activation checks. That finite probe also reads OpenSSH's
-  `DefaultShell`. The interactive bridge then invokes the selected Herdr binary
+  Because Windows OpenSSH control-socket reuse remains disabled, attach and
+  provisioning combine platform, matching-binary, and named-session server
+  inspection in one pure PowerShell SSH command. A client selects PowerShell 7
+  when available and otherwise falls back to Windows PowerShell only before any
+  mutation; command status and a quiet native executable check make that choice
+  independent of localized shell text. Provisioning reuses the probe result,
+  retains separate mutation and activation checks, and batches config/status plus
+  start/final-identity validation at their existing fail-closed boundaries. That
+  finite probe also reads OpenSSH's `DefaultShell`. The interactive bridge then
+  invokes the selected Herdr binary
   directly through `cmd.exe` or PowerShell 7 instead of nesting Windows PowerShell,
   which buffers native stdout and may serialize diagnostics into the protocol.
   Windows PowerShell 5.1 and unknown default shells fail before bridge creation. A

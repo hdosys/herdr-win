@@ -1,4 +1,4 @@
-From 15c461cb1dc8ffa6f62b5315725421fc5af9572c Mon Sep 17 00:00:00 2001
+From 7d1db1f80b4536adf1c279d088afa10f902862bf Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -50,7 +50,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/platform/windows/clipboard_image.rs       |  535 ++
  src/plugin_command.rs                         |    3 +-
  src/remote.rs                                 |  173 +-
- src/remote/attach.rs                          | 5151 +++++++++++++++++
+ src/remote/attach.rs                          | 5375 +++++++++++++++++
  src/remote/unix.rs                            | 3091 +---------
  src/remote/windows.rs                         |  488 ++
  src/remote/windows_attach_probe.ps1           |   83 +
@@ -61,7 +61,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 57 files changed, 8722 insertions(+), 3486 deletions(-)
+ 57 files changed, 8946 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -3785,12 +3785,13 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21462eb389
+index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e3659afbed3
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,5151 @@
+@@ -0,0 +1,5375 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
++use std::cell::Cell;
 +use std::collections::BTreeMap;
 +use std::fs::{self, File};
 +use std::io::{self, IsTerminal, Write as _};
@@ -3820,6 +3821,8 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
 +const REMOTE_BINARY_ENV_VAR: &str = "HERDR_REMOTE_BINARY";
 +const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
++const PWSH_EXECUTABLE: &str = "pwsh.exe";
++const WINDOWS_POWERSHELL_EXECUTABLE: &str = "powershell.exe";
 +pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
 +
 +pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
@@ -4008,15 +4011,16 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        .remote
 +        .manage_ssh_config;
 +    let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
-+    let DetectedRemoteHost {
-+        host: remote_host,
-+        warm_windows_attach,
-+    } = detect_remote_host(&remote_ssh, !remote.provision)?;
++    let detected = detect_remote_host(&remote_ssh, remote_binary_override_path()?.is_none())?;
 +    if remote.provision {
-+        let result = provision_remote(&remote_ssh, remote_host, remote.yes)?;
++        let result = provision_remote(&remote_ssh, detected, remote.yes)?;
 +        print_remote_provision_result(&result, remote.json)?;
 +        return Ok(());
 +    }
++    let DetectedRemoteHost {
++        host: remote_host,
++        warm_windows_attach,
++    } = detected;
 +    let remote_command = match remote_host {
 +        RemoteHostPlatform::Unix(platform) => {
 +            let prepared_remote = prepare_remote_herdr(&remote_ssh, platform, remote.live_handoff)?;
@@ -4411,6 +4415,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +struct RemoteSsh {
 +    target: String,
 +    managed_config: Option<ManagedSshConfig>,
++    powershell_executable: Cell<Option<&'static str>>,
 +}
 +
 +impl RemoteSsh {
@@ -4428,6 +4433,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        Self {
 +            target,
 +            managed_config,
++            powershell_executable: Cell::new(None),
 +        }
 +    }
 +
@@ -4485,7 +4491,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    }
 +
 +    fn powershell_output(&self, script: &str) -> io::Result<Output> {
-+        self.user_shell_output(&super::windows::powershell_script_command(script))
++        self.powershell_command_output(&super::windows::powershell_script_command(script))
 +    }
 +
 +    fn windows_herdr_output(
@@ -4495,11 +4501,50 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    ) -> io::Result<Output> {
 +        let executable = (remote_herdr.shell == RemoteShell::WindowsPowerShell)
 +            .then_some(remote_herdr.shell_path.as_str());
-+        self.user_shell_output(&super::windows::powershell_herdr_command(
++        self.powershell_command_output(&super::windows::powershell_herdr_command(
 +            executable,
 +            arguments,
 +            remote_herdr.remote_sidecar,
 +        ))
++    }
++
++    fn powershell_command_output(&self, command: &str) -> io::Result<Output> {
++        let selected = self.powershell_executable.get();
++        let executable = selected.unwrap_or(PWSH_EXECUTABLE);
++        let preferred_command = powershell_command_with_executable(command, executable)?;
++        if selected.is_some() {
++            return self.user_shell_output(&preferred_command);
++        }
++
++        // The first PowerShell command is always the pure host probe. Select an
++        // interpreter there so mutating commands never need a retry path.
++        let output = self.user_shell_output(&preferred_command)?;
++        if output.status.success() {
++            self.powershell_executable.set(Some(PWSH_EXECUTABLE));
++            return Ok(output);
++        }
++        let status_code = output.status.code();
++        let missing = powershell_command_missing_exit(status_code)
++            || (status_code == Some(1) && self.pwsh_missing_from_windows_path()?);
++        if !missing {
++            return Ok(output);
++        }
++
++        self.powershell_executable
++            .set(Some(WINDOWS_POWERSHELL_EXECUTABLE));
++        self.user_shell_output(command)
++    }
++
++    fn pwsh_missing_from_windows_path(&self) -> io::Result<bool> {
++        let output = self.user_shell_output("where.exe /Q pwsh.exe")?;
++        match output.status.code() {
++            Some(0) => Ok(false),
++            Some(1) => Ok(true),
++            _ => Err(command_failed(
++                "remote PowerShell 7 availability check failed",
++                &output,
++            )),
++        }
 +    }
 +
 +    fn install_herdr(&self, remote_herdr: &RemoteHerdr, source_path: &Path) -> io::Result<()> {
@@ -4556,7 +4601,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        let archive_name = windows_payload_archive_name(kind)?;
 +        let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
 +        let script = windows_install_prepare_script(remote_herdr, &archive_name);
-+        let output = self.user_shell_output(&script)?;
++        let output = self.powershell_command_output(&script)?;
 +        if !output.status.success() {
 +            return Err(command_failed(
 +                "Windows remote install preparation failed",
@@ -4579,13 +4624,14 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +                )
 +            })?;
 +        if !transfer.success() {
-+            let _ = self.user_shell_output(&windows_install_cleanup_script(&temporary_archive));
++            let _ =
++                self.powershell_command_output(&windows_install_cleanup_script(&temporary_archive));
 +            return Err(io::Error::other(format!(
 +                "Windows remote ZIP transfer to {destination} exited with {transfer}"
 +            )));
 +        }
 +
-+        let output = self.user_shell_output(&windows_install_commit_script(
++        let output = self.powershell_command_output(&windows_install_commit_script(
 +            remote_herdr,
 +            &temporary_archive,
 +            expected_sha256,
@@ -4937,7 +4983,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    platform: RemotePlatform,
 +    user_profile: &str,
 +) -> io::Result<PreparedRemoteHerdr> {
-+    prepare_remote_windows_herdr_with_consent(ssh, platform, user_profile, false, false)
++    prepare_remote_windows_herdr_with_consent(ssh, platform, user_profile, false, false, false)
 +}
 +
 +fn prepare_remote_windows_herdr_with_consent(
@@ -4946,6 +4992,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    user_profile: &str,
 +    yes: bool,
 +    defer_server_activation: bool,
++    probe_confirmed_no_match: bool,
 +) -> io::Result<PreparedRemoteHerdr> {
 +    let override_payload = remote_binary_override_path()?;
 +    let source_identity = windows_install_source_identity(&platform, override_payload.as_deref())?;
@@ -4956,26 +5003,28 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        user_profile,
 +        &windows_sidecar_identity(source_identity.as_deref()),
 +    );
-+    let path_candidate = if local_development_source {
++    let path_candidate = if local_development_source || probe_confirmed_no_match {
 +        None
 +    } else {
 +        windows_remote_binary_on_path(ssh, &managed)?
 +    };
-+    if let Some(candidate) = path_candidate.as_ref() {
-+        if remote_binary_matches(ssh, candidate)? {
++    if !probe_confirmed_no_match {
++        if let Some(candidate) = path_candidate.as_ref() {
++            if remote_binary_matches(ssh, candidate)? {
++                return Ok(PreparedRemoteHerdr {
++                    remote_herdr: candidate.clone(),
++                    installed_or_replaced: false,
++                    stop_after_install_approved: false,
++                });
++            }
++        }
++        if remote_binary_matches(ssh, &managed)? {
 +            return Ok(PreparedRemoteHerdr {
-+                remote_herdr: candidate.clone(),
++                remote_herdr: managed,
 +                installed_or_replaced: false,
 +                stop_after_install_approved: false,
 +            });
 +        }
-+    }
-+    if remote_binary_matches(ssh, &managed)? {
-+        return Ok(PreparedRemoteHerdr {
-+            remote_herdr: managed,
-+            installed_or_replaced: false,
-+            stop_after_install_approved: false,
-+        });
 +    }
 +
 +    if !defer_server_activation {
@@ -5013,16 +5062,12 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +            "Windows remote portable payload is missing its verified SHA-256 identity",
 +        )
 +    })?;
++    // The commit script verifies this checksum plus the staged runtime version
++    // and protocol before atomically publishing the sidecar.
 +    let install_result =
 +        ssh.install_windows_payload(&managed, &source.path, expected_sha256, source.kind);
 +    source.cleanup();
 +    install_result?;
-+    if !remote_binary_matches(ssh, &managed)? {
-+        return Err(io::Error::other(format!(
-+            "installed Windows remote Herdr at {}, but its exact version or protocol does not match this client",
-+            managed.shell_path
-+        )));
-+    }
 +    Ok(PreparedRemoteHerdr {
 +        remote_herdr: managed,
 +        installed_or_replaced: true,
@@ -5110,7 +5155,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        allow_path_candidate,
 +        session_name.as_deref(),
 +    );
-+    let output = ssh.user_shell_output(&command)?;
++    let output = ssh.powershell_command_output(&command)?;
 +    if !output.status.success() {
 +        let stderr = String::from_utf8_lossy(&output.stderr);
 +        if windows_probe_command_missing(&stderr) {
@@ -5209,11 +5254,26 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +}
 +
 +fn windows_probe_command_missing(stderr: &str) -> bool {
++    remote_command_missing(stderr, WINDOWS_POWERSHELL_EXECUTABLE)
++}
++
++fn remote_command_missing(stderr: &str, executable: &str) -> bool {
 +    let stderr = stderr.to_ascii_lowercase();
-+    stderr.contains("powershell.exe")
++    stderr.contains(&executable.to_ascii_lowercase())
 +        && (stderr.contains("not recognized")
 +            || stderr.contains("not found")
 +            || stderr.contains("no such file"))
++}
++
++fn powershell_command_with_executable(command: &str, executable: &str) -> io::Result<String> {
++    let suffix = command
++        .strip_prefix(WINDOWS_POWERSHELL_EXECUTABLE)
++        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid PowerShell command"))?;
++    Ok(format!("{executable}{suffix}"))
++}
++
++fn powershell_command_missing_exit(status_code: Option<i32>) -> bool {
++    matches!(status_code, Some(49 | 127))
 +}
 +
 +fn remote_host_platform_from_probe(stdout: &str) -> Option<RemoteHostPlatform> {
@@ -5424,7 +5484,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +            ssh.sh_output(&command)?
 +        }
 +        RemoteShell::WindowsPowerShell => {
-+            ssh.user_shell_output(&super::windows::powershell_herdr_probe_command(
++            ssh.powershell_command_output(&super::windows::powershell_herdr_probe_command(
 +                &remote_herdr.shell_path,
 +                remote_herdr.remote_sidecar,
 +            ))?
@@ -5879,7 +5939,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +
 +fn provision_remote(
 +    ssh: &RemoteSsh,
-+    host: RemoteHostPlatform,
++    detected: DetectedRemoteHost,
 +    yes: bool,
 +) -> io::Result<RemoteProvisionResult> {
 +    if !yes && !io::stdin().is_terminal() {
@@ -5887,33 +5947,53 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +            "non-interactive remote provisioning requires --yes",
 +        ));
 +    }
-+    let (platform, prepared) = match host {
++    let DetectedRemoteHost {
++        host,
++        warm_windows_attach,
++    } = detected;
++    let (platform, prepared, known_server_status) = match host {
 +        RemoteHostPlatform::Unix(platform) => {
 +            let prepared =
 +                prepare_remote_herdr_with_consent(ssh, platform.clone(), false, yes, true)?;
-+            (platform, prepared)
++            (platform, prepared, None)
 +        }
 +        RemoteHostPlatform::Windows {
 +            platform,
 +            user_profile,
 +            ..
 +        } => {
-+            let prepared = prepare_remote_windows_herdr_with_consent(
-+                ssh,
-+                platform.clone(),
-+                &user_profile,
-+                yes,
-+                true,
-+            )?;
-+            (platform, prepared)
++            let (prepared, known_server_status) = match warm_windows_attach {
++                Some((remote_herdr, server_status)) => (
++                    PreparedRemoteHerdr {
++                        remote_herdr,
++                        installed_or_replaced: false,
++                        stop_after_install_approved: false,
++                    },
++                    Some(server_status),
++                ),
++                None => (
++                    prepare_remote_windows_herdr_with_consent(
++                        ssh,
++                        platform.clone(),
++                        &user_profile,
++                        yes,
++                        true,
++                        true,
++                    )?,
++                    None,
++                ),
++            };
++            (platform, prepared, known_server_status)
 +        }
 +    };
-+    validate_remote_config(ssh, &prepared.remote_herdr)?;
++    let server_status =
++        validate_remote_config_and_status(ssh, &prepared.remote_herdr, known_server_status)?;
 +    let server_outcome = activate_provisioned_remote(
 +        ssh,
 +        &prepared.remote_herdr,
 +        prepared.installed_or_replaced,
 +        yes,
++        server_status,
 +    )?;
 +
 +    Ok(RemoteProvisionResult {
@@ -5943,13 +6023,48 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    }
 +}
 +
++fn validate_remote_config_and_status(
++    ssh: &RemoteSsh,
++    remote_herdr: &RemoteHerdr,
++    known_status: Option<RemoteServerStatus>,
++) -> io::Result<RemoteServerStatus> {
++    if let Some(status) = known_status {
++        validate_remote_config(ssh, remote_herdr)?;
++        return Ok(status);
++    }
++    if remote_herdr.shell == RemoteShell::Posix {
++        validate_remote_config(ssh, remote_herdr)?;
++        return remote_server_status(ssh, remote_herdr);
++    }
++
++    let session_name =
++        crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME);
++    let config = scoped_remote_arguments(session_name.as_deref(), &["config", "check"]);
++    let status = scoped_remote_arguments(session_name.as_deref(), &["status", "server", "--json"]);
++    let script = format!(
++        "{}& $herdr {} | Out-Null; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $status = @(& $herdr {}); if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine(($status -join \"`n\")); exit 0",
++        windows_powershell_herdr_prelude(remote_herdr),
++        powershell_arguments(&config),
++        powershell_arguments(&status),
++    );
++    let output = ssh.powershell_output(&script)?;
++    if !output.status.success() {
++        return Err(command_failed(
++            "remote configuration or server status validation failed",
++            &output,
++        ));
++    }
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    parse_remote_server_status_json(stdout.trim())
++}
++
 +fn activate_provisioned_remote(
 +    ssh: &RemoteSsh,
 +    remote_herdr: &RemoteHerdr,
 +    binary_changed: bool,
 +    yes: bool,
++    status: RemoteServerStatus,
 +) -> io::Result<RemoteServerOutcome> {
-+    let status = remote_server_status(ssh, remote_herdr)?;
 +    let binary_matches = if binary_changed {
 +        false
 +    } else if let RemoteServerStatus::Running {
@@ -6018,6 +6133,10 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        ));
 +    }
 +    let stdout = String::from_utf8_lossy(&output.stdout);
++    parse_remote_client_binary(stdout.trim())
++}
++
++fn parse_remote_client_binary(stdout: &str) -> io::Result<String> {
 +    let status: RemoteClientStatusJson = serde_json::from_str(stdout.trim()).map_err(|err| {
 +        io::Error::other(format!(
 +            "could not parse remote client status JSON from `{}`: {err}",
@@ -6093,12 +6212,43 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +}
 +
 +fn start_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
-+    let output = remote_herdr_output(ssh, remote_herdr, &["server", "start"])?;
-+    if !output.status.success() {
-+        return Err(command_failed("remote server start failed", &output));
-+    }
-+    let status = remote_server_status(ssh, remote_herdr)?;
-+    let selected_binary = remote_client_binary(ssh, remote_herdr)?;
++    let (status, selected_binary) = match remote_herdr.shell {
++        RemoteShell::Posix => {
++            let output = remote_herdr_output(ssh, remote_herdr, &["server", "start"])?;
++            if !output.status.success() {
++                return Err(command_failed("remote server start failed", &output));
++            }
++            (
++                remote_server_status(ssh, remote_herdr)?,
++                remote_client_binary(ssh, remote_herdr)?,
++            )
++        }
++        RemoteShell::WindowsPowerShell => {
++            let session_name = crate::session::active_name()
++                .filter(|name| name != crate::session::DEFAULT_SESSION_NAME);
++            let script = windows_start_remote_server_script(remote_herdr, session_name.as_deref());
++            let output = ssh.powershell_output(&script)?;
++            if !output.status.success() {
++                return Err(command_failed("remote server start failed", &output));
++            }
++            let stdout = String::from_utf8_lossy(&output.stdout);
++            let mut lines = stdout
++                .lines()
++                .map(str::trim)
++                .filter(|line| !line.is_empty());
++            let server = lines.next().unwrap_or_default();
++            let client = lines.next().unwrap_or_default();
++            if lines.next().is_some() {
++                return Err(io::Error::other(
++                    "remote server start returned unexpected output",
++                ));
++            }
++            (
++                parse_remote_server_status_json(server)?,
++                parse_remote_client_binary(client)?,
++            )
++        }
++    };
 +    match status {
 +        RemoteServerStatus::Running {
 +            version,
@@ -6119,6 +6269,46 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +            "remote server did not report the provisioned binary, version, and protocol after start",
 +        )),
 +    }
++}
++
++fn windows_start_remote_server_script(
++    remote_herdr: &RemoteHerdr,
++    session_name: Option<&str>,
++) -> String {
++    let start = scoped_remote_arguments(session_name, &["server", "start"]);
++    let server = scoped_remote_arguments(session_name, &["status", "server", "--json"]);
++    let client = scoped_remote_arguments(session_name, &["status", "client", "--json"]);
++    format!(
++        "{}& $herdr {} | Out-Null; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $server = @(& $herdr {}); if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $client = @(& $herdr {}); if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine(($server -join \"`n\")); [Console]::Out.WriteLine(($client -join \"`n\")); exit 0",
++        windows_powershell_herdr_prelude(remote_herdr),
++        powershell_arguments(&start),
++        powershell_arguments(&server),
++        powershell_arguments(&client),
++    )
++}
++
++fn windows_powershell_herdr_prelude(remote_herdr: &RemoteHerdr) -> String {
++    let sidecar_environment = if remote_herdr.remote_sidecar {
++        format!(
++            "$env:{} = '1'; Remove-Item Env:{} -ErrorAction SilentlyContinue; ",
++            super::windows::sidecar_environment_name(),
++            crate::HERDR_ENV_VAR,
++        )
++    } else {
++        String::new()
++    };
++    format!(
++        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}",
++        super::windows::powershell_quote(&remote_herdr.shell_path),
++    )
++}
++
++fn powershell_arguments(arguments: &[String]) -> String {
++    arguments
++        .iter()
++        .map(|argument| super::windows::powershell_quote(argument))
++        .collect::<Vec<_>>()
++        .join(" ")
 +}
 +
 +fn print_remote_provision_result(result: &RemoteProvisionResult, json: bool) -> io::Result<()> {
@@ -6659,14 +6849,8 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    remote_herdr: &RemoteHerdr,
 +    arguments: &[&str],
 +) -> io::Result<Output> {
-+    let mut scoped_arguments = Vec::new();
-+    if let Some(session_name) =
-+        crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME)
-+    {
-+        scoped_arguments.push("--session".to_string());
-+        scoped_arguments.push(session_name);
-+    }
-+    scoped_arguments.extend(arguments.iter().map(|argument| argument.to_string()));
++    let session_name = crate::session::active_name();
++    let scoped_arguments = scoped_remote_arguments(session_name.as_deref(), arguments);
 +    match remote_herdr.shell {
 +        RemoteShell::Posix => {
 +            let command = std::iter::once(remote_herdr.shell_path.clone())
@@ -6683,8 +6867,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    }
 +}
 +
-+#[cfg(test)]
-+fn scoped_remote_arguments_for_test(session_name: Option<&str>, arguments: &[&str]) -> Vec<String> {
++fn scoped_remote_arguments(session_name: Option<&str>, arguments: &[&str]) -> Vec<String> {
 +    let mut scoped = Vec::new();
 +    if let Some(session_name) =
 +        session_name.filter(|name| *name != crate::session::DEFAULT_SESSION_NAME)
@@ -7323,6 +7506,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        let ssh = RemoteSsh {
 +            target: "example".to_string(),
 +            managed_config: Some(managed_config),
++            powershell_executable: Cell::new(None),
 +        };
 +
 +        let command = ssh.command();
@@ -7353,6 +7537,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        let ssh = RemoteSsh {
 +            target: "example".to_string(),
 +            managed_config: None,
++            powershell_executable: Cell::new(None),
 +        };
 +
 +        let command = ssh.command();
@@ -7389,6 +7574,7 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +        let ssh = RemoteSsh {
 +            target: "example".to_string(),
 +            managed_config: Some(managed_config),
++            powershell_executable: Cell::new(None),
 +        };
 +        let args = ssh
 +            .command()
@@ -7988,6 +8174,28 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    }
 +
 +    #[test]
++    fn powershell_7_fallback_is_locale_independent_and_transport_safe() {
++        assert!(powershell_command_missing_exit(Some(49)));
++        assert!(powershell_command_missing_exit(Some(127)));
++        assert!(!powershell_command_missing_exit(Some(1)));
++        assert!(!powershell_command_missing_exit(Some(255)));
++        assert!(!powershell_command_missing_exit(None));
++    }
++
++    #[test]
++    fn bounded_windows_scripts_can_prefer_powershell_7() {
++        let command = super::super::windows::powershell_script_command("exit 0");
++
++        assert_eq!(
++            powershell_command_with_executable(&command, PWSH_EXECUTABLE).unwrap(),
++            command.replacen(WINDOWS_POWERSHELL_EXECUTABLE, PWSH_EXECUTABLE, 1),
++        );
++        assert!(
++            powershell_command_with_executable("pwsh.exe -Command exit", PWSH_EXECUTABLE).is_err()
++        );
++    }
++
++    #[test]
 +    fn windows_sidecar_uses_exact_build_identity_and_portable_asset_key() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
 +        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can", "build");
@@ -8057,16 +8265,32 @@ index 0000000000000000000000000000000000000000..dee25f35f56c9e9b7e45856d03460b21
 +    #[test]
 +    fn remote_lifecycle_commands_reuse_named_session_scope() {
 +        assert_eq!(
-+            scoped_remote_arguments_for_test(Some("work"), &["status", "server", "--json"]),
++            scoped_remote_arguments(Some("work"), &["status", "server", "--json"]),
 +            ["--session", "work", "status", "server", "--json"]
 +        );
 +        assert_eq!(
-+            scoped_remote_arguments_for_test(
++            scoped_remote_arguments(
 +                Some(crate::session::DEFAULT_SESSION_NAME),
 +                &["server", "stop"]
 +            ),
 +            ["server", "stop"]
 +        );
++    }
++
++    #[test]
++    fn windows_server_start_validates_status_and_binary_in_one_script() {
++        let remote = RemoteHerdr::for_windows(
++            RemotePlatform::windows("AMD64").unwrap(),
++            "C:\\Users\\can",
++            "build",
++        );
++        let script = windows_start_remote_server_script(&remote, Some("work"));
++
++        assert_eq!(script.matches("& $herdr").count(), 3);
++        assert!(script.contains("'--session' 'work' 'server' 'start'"));
++        assert!(script.contains("'--session' 'work' 'status' 'server' '--json'"));
++        assert!(script.contains("'--session' 'work' 'status' 'client' '--json'"));
++        assert!(script.contains(super::super::windows::sidecar_environment_name()));
 +    }
 +
 +    #[cfg(unix)]
@@ -14075,3 +14299,4 @@ index 3455841d2a90da519499f0c41daf5557c899cb95..294aa1cc22211f40c280069a62ba894c
          let release = ReleaseInfo {
 -- 
 2.55.0.windows.3
+

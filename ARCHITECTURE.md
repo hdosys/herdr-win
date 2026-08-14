@@ -71,10 +71,12 @@ behavior; code and tests remain the detailed implementation truth.
   Windows PowerShell 5.1 and unknown default shells fail before bridge creation. A
   matching API status is not attachment readiness until the binary client-protocol
   socket accepts a handshake.
-  A non-package-managed local Windows x86_64 build instead compares its executable
-  SHA-256 when probing the stable remote runtime and may run on Windows ARM64
-  through x64 emulation. Its missing app-local ConPTY bundle intentionally selects
-  the verified system-ConPTY fallback already owned by `portable-pty`.
+  A non-package-managed local Windows x86_64 build may run on Windows ARM64 through
+  x64 emulation, but it is a valid provisioning source only when its executable is
+  adjacent to the exact portable license, ConPTY bundle, ownership marker, and
+  notices. Herdr projects those required files into a temporary validated ZIP,
+  compares the executable SHA-256 when probing the stable remote runtime, and
+  rejects an incomplete local layout instead of silently selecting system ConPTY.
 - Mailbox 0003 also owns `--remote <target> --provision`, with `--yes` required
   for unattended mutation and optional `--json` results. Provision validates
   remote config before activation. No server means start; the same running binary

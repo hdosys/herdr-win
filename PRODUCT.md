@@ -175,13 +175,14 @@ tests remain the detailed implementation truth.
   instead of opening a buffered or corrupted terminal.
 - `herdr --remote <target> --provision` is the explicit configuration-management
   path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
-  binary, rejects invalid remote configuration before server activation, starts a
+  runtime, rejects invalid remote configuration before server activation, starts a
   missing server, reloads configuration when the running binary already matches,
   and saves then stops, replaces, and restarts only when binary activation requires
-  it. A non-package-
-  managed local Windows x86_64 build can provision itself to x86_64 or ARM64
-  Windows through Windows emulation. Windows remote hosts do not support live
-  handoff.
+  it. A non-package-managed local Windows x86_64 build can provision itself to
+  x86_64 or ARM64 Windows through Windows emulation only when its executable is
+  adjacent to the complete portable runtime. Herdr projects that runtime into the
+  same validated ZIP layout used by published builds. Windows remote hosts do not
+  support live handoff.
 - User-visible state distinguishes waiting, active, mixed, complete, failed,
   cancelled, stopped, and no-op outcomes whenever they require different user
   understanding or action.

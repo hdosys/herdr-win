@@ -1,4 +1,4 @@
-From 35234c1e4ddc94466163e373a8d15b5a0a0f9672 Mon Sep 17 00:00:00 2001
+From 54cfce3d2b612a744b6bf636ebb5274a4a0d7513 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -40,7 +40,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/cli/status.rs                             |   37 +-
  src/client/mod.rs                             |  294 +-
  src/ipc.rs                                    |  176 +-
- src/main.rs                                   |   21 +-
+ src/main.rs                                   |   30 +-
  src/platform/fallback.rs                      |   54 +
  src/platform/linux.rs                         |    6 +
  src/platform/macos.rs                         |    6 +
@@ -49,25 +49,29 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/platform/windows.rs                       |  227 +-
  src/platform/windows/clipboard_image.rs       |  535 ++
  src/plugin_command.rs                         |    3 +-
- src/remote.rs                                 |  173 +-
- src/remote/attach.rs                          | 5409 +++++++++++++++++
- src/remote/unix.rs                            | 3091 +---------
- src/remote/windows.rs                         |  504 ++
- src/remote/windows_attach_probe.ps1           |   89 +
- src/remote/windows_bootstrap.ps1              |  203 +
+ src/remote.rs                                 |  174 +-
+ src/remote/attach.rs                          | 5675 +++++++++++++++++
+ src/remote/unix.rs                            | 3091 +--------
+ src/remote/windows.rs                         |  765 +++
+ src/remote/windows_attach_probe.ps1           |   91 +
+ src/remote/windows_bootstrap.ps1              |  194 +
+ src/remote/windows_package_local_payload.ps1  |   37 +
+ src/remote/windows_payload_layout.ps1         |  114 +
  src/server/autodetect.rs                      |  161 +-
  src/server/client_transport.rs                |   51 +-
  src/server/clipboard_image.rs                 |   12 +-
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 57 files changed, 9032 insertions(+), 3486 deletions(-)
+ 59 files changed, 9713 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
  create mode 100644 src/remote/windows_bootstrap.ps1
+ create mode 100644 src/remote/windows_package_local_payload.ps1
+ create mode 100644 src/remote/windows_payload_layout.ps1
 
 diff --git a/Cargo.lock b/Cargo.lock
 index 980fcb5d966bd6ce04bbe1445ff3a087636c5a7c..fbf3ebcfbea2f8cf905e5308780409f8ccefbef2 100644
@@ -212,7 +216,7 @@ index dda1629c537c6807c3a903cc22a5601c4dc9c2b0..137ed74cbcc199d65fb1cb64deca2fde
  ## キーバインド
  
 diff --git a/docs/next/website/src/content/docs/ja/persistence-remote.mdx b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
-index f8d3ff02f5be343971171672c9f1793384f3357d..933e8e7e040f26c32f2ab7a6d431482dfec773bf 100644
+index f8d3ff02f5be343971171672c9f1793384f3357d..1fbcd6e56f5b38afaeab0c2e12fd24531221cb27 100644
 --- a/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 @@ -63,11 +63,23 @@ Host workbox
@@ -232,7 +236,7 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..933e8e7e040f26c32f2ab7a6d431482d
 +herdr --remote workbox --provision --yes --json
 +```
 +
-+無人プロビジョニングには `--yes` が必要で、`--json` は省略できます。Herdr は一致するバイナリを配置し、有効化の前にリモート設定を検証します。サーバーがなければ起動し、実行中のサーバーがその同じバイナリを使っていれば設定だけを再読み込みし、別のバイナリを有効化する必要がある場合に限りセッションを保存して再起動します。パッケージ管理されていないローカル Windows x86_64 ビルドは、Windows のエミュレーションを通じて現在の実行ファイルを x86_64 または ARM64 Windows にプロビジョニングできます。公開 Windows ビルドでは引き続き完全なポータブル ZIP を使います。
++無人プロビジョニングには `--yes` が必要で、`--json` は省略できます。Herdr は一致するランタイムを配置し、有効化の前にリモート設定を検証します。サーバーがなければ起動し、実行中のサーバーがその同じバイナリを使っていれば設定だけを再読み込みし、別のランタイムを有効化する必要がある場合に限りセッションを保存して再起動します。パッケージ管理されていないローカル Windows x86_64 ビルドは、実行ファイルの隣に完全なポータブルランタイムがある場合に限り、Windows のエミュレーションを通じて x86_64 または ARM64 Windows にプロビジョニングできます。Herdr は、そのランタイムを公開ビルドと同じ検証済みポータブル ZIP レイアウトに投影します。
 +
 +Windows からのリモートアタッチでは、既定の `ctrl+v` リモート画像バインドが登録済み PNG または DIB クリップボード画像を既存のクライアントプロトコルで送信し、リモートホストへステージして、そのリモートパスを貼り付けます。PNG、JPEG、GIF、WebP、BMP の絶対パスをひとつドラッグまたは貼り付けた場合も、同じサイズ制限付き転送を使います。対応するクリップボード画像がない場合、テキスト入力はそのまま送られます。ショートカットを変更または無効化するには `keys.remote_image_paste` を設定してください。
 +
@@ -247,7 +251,7 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..933e8e7e040f26c32f2ab7a6d431482d
  ローカルとリモートのプラットフォームが一致する場合、直接インストールでは Herdr は現在のローカルバイナリをコピーできます。Homebrew、mise、Nix のインストールの場合、またはプラットフォームが異なる場合は、`https://herdr.dev/latest.json` から現在のクライアントバージョンに一致するリリースアセットをダウンロードします。
  
 -ローカルビルドやカスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。
-+カスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。Windows のオーバーライドでは完全なポータブル ZIP、Unix ホストでは単一の実行ファイルが必要です。パッケージ管理されていないローカル Windows 開発ビルドは、Windows ターゲットで実行可能な場合に自動で選択されます。
++カスタムバイナリの場合は、リモートアタッチの前に `HERDR_REMOTE_BINARY` にローカルファイルパスを設定してください。Windows のオーバーライドでは完全なポータブル ZIP、Unix ホストでは単一の実行ファイルが必要です。パッケージ管理されていないローカル Windows 開発ビルドは、Windows ターゲットで実行でき、実行ファイルの隣に完全なポータブルランタイムがある場合に限り自動で選択されます。Herdr は転送前にそのレイアウトをパッケージ化します。
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
@@ -308,7 +312,7 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..33378c517b1107c2631e91abb38ceb87
  Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
  
 diff --git a/docs/next/website/src/content/docs/persistence-remote.mdx b/docs/next/website/src/content/docs/persistence-remote.mdx
-index a365ac8838673144952ce0b6dcf92d3125e27360..faff0af00422f5d1f47043404f4c7d45c07ac8b7 100644
+index a365ac8838673144952ce0b6dcf92d3125e27360..ae6a42a6c7002fd2383687b7acd1f9402bc7f1e2 100644
 --- a/docs/next/website/src/content/docs/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/persistence-remote.mdx
 @@ -65,9 +65,21 @@ herdr --remote workbox
@@ -325,7 +329,7 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..faff0af00422f5d1f47043404f4c7d45
 +herdr --remote workbox --provision --yes --json
 +```
 +
-+Unattended provisioning requires `--yes`; `--json` is optional. Herdr deploys the matching binary, validates the remote configuration before activation, starts a missing server, reloads configuration when the running server already uses that exact binary, and saves then restarts only when another binary must be activated. A non-package-managed local Windows x86_64 build can provision its current executable to x86_64 or ARM64 Windows through Windows emulation. Published Windows builds still use the complete portable ZIP.
++Unattended provisioning requires `--yes`; `--json` is optional. Herdr deploys the matching runtime, validates the remote configuration before activation, starts a missing server, reloads configuration when the running binary already matches, and saves then restarts only when another runtime must be activated. A non-package-managed local Windows x86_64 build can provision x86_64 or ARM64 Windows through Windows emulation only when its executable is adjacent to a complete portable runtime. Herdr projects that runtime into the same validated portable ZIP layout used by published builds.
 +
 +On a remote attach from Windows, the default `ctrl+v` remote-image binding sends a registered PNG or DIB clipboard image through the existing client protocol, stages it on the remote host, and pastes the remote path. Dragging or pasting one absolute PNG, JPEG, GIF, WebP, or BMP path uses the same bounded transport. Text input falls through unchanged when the clipboard has no supported image. Change or disable the shortcut with `keys.remote_image_paste`.
 +
@@ -340,7 +344,7 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..faff0af00422f5d1f47043404f4c7d45
  When your local and remote platforms match, Herdr can copy the current local binary for direct installs. For Homebrew, mise, and Nix installs, or when the platforms differ, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
  
 -For local builds or custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach.
-+For custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Windows overrides require the complete portable ZIP, while Unix hosts use a single executable. A non-package-managed local Windows development build is selected automatically when it can run on the Windows target.
++For custom binaries, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Windows overrides require the complete portable ZIP, while Unix hosts use a single executable. A non-package-managed local Windows development build is selected automatically only when it can run on the Windows target and is adjacent to the complete portable runtime; Herdr packages that layout before transfer.
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
@@ -451,7 +455,7 @@ index 237c53b484abb82ecc21052ffc9e68291fbbf86b..15cfd738d0d39a302937d9875762c67c
  ## 按键绑定
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
-index a81a8469e54aba464c1daa01638ac651f31c7e73..f935535754f4d4267bc9de93484a7529f9736a8a 100644
+index a81a8469e54aba464c1daa01638ac651f31c7e73..e03a058ac321880a88ddabdbe817ecd6059b69e2 100644
 --- a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 @@ -63,11 +63,23 @@ Host workbox
@@ -471,7 +475,7 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..f935535754f4d4267bc9de93484a7529
 +herdr --remote workbox --provision --yes --json
 +```
 +
-+无人值守配置必须使用 `--yes`，`--json` 可选。Herdr 会部署匹配的二进制文件，在激活前验证远程配置，在没有服务器时启动服务器，在运行中的服务器已经使用该精确二进制文件时只重新加载配置，并且仅在需要激活另一个二进制文件时保存会话并重启。未由包管理器管理的本地 Windows x86_64 构建可以通过 Windows 模拟，将当前可执行文件配置到 x86_64 或 ARM64 Windows。已发布的 Windows 构建仍使用完整便携 ZIP。
++无人值守配置必须使用 `--yes`，`--json` 可选。Herdr 会部署匹配的运行时，在激活前验证远程配置，在没有服务器时启动服务器，在运行中的服务器已经使用该精确二进制文件时只重新加载配置，并且仅在需要激活另一个运行时时保存会话并重启。未由包管理器管理的本地 Windows x86_64 构建只有在可执行文件旁存在完整便携运行时时，才能通过 Windows 模拟配置到 x86_64 或 ARM64 Windows。Herdr 会将该运行时投影为与已发布构建相同的已验证便携 ZIP 布局。
 +
 +从 Windows 远程连接时,默认的 `ctrl+v` 远程图像按键会通过现有客户端协议发送已注册的 PNG 或 DIB 剪贴板图像,将其暂存在远程主机并粘贴远程路径。拖放或粘贴一个 PNG、JPEG、GIF、WebP 或 BMP 的绝对路径也会使用同样的受限传输。剪贴板中没有受支持的图像时,文本输入会原样发送。可通过 `keys.remote_image_paste` 更改或禁用此快捷键。
 +
@@ -486,7 +490,7 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..f935535754f4d4267bc9de93484a7529
  当本地和远程平台一致时,对于直接安装,Herdr 可以直接复制当前本地二进制文件。对于 Homebrew、mise 和 Nix 安装,或平台不一致时,它会从 `https://herdr.dev/latest.json` 下载与当前客户端版本匹配的发布产物。
  
 -对于本地构建或自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。
-+对于自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。Windows 覆盖要求完整便携 ZIP，Unix 主机使用单个可执行文件。未由包管理器管理的本地 Windows 开发构建只要能在 Windows 目标上运行，就会被自动选择。
++对于自定义二进制文件,在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件路径。Windows 覆盖要求完整便携 ZIP，Unix 主机使用单个可执行文件。未由包管理器管理的本地 Windows 开发构建只有在能于 Windows 目标上运行且可执行文件旁存在完整便携运行时时，才会被自动选择；Herdr 会在传输前打包该布局。
  
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
@@ -2345,7 +2349,7 @@ index c293a2785130207740ab610c60998c607eb994bc..fc2f93b0c2bb8e369aac9ea7cdd0a5cc
      fn temp_socket_marker_path(name: &str) -> PathBuf {
          std::env::temp_dir().join(format!("herdr-{name}-{}.sock", std::process::id()))
 diff --git a/src/main.rs b/src/main.rs
-index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf76fa165d4 100644
+index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..a64ba88e5562f0a27b2fa2a6c1548f55002b170b 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -58,7 +58,6 @@ mod agent_resume;
@@ -2356,11 +2360,20 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
  mod checksum;
  mod cli;
  mod client;
-@@ -502,6 +501,11 @@ fn main() -> io::Result<()> {
+@@ -502,6 +501,20 @@ fn main() -> io::Result<()> {
              std::process::exit(2);
          }
      };
 +    let _remote_sidecar_lease = crate::remote::adopt_remote_sidecar_lease()?;
++    if args.get(1).map(String::as_str) == Some(remote::REMOTE_SIDECAR_VALIDATE_ARG) {
++        if args.len() > 3 {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "remote sidecar payload validation accepts at most one SHA-256 argument",
++            ));
++        }
++        return remote::validate_remote_sidecar_payload(args.get(2).map(String::as_str));
++    }
 +    if let Err(err) = remote::reject_remote_sidecar_update_command(&args) {
 +        eprintln!("{err}");
 +        std::process::exit(1);
@@ -2368,7 +2381,7 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
  
      if remote_launch.is_some()
          && args.get(1).is_some()
-@@ -512,7 +516,7 @@ fn main() -> io::Result<()> {
+@@ -512,7 +525,7 @@ fn main() -> io::Result<()> {
              )
          })
      {
@@ -2377,7 +2390,7 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
          eprintln!("run 'herdr --help' for usage");
          std::process::exit(2);
      }
-@@ -580,10 +584,12 @@ fn main() -> io::Result<()> {
+@@ -580,10 +593,12 @@ fn main() -> io::Result<()> {
          println!("Usage: herdr [options]");
          println!("       herdr --session <name> [options]");
          println!("       herdr --remote <ssh-target> [--session <name>]");
@@ -2390,7 +2403,7 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
          println!("       herdr server stop");
          println!("       herdr server reload-config");
          println!("       herdr api <subcommand> ...");
-@@ -608,6 +614,10 @@ fn main() -> io::Result<()> {
+@@ -608,6 +623,10 @@ fn main() -> io::Result<()> {
              ),
              ("herdr update", "Download and install the latest version"),
              ("herdr completion zsh", "Generate shell completions for zsh"),
@@ -2401,7 +2414,7 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
              (
                  "herdr server stop",
                  "Stop the running server via the API socket",
-@@ -672,6 +682,9 @@ fn main() -> io::Result<()> {
+@@ -672,6 +691,9 @@ fn main() -> io::Result<()> {
          println!("  --no-session        Run monolithically (no server/client, escape hatch)");
          println!("  --session <name>    Use or create a named persistent session");
          println!("  --remote <target>   Attach through SSH to a remote Herdr server");
@@ -2411,7 +2424,7 @@ index 14aa78a52ad66fcf353c534e40e433d80c1e9a90..506e76374cec0ea105c9b3e69292abf7
          println!("  --remote-keybindings <local|server>");
          println!("                      Keybindings for --remote app attach (default: local)");
          println!("  --handoff           Opt into live handoff for update or remote attach");
-@@ -709,6 +722,10 @@ fn main() -> io::Result<()> {
+@@ -709,6 +731,10 @@ fn main() -> io::Result<()> {
          "--session",
          "--remote",
          "--remote-keybindings",
@@ -3587,16 +3600,17 @@ index 6b639f0de9bbce17beeefd4c5e8daf90aa49c278..b42da399dcf96093a61be2bd08a1843f
          return None;
      }
 diff --git a/src/remote.rs b/src/remote.rs
-index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc6156abd17b2 100644
+index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..061d6f035150fec73c92ee9ea2d42da933beb5a4 100644
 --- a/src/remote.rs
 +++ b/src/remote.rs
-@@ -1,150 +1,32 @@
+@@ -1,150 +1,33 @@
 +mod attach;
  #[cfg(unix)]
  mod unix;
 +mod windows;
 +pub(crate) use windows::{
 +    adopt_remote_sidecar_lease, configure_remote_sidecar_child, remote_sidecar_active,
++    validate_remote_sidecar_payload, REMOTE_SIDECAR_VALIDATE_ARG,
 +};
  
 +pub(crate) use attach::*;
@@ -3761,7 +3775,7 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
  }
  
  pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
-@@ -191,6 +73,21 @@ fn shell_quote(value: &str) -> String {
+@@ -191,6 +74,21 @@ fn shell_quote(value: &str) -> String {
  mod tests {
      use super::*;
  
@@ -3785,10 +3799,10 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34b5aff680
+index 0000000000000000000000000000000000000000..ce4db70ea3e7500b0aacced3cdc5a201a96113ba
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,5409 @@
+@@ -0,0 +1,5675 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::cell::Cell;
@@ -4349,6 +4363,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    temporary_dir: Option<PathBuf>,
 +    kind: InstallSourceKind,
 +    sha256: Option<String>,
++    executable_sha256: Option<String>,
 +}
 +
 +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4604,9 +4619,8 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +        remote_herdr: &RemoteHerdr,
 +        source_path: &Path,
 +        expected_sha256: &str,
-+        kind: InstallSourceKind,
 +    ) -> io::Result<()> {
-+        let archive_name = windows_payload_archive_name(kind)?;
++        let archive_name = windows_payload_archive_name()?;
 +        let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
 +        let script = windows_install_prepare_script(remote_herdr, &archive_name);
 +        let output = self.powershell_command_output(&script)?;
@@ -4643,7 +4657,6 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            remote_herdr,
 +            &temporary_archive,
 +            expected_sha256,
-+            kind,
 +        ))?;
 +        if output.status.success() {
 +            Ok(())
@@ -4711,19 +4724,12 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +        .to_string()
 +}
 +
-+fn windows_payload_archive_name(kind: InstallSourceKind) -> io::Result<String> {
++fn windows_payload_archive_name() -> io::Result<String> {
 +    let timestamp = std::time::SystemTime::now()
 +        .duration_since(std::time::UNIX_EPOCH)
 +        .map_err(|err| io::Error::other(format!("system clock precedes Unix epoch: {err}")))?
 +        .as_nanos();
-+    let extension = match kind {
-+        InstallSourceKind::Executable => "exe",
-+        InstallSourceKind::WindowsZip => "zip",
-+    };
-+    Ok(format!(
-+        "payload-{}-{timestamp:x}.{extension}",
-+        std::process::id()
-+    ))
++    Ok(format!("payload-{}-{timestamp:x}.zip", std::process::id()))
 +}
 +
 +fn windows_payload_archive_path(
@@ -4769,20 +4775,15 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    remote_herdr: &RemoteHerdr,
 +    archive_path: &str,
 +    expected_sha256: &str,
-+    kind: InstallSourceKind,
 +) -> String {
 +    let root = windows_sidecar_root(remote_herdr);
 +    super::windows::powershell_bootstrap_command(&format!(
-+        "Invoke-HerdrRemoteCommitInstall -Archive {} -Destination {} -ExpectedSha256 {} -ExpectedRuntimeVersion {} -ExpectedProtocol {} -PayloadKind {}",
++        "Invoke-HerdrRemoteCommitInstall -Archive {} -Destination {} -ExpectedSha256 {} -ExpectedRuntimeVersion {} -ExpectedProtocol {}",
 +        super::windows::powershell_quote(archive_path),
 +        super::windows::powershell_quote(&root),
 +        super::windows::powershell_quote(expected_sha256),
 +        super::windows::powershell_quote(&current_version()),
 +        CURRENT_PROTOCOL,
-+        super::windows::powershell_quote(match kind {
-+            InstallSourceKind::Executable => "executable",
-+            InstallSourceKind::WindowsZip => "zip",
-+        }),
 +    ))
 +}
 +
@@ -4851,6 +4852,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            temporary_dir: None,
 +            kind: InstallSourceKind::Executable,
 +            sha256: None,
++            executable_sha256: None,
 +        }
 +    }
 +
@@ -4860,6 +4862,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            temporary_dir: Some(temporary_dir),
 +            kind: InstallSourceKind::Executable,
 +            sha256: None,
++            executable_sha256: None,
 +        }
 +    }
 +
@@ -4869,15 +4872,22 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            temporary_dir,
 +            kind: InstallSourceKind::WindowsZip,
 +            sha256: Some(sha256),
++            executable_sha256: None,
 +        }
 +    }
 +
-+    fn windows_executable(path: PathBuf, sha256: String) -> Self {
++    fn local_windows_zip(
++        path: PathBuf,
++        temporary_dir: PathBuf,
++        sha256: String,
++        executable_sha256: String,
++    ) -> Self {
 +        Self {
 +            path,
-+            temporary_dir: None,
-+            kind: InstallSourceKind::Executable,
++            temporary_dir: Some(temporary_dir),
++            kind: InstallSourceKind::WindowsZip,
 +            sha256: Some(sha256),
++            executable_sha256: Some(executable_sha256),
 +        }
 +    }
 +
@@ -5017,6 +5027,10 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            });
 +        }
 +    }
++    if local_executable_source {
++        let executable = std::env::current_exe()?;
++        local_windows_runtime_root(&executable)?;
++    }
 +
 +    let status_probe = match path_candidate.as_ref() {
 +        Some(candidate) => Some(candidate),
@@ -5045,10 +5059,10 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    )?;
 +    let source = resolve_windows_install_source(&platform, override_payload)?;
 +    if let Some(identity) = source_identity.as_deref() {
-+        if source.sha256.as_deref() != Some(identity) {
++        if local_executable_source && source.executable_sha256.as_deref() != Some(identity) {
 +            source.cleanup();
 +            return Err(io::Error::other(
-+                "local Windows remote payload changed while provisioning; rebuild and retry",
++                "local Windows remote executable changed while packaging; rebuild and retry",
 +            ));
 +        }
 +    }
@@ -5064,8 +5078,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    }
 +    // The commit script verifies this checksum plus the staged runtime version
 +    // and protocol before atomically publishing the sidecar.
-+    let install_result =
-+        ssh.install_windows_payload(&managed, &source.path, expected_sha256, source.kind);
++    let install_result = ssh.install_windows_payload(&managed, &source.path, expected_sha256);
 +    source.cleanup();
 +    if let Err(install_err) = install_result {
 +        if let Some(remote) = stopped_remote {
@@ -5591,7 +5604,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    }
 +
 +    if local_binary_can_seed_remote {
-+        "the current local herdr binary".to_string()
++        "the current local Herdr portable runtime".to_string()
 +    } else {
 +        format!(
 +            "the {} {} asset for {}",
@@ -5632,8 +5645,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    if local_binary_compatible_with_remote(platform) {
 +        let path = std::env::current_exe()?;
 +        if !crate::update::is_package_manager_managed_exe_path(&path) {
-+            let sha256 = file_sha256(&path)?;
-+            return Ok(InstallSource::windows_executable(path, sha256));
++            return package_local_windows_runtime(&path);
 +        }
 +    }
 +    let source = download_release_asset(&RemotePlatform {
@@ -5703,13 +5715,171 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +        .collect())
 +}
 +
++const WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES: &[&str] = &[
++    "LICENSE.txt",
++    "conpty/herdr-conpty.json",
++    "conpty/conpty.dll",
++    "conpty/x64/OpenConsole.exe",
++    "conpty/arm64/OpenConsole.exe",
++    "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-LICENSE.txt",
++    "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-NOTICE.md",
++];
++
++fn local_windows_runtime_root(executable: &Path) -> io::Result<&Path> {
++    let root = executable.parent().ok_or_else(|| {
++        io::Error::new(
++            io::ErrorKind::InvalidData,
++            "local Windows Herdr executable has no parent directory",
++        )
++    })?;
++    for relative in WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES {
++        let path = root.join(relative.replace('/', "\\"));
++        if !path.is_file() {
++            return Err(io::Error::new(
++                io::ErrorKind::NotFound,
++                format!(
++                    "local Windows Herdr runtime is missing {relative}; run from a complete portable or managed runtime, or set {REMOTE_BINARY_ENV_VAR} to a complete portable ZIP"
++                ),
++            ));
++        }
++    }
++    Ok(root)
++}
++
++#[cfg(windows)]
++fn run_local_windows_payload_packager(
++    source_root: &Path,
++    stage: &Path,
++    archive: &Path,
++) -> io::Result<()> {
++    let job = crate::platform::ChildProcessJob::new_kill_on_close()?;
++    let encoded_script = super::windows::local_payload_package_encoded_script();
++    let stderr_path = archive.with_extension("packager.stderr.log");
++    let stderr_file = fs::File::create(&stderr_path)?;
++    let mut child = Command::new(WINDOWS_POWERSHELL_EXECUTABLE)
++        .args([
++            "-NoLogo",
++            "-NoProfile",
++            "-NonInteractive",
++            "-EncodedCommand",
++            &encoded_script,
++        ])
++        .env("HERDR_LOCAL_PAYLOAD_SOURCE", source_root)
++        .env("HERDR_LOCAL_PAYLOAD_STAGE", stage)
++        .env("HERDR_LOCAL_PAYLOAD_ARCHIVE", archive)
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::from(stderr_file))
++        .spawn()
++        .map_err(|err| {
++            io::Error::new(
++                err.kind(),
++                format!("failed to start local Windows payload packager: {err}"),
++            )
++        })?;
++    if let Err(err) = job.assign(&child) {
++        let _ = child.kill();
++        let _ = crate::platform::wait_child_bounded(&mut child, Duration::from_secs(5));
++        return Err(io::Error::new(
++            err.kind(),
++            format!("failed to contain local Windows payload packager: {err}"),
++        ));
++    }
++    let status = match crate::platform::wait_child_bounded(&mut child, Duration::from_secs(120)) {
++        Ok(Some(status)) => status,
++        Ok(None) => {
++            return match job.terminate_and_wait(&mut child, Duration::from_secs(5)) {
++                Ok(()) => Err(io::Error::new(
++                    io::ErrorKind::TimedOut,
++                    "local Windows payload packaging exceeded 120 seconds",
++                )),
++                Err(err) => Err(io::Error::other(format!(
++                    "local Windows payload packaging timed out and cleanup failed: {err}"
++                ))),
++            };
++        }
++        Err(wait_err) => {
++            return match job.terminate_and_wait(&mut child, Duration::from_secs(5)) {
++                Ok(()) => Err(io::Error::new(
++                    wait_err.kind(),
++                    format!("failed to wait for local Windows payload packager: {wait_err}"),
++                )),
++                Err(cleanup_err) => Err(io::Error::other(format!(
++                    "failed to wait for local Windows payload packager ({wait_err}); cleanup also failed: {cleanup_err}"
++                ))),
++            };
++        }
++    };
++    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
++    let _ = fs::remove_file(&stderr_path);
++    if !status.success() {
++        let detail = stderr.trim();
++        return Err(io::Error::other(format!(
++            "local Windows payload packager exited with {status}{}",
++            if detail.is_empty() {
++                String::new()
++            } else {
++                format!(": {detail}")
++            }
++        )));
++    }
++    validate_windows_zip_path(archive)
++}
++
++#[cfg(windows)]
++fn package_local_windows_runtime(executable: &Path) -> io::Result<InstallSource> {
++    let source_root = local_windows_runtime_root(executable)?;
++    let executable_sha256 = file_sha256(executable)?;
++    let runtime_executable = source_root.join("herdr.exe");
++    if file_sha256(&runtime_executable)? != executable_sha256 {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "local Windows portable runtime herdr.exe does not match the running executable",
++        ));
++    }
++    let temporary_dir = private_download_dir("windows-local-payload")?;
++    let stage = temporary_dir.join("stage");
++    let archive = temporary_dir.join("payload.zip");
++    let result = (|| {
++        run_local_windows_payload_packager(source_root, &stage, &archive)?;
++        let packaged_executable_sha256 = file_sha256(&stage.join("herdr.exe"))?;
++        if packaged_executable_sha256 != executable_sha256 {
++            return Err(io::Error::other(
++                "local Windows remote executable changed while packaging",
++            ));
++        }
++        let archive_sha256 = file_sha256(&archive)?;
++        Ok(InstallSource::local_windows_zip(
++            archive.clone(),
++            temporary_dir.clone(),
++            archive_sha256,
++            executable_sha256,
++        ))
++    })();
++    if result.is_err() {
++        let _ = fs::remove_dir_all(&temporary_dir);
++    }
++    result
++}
++
++#[cfg(not(windows))]
++fn package_local_windows_runtime(_executable: &Path) -> io::Result<InstallSource> {
++    Err(io::Error::new(
++        io::ErrorKind::Unsupported,
++        "a local Windows runtime can only be packaged by a Windows client",
++    ))
++}
++
 +fn local_binary_can_seed_remote(platform: &RemotePlatform) -> bool {
 +    if !local_binary_compatible_with_remote(platform) {
 +        return false;
 +    }
 +
 +    std::env::current_exe()
-+        .map(|path| !crate::update::is_package_manager_managed_exe_path(&path))
++        .map(|path| {
++            !crate::update::is_package_manager_managed_exe_path(&path)
++                && (platform.os != "windows" || local_windows_runtime_root(&path).is_ok())
++        })
 +        .unwrap_or(false)
 +}
 +
@@ -8236,7 +8406,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +    }
 +
 +    #[test]
-+    fn windows_install_scripts_use_staged_complete_payload_and_exact_validation() {
++    fn windows_install_scripts_require_staged_complete_zip_payload() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
 +        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can", None);
 +        let prepare = windows_install_prepare_script(&remote, "payload-42-abcd.zip");
@@ -8245,9 +8415,11 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +            &remote,
 +            "C:\\Temp\\payload.zip",
 +            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-+            InstallSourceKind::WindowsZip,
 +        );
 +        let bootstrap = crate::remote::windows::powershell_bootstrap_source();
++        let layout = crate::remote::windows::powershell_payload_layout_source();
++        let local_package = crate::remote::windows::powershell_local_package_source();
++        let attach_probe = crate::remote::windows::powershell_attach_probe_source();
 +
 +        assert!(prepare.contains("powershell.exe"));
 +        assert!(cleanup.contains("powershell.exe"));
@@ -8256,9 +8428,22 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +        assert!(bootstrap.contains("Remove-HerdrRemoteArchive"));
 +        assert!(bootstrap.contains("invalid remote payload archive name"));
 +        assert!(bootstrap.contains("Expand-Archive"));
-+        assert!(bootstrap.contains("Get-FileHash"));
++        assert!(layout.contains("function Get-HerdrFileSha256"));
++        assert!(!layout.contains("Get-FileHash"));
++        assert!(!bootstrap.contains("Get-FileHash"));
++        assert!(!attach_probe.contains("Get-FileHash"));
 +        assert!(bootstrap.contains("portable payload is missing herdr.exe"));
-+        assert!(bootstrap.contains("ConPTY ownership marker"));
++        assert!(bootstrap.contains("Assert-HerdrPortablePayload -Root $stage"));
++        assert!(!bootstrap.contains("PayloadKind"));
++        assert!(!bootstrap.contains(".exe)$"));
++        assert!(attach_probe.contains("& $Path @a"));
++        assert!(local_package.contains("$script:HerdrPortablePayloadFiles"));
++        assert!(local_package.contains("ZipFile]::CreateFromDirectory"));
++        assert!(!local_package.contains("runtime.manifest"));
++        assert!(!local_package.contains("runtime.ready"));
++        for relative in WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES {
++            assert!(layout.contains(relative));
++        }
 +        assert!(bootstrap.contains("status client --json"));
 +        assert!(bootstrap.contains("'rollback-' + [Guid]::NewGuid"));
 +        assert!(bootstrap.contains("$destinationLease = Join-Path $Destination '.lease'"));
@@ -8282,6 +8467,101 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +
 +        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 +        assert!(error.to_string().contains("complete Windows portable ZIP"));
++    }
++
++    #[test]
++    fn local_windows_runtime_requires_the_complete_portable_projection() {
++        let root = std::env::temp_dir().join(format!(
++            "herdr-local-windows-runtime-test-{}",
++            std::process::id()
++        ));
++        let _ = fs::remove_dir_all(&root);
++        fs::create_dir_all(&root).unwrap();
++        let executable = root.join("herdr.exe");
++        fs::write(&executable, b"herdr").unwrap();
++        fs::write(root.join("LICENSE.txt"), b"license").unwrap();
++
++        let error = local_windows_runtime_root(&executable).unwrap_err();
++        assert!(error.to_string().contains("conpty/herdr-conpty.json"));
++
++        for relative in WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES {
++            let path = relative
++                .split('/')
++                .fold(root.clone(), |path, component| path.join(component));
++            fs::create_dir_all(path.parent().unwrap()).unwrap();
++            fs::write(path, b"payload").unwrap();
++        }
++        assert_eq!(local_windows_runtime_root(&executable).unwrap(), root);
++        fs::write(root.join("runtime.manifest"), b"installer-only").unwrap();
++        fs::write(root.join("runtime.ready"), b"installer-only").unwrap();
++        assert_eq!(local_windows_runtime_root(&executable).unwrap(), root);
++
++        let _ = fs::remove_dir_all(root);
++    }
++
++    #[cfg(windows)]
++    #[test]
++    fn windows_local_payload_packager_projects_only_portable_files() {
++        let root = std::env::temp_dir().join(format!(
++            "herdr-local-windows-packager-test-{}",
++            std::process::id()
++        ));
++        let _ = fs::remove_dir_all(&root);
++        let source = root.join("source");
++        let stage = root.join("stage");
++        let archive = root.join("payload.zip");
++        fs::create_dir_all(&source).unwrap();
++        fs::write(source.join("herdr.exe"), b"herdr").unwrap();
++
++        for relative in WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES {
++            let path = relative
++                .split('/')
++                .fold(source.clone(), |path, component| path.join(component));
++            fs::create_dir_all(path.parent().unwrap()).unwrap();
++            fs::write(path, format!("payload:{relative}")).unwrap();
++        }
++        let conpty_files = [
++            "conpty/conpty.dll",
++            "conpty/x64/OpenConsole.exe",
++            "conpty/arm64/OpenConsole.exe",
++        ];
++        let hashes = conpty_files
++            .iter()
++            .map(|relative| {
++                let path = relative
++                    .split('/')
++                    .fold(source.clone(), |path, component| path.join(component));
++                ((*relative).to_string(), file_sha256(&path).unwrap())
++            })
++            .collect::<std::collections::BTreeMap<_, _>>();
++        fs::write(
++            source.join("conpty").join("herdr-conpty.json"),
++            serde_json::to_vec_pretty(&serde_json::json!({
++                "schema_version": 1,
++                "package": "Microsoft.Windows.Console.ConPTY",
++                "version": "test",
++                "architecture": "x86_64",
++                "files": hashes,
++            }))
++            .unwrap(),
++        )
++        .unwrap();
++        fs::write(source.join("runtime.manifest"), b"installer-only").unwrap();
++        fs::write(source.join("runtime.ready"), b"installer-only").unwrap();
++
++        run_local_windows_payload_packager(&source, &stage, &archive).unwrap();
++        assert!(archive.is_file());
++        assert!(fs::read(&archive).unwrap().starts_with(b"PK"));
++        assert!(!stage.join("runtime.manifest").exists());
++        assert!(!stage.join("runtime.ready").exists());
++        for relative in WINDOWS_PORTABLE_RUNTIME_REQUIRED_FILES {
++            let path = relative
++                .split('/')
++                .fold(stage.clone(), |path, component| path.join(component));
++            assert!(path.is_file(), "missing packaged file {relative}");
++        }
++
++        let _ = fs::remove_dir_all(root);
 +    }
 +
 +    #[test]
@@ -9062,7 +9342,7 @@ index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34
 +
 +        assert_eq!(
 +            install_source_description_for(&platform, None, true),
-+            "the current local herdr binary"
++            "the current local Herdr portable runtime"
 +        );
 +    }
 +
@@ -12318,14 +12598,19 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c7d4625b6
+index 0000000000000000000000000000000000000000..06a17e9e158df7a2c3bf6609fee7e95ac0a25cc4
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,765 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
-+use std::{io, thread, time::Duration};
++use std::{
++    io,
++    process::{Command, Stdio},
++    thread,
++    time::Duration,
++};
 +
 +use base64::Engine as _;
 +#[cfg(windows)]
@@ -12335,6 +12620,10 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +#[cfg(windows)]
 +const WINDOWS_ATTACH_PROBE_SCRIPT: &str = include_str!("windows_attach_probe.ps1");
 +const WINDOWS_BOOTSTRAP_SCRIPT: &str = include_str!("windows_bootstrap.ps1");
++const WINDOWS_PAYLOAD_LAYOUT_SCRIPT: &str = include_str!("windows_payload_layout.ps1");
++const WINDOWS_PACKAGE_LOCAL_PAYLOAD_SCRIPT: &str =
++    include_str!("windows_package_local_payload.ps1");
++pub(crate) const REMOTE_SIDECAR_VALIDATE_ARG: &str = "--herdr-private-validate-remote-sidecar-v1";
 +static REMOTE_SIDECAR_ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 +
 +#[derive(Debug, Clone, PartialEq, Eq)]
@@ -12436,6 +12725,123 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +
 +pub(crate) fn remote_sidecar_active() -> bool {
 +    REMOTE_SIDECAR_ACTIVE.get().copied().unwrap_or(false)
++}
++
++#[cfg(windows)]
++pub(crate) fn validate_remote_sidecar_payload(expected_sha256: Option<&str>) -> io::Result<()> {
++    if !remote_sidecar_active() {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "remote sidecar payload validation requires sidecar mode",
++        ));
++    }
++    let executable = std::env::current_exe()?;
++    let root = executable.parent().ok_or_else(|| {
++        io::Error::new(
++            io::ErrorKind::InvalidData,
++            "remote Windows sidecar executable has no parent directory",
++        )
++    })?;
++    run_remote_sidecar_payload_validation(root, &executable, expected_sha256)
++}
++
++#[cfg(not(windows))]
++pub(crate) fn validate_remote_sidecar_payload(
++    _expected_sha256: Option<&str>,
++) -> std::io::Result<()> {
++    Err(std::io::Error::new(
++        std::io::ErrorKind::Unsupported,
++        "remote Windows sidecar payload validation requires Windows",
++    ))
++}
++
++#[cfg(windows)]
++fn run_remote_sidecar_payload_validation(
++    root: &std::path::Path,
++    executable: &std::path::Path,
++    expected_sha256: Option<&str>,
++) -> io::Result<()> {
++    if expected_sha256.is_some_and(|sha256| {
++        sha256.len() != 64
++            || !sha256
++                .bytes()
++                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
++    }) {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "expected remote sidecar executable SHA-256 is invalid",
++        ));
++    }
++    let script = format!(
++        "{WINDOWS_PAYLOAD_LAYOUT_SCRIPT}\nAssert-HerdrPortablePayload -Root $env:HERDR_REMOTE_PAYLOAD_ROOT -AllowLease\nif (-not [string]::IsNullOrEmpty($env:HERDR_REMOTE_PAYLOAD_SHA256) -and (Get-HerdrFileSha256 -Path $env:HERDR_REMOTE_PAYLOAD_EXE) -cne $env:HERDR_REMOTE_PAYLOAD_SHA256) {{ throw 'remote sidecar executable hash mismatch' }}"
++    );
++    let encoded = encoded_powershell_script(&script);
++    let job = crate::platform::ChildProcessJob::new_kill_on_close()?;
++    let mut child = Command::new("powershell.exe")
++        .args([
++            "-NoLogo",
++            "-NoProfile",
++            "-NonInteractive",
++            "-EncodedCommand",
++            &encoded,
++        ])
++        .env("HERDR_REMOTE_PAYLOAD_ROOT", root)
++        .env("HERDR_REMOTE_PAYLOAD_EXE", executable)
++        .env(
++            "HERDR_REMOTE_PAYLOAD_SHA256",
++            expected_sha256.unwrap_or_default(),
++        )
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .spawn()
++        .map_err(|err| {
++            io::Error::new(
++                err.kind(),
++                format!("failed to start remote sidecar payload validator: {err}"),
++            )
++        })?;
++    if let Err(err) = job.assign(&child) {
++        let _ = child.kill();
++        let _ = crate::platform::wait_child_bounded(&mut child, Duration::from_secs(5));
++        return Err(io::Error::new(
++            err.kind(),
++            format!("failed to contain remote sidecar payload validator: {err}"),
++        ));
++    }
++    let status = match crate::platform::wait_child_bounded(&mut child, Duration::from_secs(30)) {
++        Ok(Some(status)) => status,
++        Ok(None) => {
++            return match job.terminate_and_wait(&mut child, Duration::from_secs(5)) {
++                Ok(()) => Err(io::Error::new(
++                    io::ErrorKind::TimedOut,
++                    "remote sidecar payload validation exceeded 30 seconds",
++                )),
++                Err(err) => Err(io::Error::other(format!(
++                    "remote sidecar payload validation timed out and cleanup failed: {err}"
++                ))),
++            };
++        }
++        Err(wait_err) => {
++            return match job.terminate_and_wait(&mut child, Duration::from_secs(5)) {
++                Ok(()) => Err(io::Error::new(
++                    wait_err.kind(),
++                    format!("failed to wait for remote sidecar payload validator: {wait_err}"),
++                )),
++                Err(cleanup_err) => Err(io::Error::other(format!(
++                    "failed to wait for remote sidecar payload validator ({wait_err}); cleanup also failed: {cleanup_err}"
++                ))),
++            };
++        }
++    };
++    if status.success() {
++        Ok(())
++    } else {
++        Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "remote Windows sidecar payload validation failed",
++        ))
++    }
 +}
 +
 +#[cfg(windows)]
@@ -12586,12 +12992,17 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +    } else {
 +        String::new()
 +    };
-+    let payload_check = expected_payload_sha256.map_or_else(String::new, |expected| {
++    let payload_check = if sidecar {
++        let expected = expected_payload_sha256
++            .map(|sha256| format!(" {}", powershell_quote(sha256)))
++            .unwrap_or_default();
 +        format!(
-+            "if ((Get-FileHash -LiteralPath $herdr -Algorithm SHA256).Hash.ToLowerInvariant() -cne {}) {{ exit 1 }}; ",
-+            powershell_quote(expected)
++            "& $herdr {}{expected}; if ($LASTEXITCODE -ne 0) {{ exit 1 }}; ",
++            powershell_quote(REMOTE_SIDECAR_VALIDATE_ARG)
 +        )
-+    });
++    } else {
++        String::new()
++    };
 +    let script = format!(
 +        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}{payload_check}$version = & $herdr --version; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $status = & $herdr status client --json; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine($version); [Console]::Out.WriteLine($status); exit 0",
 +        powershell_quote(executable)
@@ -12616,11 +13027,12 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +        .map(powershell_quote)
 +        .unwrap_or_else(|| "$null".to_string());
 +    let variables = format!(
-+        "$ExpectedVersion = {}\n$ExpectedRuntime = {}\n$ExpectedProtocol = {}\n$ExpectedPayloadSha256 = {}\n$AllowPathCandidate = {}\n$ServerArguments = {}\n",
++        "$ExpectedVersion = {}\n$ExpectedRuntime = {}\n$ExpectedProtocol = {}\n$ExpectedPayloadSha256 = {}\n$V = {}\n$AllowPathCandidate = {}\n$ServerArguments = {}\n",
 +        powershell_quote(expected_herdr_version),
 +        powershell_quote(expected_runtime_version),
 +        expected_protocol,
 +        expected_payload_sha256,
++        powershell_quote(REMOTE_SIDECAR_VALIDATE_ARG),
 +        if allow_path_candidate {
 +            "$true"
 +        } else {
@@ -12636,7 +13048,16 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +}
 +
 +pub(super) fn powershell_bootstrap_command(invocation: &str) -> String {
-+    encoded_powershell_command(&format!("{WINDOWS_BOOTSTRAP_SCRIPT}\n{invocation}\n"))
++    encoded_powershell_command(&format!(
++        "{WINDOWS_PAYLOAD_LAYOUT_SCRIPT}\n{WINDOWS_BOOTSTRAP_SCRIPT}\n{invocation}\n"
++    ))
++}
++
++#[cfg(windows)]
++pub(super) fn local_payload_package_encoded_script() -> String {
++    encoded_powershell_script(&format!(
++        "{WINDOWS_PAYLOAD_LAYOUT_SCRIPT}\n{WINDOWS_PACKAGE_LOCAL_PAYLOAD_SCRIPT}"
++    ))
 +}
 +
 +#[cfg(test)]
@@ -12644,18 +13065,37 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +    WINDOWS_BOOTSTRAP_SCRIPT
 +}
 +
++#[cfg(test)]
++pub(super) fn powershell_payload_layout_source() -> &'static str {
++    WINDOWS_PAYLOAD_LAYOUT_SCRIPT
++}
++
++#[cfg(test)]
++pub(super) fn powershell_local_package_source() -> &'static str {
++    WINDOWS_PACKAGE_LOCAL_PAYLOAD_SCRIPT
++}
++
++#[cfg(test)]
++pub(super) fn powershell_attach_probe_source() -> &'static str {
++    WINDOWS_ATTACH_PROBE_SCRIPT
++}
++
 +fn encoded_powershell_command(script: &str) -> String {
 +    // Bounded probes and provisioning may use an explicit PowerShell process
 +    // because their output is consumed only after exit. The interactive bridge
 +    // deliberately bypasses this wrapper because Windows PowerShell buffers a
 +    // native child's stdout and can serialize diagnostics as CLIXML.
-+    let encoded = base64::engine::general_purpose::STANDARD.encode(
++    let encoded = encoded_powershell_script(script);
++    format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
++}
++
++fn encoded_powershell_script(script: &str) -> String {
++    base64::engine::general_purpose::STANDARD.encode(
 +        script
 +            .encode_utf16()
 +            .flat_map(u16::to_le_bytes)
 +            .collect::<Vec<_>>(),
-+    );
-+    format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
++    )
 +}
 +
 +pub(super) fn powershell_quote(value: &str) -> String {
@@ -12780,34 +13220,135 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +        ));
 +
 +        assert!(!script.contains(sidecar_environment_name()));
++        assert!(!script.contains(REMOTE_SIDECAR_VALIDATE_ARG));
 +        assert!(script.contains("status client --json"));
 +        assert!(script.ends_with("exit 0"));
++    }
++
++    #[test]
++    fn cross_client_windows_sidecar_probe_requires_payload_self_validation() {
++        let expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
++        let command = powershell_herdr_probe_command(
++            "C:\\Users\\Can\\.herdr\\remote\\bin\\herdr.exe",
++            true,
++            Some(expected_sha256),
++        );
++        let script = decoded_powershell_command(&command);
++
++        assert!(script.contains(REMOTE_SIDECAR_VALIDATE_ARG));
++        assert!(script.contains(expected_sha256));
++        assert!(!script.contains("Get-FileHash"));
++        assert!(command.encode_utf16().count() < 8191);
++    }
++
++    #[cfg(windows)]
++    #[test]
++    fn remote_sidecar_payload_self_validation_rejects_an_incomplete_runtime() {
++        use sha2::Digest as _;
++
++        let root = std::env::temp_dir().join(format!(
++            "herdr-sidecar-payload-validation-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .map(|duration| duration.as_nanos())
++                .unwrap_or_default()
++        ));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        for relative in [
++            "herdr.exe",
++            "LICENSE.txt",
++            "conpty/conpty.dll",
++            "conpty/x64/OpenConsole.exe",
++            "conpty/arm64/OpenConsole.exe",
++            "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-LICENSE.txt",
++            "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-NOTICE.md",
++            ".lease",
++        ] {
++            let path = relative
++                .split('/')
++                .fold(root.clone(), |path, component| path.join(component));
++            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
++            std::fs::write(path, format!("payload:{relative}")).unwrap();
++        }
++        let sha256 = |path: &std::path::Path| {
++            sha2::Sha256::digest(std::fs::read(path).unwrap())
++                .iter()
++                .map(|byte| format!("{byte:02x}"))
++                .collect::<String>()
++        };
++        let hashes = [
++            "conpty/conpty.dll",
++            "conpty/x64/OpenConsole.exe",
++            "conpty/arm64/OpenConsole.exe",
++        ]
++        .into_iter()
++        .map(|relative| {
++            let path = relative
++                .split('/')
++                .fold(root.clone(), |path, component| path.join(component));
++            (relative, sha256(&path))
++        })
++        .collect::<std::collections::BTreeMap<_, _>>();
++        std::fs::write(
++            root.join("conpty").join("herdr-conpty.json"),
++            serde_json::to_vec_pretty(&serde_json::json!({
++                "schema_version": 1,
++                "package": "Microsoft.Windows.Console.ConPTY",
++                "version": "test",
++                "architecture": "x86_64",
++                "files": hashes,
++            }))
++            .unwrap(),
++        )
++        .unwrap();
++        let executable = root.join("herdr.exe");
++        let executable_sha256 = sha256(&executable);
++
++        run_remote_sidecar_payload_validation(&root, &executable, Some(&executable_sha256))
++            .unwrap();
++        std::fs::remove_file(root.join("conpty").join("conpty.dll")).unwrap();
++        assert_eq!(
++            run_remote_sidecar_payload_validation(&root, &executable, Some(&executable_sha256))
++                .unwrap_err()
++                .kind(),
++            std::io::ErrorKind::InvalidData
++        );
++
++        let _ = std::fs::remove_dir_all(root);
 +    }
 +
 +    #[cfg(windows)]
 +    #[test]
 +    fn windows_attach_probe_combines_platform_binary_and_server_inspection() {
++        let expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 +        let command = powershell_attach_probe_command(
 +            "0.8.0",
 +            "local",
 +            20,
-+            Some("0123456789abcdef"),
++            Some(expected_sha256),
 +            true,
 +            Some("agent's work"),
 +        );
 +        let script = decoded_powershell_command(&command);
 +
-+        assert!(command.encode_utf16().count() < 8191);
++        assert!(
++            command.encode_utf16().count() < 8191,
++            "encoded attach probe has {} UTF-16 code units",
++            command.encode_utf16().count()
++        );
 +        assert!(script.contains("$ExpectedVersion = '0.8.0'"));
 +        assert!(script.contains("$ExpectedProtocol = 20"));
-+        assert!(script.contains("$ExpectedPayloadSha256 = '0123456789abcdef'"));
++        assert!(script.contains(&format!("$ExpectedPayloadSha256 = '{expected_sha256}'")));
++        assert!(script.contains(&format!("$V = '{REMOTE_SIDECAR_VALIDATE_ARG}'")));
 +        assert!(script.contains("$AllowPathCandidate = $true"));
 +        assert!(script.contains("$ServerArguments = @('--session', 'agent''s work')"));
 +        assert!(script.contains("PROCESSOR_ARCHITECTURE"));
 +        assert!(script.contains("default_shell"));
 +        assert!(script.contains("OpenSSH"));
 +        assert!(script.contains("Get-Command -Name 'herdr.exe'"));
-+        assert!(script.contains("Get-FileHash -LiteralPath $Path -Algorithm SHA256"));
++        assert!(!script.contains("Get-FileHash"));
 +        assert!(script.contains("'remote',\n    'bin',\n    'herdr.exe'"));
 +        assert!(script.contains("'status' 'client' '--json'"));
 +        assert!(script.contains("@('status', 'server', '--json')"));
@@ -12828,10 +13369,10 @@ index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c
 +}
 diff --git a/src/remote/windows_attach_probe.ps1 b/src/remote/windows_attach_probe.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..71c7f402403661dc03af8f573ec47a24d0f5a681
+index 0000000000000000000000000000000000000000..f1d362d38c3d7e087fab3b2c564aca7ad2e85787
 --- /dev/null
 +++ b/src/remote/windows_attach_probe.ps1
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,91 @@
 +$ErrorActionPreference = 'Stop'
 +$ProgressPreference = 'SilentlyContinue'
 +
@@ -12850,14 +13391,16 @@ index 0000000000000000000000000000000000000000..71c7f402403661dc03af8f573ec47a24
 +        return $null
 +    }
 +    if ($Sidecar) {
-+        if ($null -ne $ExpectedPayloadSha256) {
-+            $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-+            if ($actualSha256 -cne $ExpectedPayloadSha256) {
-+                return $null
-+            }
-+        }
 +        $env:HERDR_REMOTE_SIDECAR_V1 = '1'
 +        Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
++        $a = @($V)
++        if ($null -ne $ExpectedPayloadSha256) {
++            $a += $ExpectedPayloadSha256
++        }
++        & $Path @a | Out-Null
++        if ($LASTEXITCODE -ne 0) {
++            return $null
++        }
 +    } else {
 +        Remove-Item Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
 +    }
@@ -12923,10 +13466,10 @@ index 0000000000000000000000000000000000000000..71c7f402403661dc03af8f573ec47a24
 +exit 0
 diff --git a/src/remote/windows_bootstrap.ps1 b/src/remote/windows_bootstrap.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..d39f29d0822c7e8e0d1926e6b1f32f5194c29ba1
+index 0000000000000000000000000000000000000000..76508545762ad0fdc14f7289b133b5ed09cc2b3e
 --- /dev/null
 +++ b/src/remote/windows_bootstrap.ps1
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,194 @@
 +Set-StrictMode -Version Latest
 +$ErrorActionPreference = 'Stop'
 +
@@ -13006,7 +13549,7 @@ index 0000000000000000000000000000000000000000..d39f29d0822c7e8e0d1926e6b1f32f51
 +
 +    $parent = Split-Path -Parent $Destination
 +    [IO.Directory]::CreateDirectory($parent) | Out-Null
-+    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.(zip|exe)$') {
++    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.zip$') {
 +        throw 'invalid remote payload archive name'
 +    }
 +    $archive = Join-Path $parent $ArchiveName
@@ -13029,33 +13572,24 @@ index 0000000000000000000000000000000000000000..d39f29d0822c7e8e0d1926e6b1f32f51
 +        [Parameter(Mandatory = $true)][string] $Destination,
 +        [Parameter(Mandatory = $true)][string] $ExpectedSha256,
 +        [Parameter(Mandatory = $true)][string] $ExpectedRuntimeVersion,
-+        [Parameter(Mandatory = $true)][int] $ExpectedProtocol,
-+        [Parameter(Mandatory = $true)][ValidateSet('executable', 'zip')][string] $PayloadKind
++        [Parameter(Mandatory = $true)][int] $ExpectedProtocol
 +    )
 +
 +    $parent = Split-Path -Parent $Destination
 +    $stage = Join-Path $parent ('stage-' + [Guid]::NewGuid().ToString('N'))
 +    try {
-+        $actualSha256 = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
++        $actualSha256 = Get-HerdrFileSha256 -Path $Archive
 +        if ($actualSha256 -ne $ExpectedSha256) {
 +            throw 'transferred portable payload checksum mismatch'
 +        }
 +
-+        if ($PayloadKind -ceq 'zip') {
-+            Expand-Archive -LiteralPath $Archive -DestinationPath $stage -Force
-+        } else {
-+            [IO.Directory]::CreateDirectory($stage) | Out-Null
-+            [IO.File]::Copy($Archive, (Join-Path $stage 'herdr.exe'), $false)
-+        }
++        Expand-Archive -LiteralPath $Archive -DestinationPath $stage -Force
 +        Assert-HerdrRemotePlainDirectory -Path $stage
 +        $exe = Join-Path $stage 'herdr.exe'
-+        $marker = Join-Path $stage 'conpty\herdr-conpty.json'
 +        if (-not [IO.File]::Exists($exe)) {
 +            throw 'portable payload is missing herdr.exe'
 +        }
-+        if ($PayloadKind -ceq 'zip' -and -not [IO.File]::Exists($marker)) {
-+            throw 'portable payload is missing its ConPTY ownership marker'
-+        }
++        Assert-HerdrPortablePayload -Root $stage
 +
 +        $status = & $exe status client --json | ConvertFrom-Json
 +        if ($LASTEXITCODE -ne 0 -or
@@ -13128,6 +13662,169 @@ index 0000000000000000000000000000000000000000..d39f29d0822c7e8e0d1926e6b1f32f51
 +        if ([IO.File]::Exists($Archive)) {
 +            [IO.File]::Delete($Archive)
 +        }
++    }
++}
+diff --git a/src/remote/windows_package_local_payload.ps1 b/src/remote/windows_package_local_payload.ps1
+new file mode 100644
+index 0000000000000000000000000000000000000000..335a749f8e1f1f61bc4c4ba9772c7812ba5b87fc
+--- /dev/null
++++ b/src/remote/windows_package_local_payload.ps1
+@@ -0,0 +1,37 @@
++Set-StrictMode -Version Latest
++$ErrorActionPreference = 'Stop'
++
++$source = [string]$env:HERDR_LOCAL_PAYLOAD_SOURCE
++$stage = [string]$env:HERDR_LOCAL_PAYLOAD_STAGE
++$archive = [string]$env:HERDR_LOCAL_PAYLOAD_ARCHIVE
++foreach ($path in @($source, $stage, $archive)) {
++    if ([string]::IsNullOrWhiteSpace($path) -or -not [IO.Path]::IsPathRooted($path)) {
++        throw 'local portable payload paths must be absolute'
++    }
++}
++if ([IO.Directory]::Exists($stage) -or [IO.File]::Exists($archive)) {
++    throw 'local portable payload staging path already exists'
++}
++
++[IO.Directory]::CreateDirectory($stage) | Out-Null
++foreach ($relative in $script:HerdrPortablePayloadFiles) {
++    $sourcePath = Join-Path $source $relative.Replace('/', '\')
++    $sourceItem = Get-Item -LiteralPath $sourcePath -Force
++    if (-not $sourceItem.PSIsContainer -and
++        -not ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++        $destination = Join-Path $stage $relative.Replace('/', '\')
++        [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
++        [IO.File]::Copy($sourceItem.FullName, $destination, $false)
++    } else {
++        throw "local portable payload source is not a regular file: $sourcePath"
++    }
++}
++
++Assert-HerdrPortablePayload -Root $stage
++Add-Type -AssemblyName System.IO.Compression.FileSystem
++[IO.Compression.ZipFile]::CreateFromDirectory(
++    $stage,
++    $archive,
++    [IO.Compression.CompressionLevel]::Optimal,
++    $false
++)
+diff --git a/src/remote/windows_payload_layout.ps1 b/src/remote/windows_payload_layout.ps1
+new file mode 100644
+index 0000000000000000000000000000000000000000..698776d1c5be106f71d66b46cdc529fba944e3a4
+--- /dev/null
++++ b/src/remote/windows_payload_layout.ps1
+@@ -0,0 +1,114 @@
++$script:HerdrConptyPayloadFiles = @(
++    'conpty/conpty.dll',
++    'conpty/x64/OpenConsole.exe',
++    'conpty/arm64/OpenConsole.exe'
++)
++
++$script:HerdrPortablePayloadFiles = @(
++    'herdr.exe',
++    'LICENSE.txt',
++    'conpty/herdr-conpty.json',
++    'conpty/conpty.dll',
++    'conpty/x64/OpenConsole.exe',
++    'conpty/arm64/OpenConsole.exe',
++    'THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-LICENSE.txt',
++    'THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-NOTICE.md'
++)
++
++function Get-HerdrFileSha256 {
++    param([Parameter(Mandatory = $true)][string] $Path)
++
++    $stream = [IO.File]::Open(
++        $Path,
++        [IO.FileMode]::Open,
++        [IO.FileAccess]::Read,
++        [IO.FileShare]::Read
++    )
++    try {
++        $algorithm = [Security.Cryptography.SHA256]::Create()
++        try {
++            $hash = $algorithm.ComputeHash($stream)
++        } finally {
++            $algorithm.Dispose()
++        }
++    } finally {
++        $stream.Dispose()
++    }
++    return [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
++}
++
++function Assert-HerdrPortablePayload {
++    param(
++        [Parameter(Mandatory = $true)][string] $Root,
++        [switch] $AllowLease
++    )
++
++    $rootItem = Get-Item -LiteralPath $Root -Force
++    if (-not $rootItem.PSIsContainer -or
++        ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++        throw "portable payload root is not a plain directory: $Root"
++    }
++
++    $rootPrefix = $rootItem.FullName.TrimEnd('\') + '\'
++    $actualFiles = @(
++        foreach ($item in Get-ChildItem -LiteralPath $rootItem.FullName -Recurse -Force) {
++            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
++                throw "portable payload contains a reparse point: $($item.FullName)"
++            }
++            if (-not $item.PSIsContainer) {
++                $item.FullName.Substring($rootPrefix.Length).Replace('\', '/')
++            }
++        }
++    ) | Sort-Object -CaseSensitive
++    $expectedFiles = @($script:HerdrPortablePayloadFiles)
++    if ($AllowLease) {
++        $expectedFiles += '.lease'
++    }
++    $expectedFiles = @($expectedFiles | Sort-Object -CaseSensitive)
++    if ($actualFiles.Count -ne $expectedFiles.Count -or
++        [string]::Join("`n", $actualFiles) -cne [string]::Join("`n", $expectedFiles)) {
++        throw "portable payload file set mismatch: $Root"
++    }
++
++    $markerPath = Join-Path $rootItem.FullName 'conpty\herdr-conpty.json'
++    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
++    if ([int]$marker.schema_version -ne 1 -or
++        [string]$marker.package -cne 'Microsoft.Windows.Console.ConPTY' -or
++        [string]$marker.architecture -cne 'x86_64') {
++        throw 'portable payload ConPTY ownership marker identity mismatch'
++    }
++    $markerFiles = @(
++        $marker.files.PSObject.Properties | ForEach-Object { [string]$_.Name }
++    ) | Sort-Object -CaseSensitive
++    $expectedConptyFiles = @($script:HerdrConptyPayloadFiles | Sort-Object -CaseSensitive)
++    if ($markerFiles.Count -ne $expectedConptyFiles.Count -or
++        [string]::Join("`n", $markerFiles) -cne [string]::Join("`n", $expectedConptyFiles)) {
++        throw 'portable payload ConPTY ownership marker file set mismatch'
++    }
++    foreach ($relative in $script:HerdrConptyPayloadFiles) {
++        $property = $marker.files.PSObject.Properties[$relative]
++        $expectedHash = if ($null -eq $property) { '' } else { [string]$property.Value }
++        if ($expectedHash -cnotmatch '^[0-9a-f]{64}$') {
++            throw "portable payload ConPTY ownership hash is invalid: $relative"
++        }
++        $path = Join-Path $rootItem.FullName $relative.Replace('/', '\')
++        $actualHash = Get-HerdrFileSha256 -Path $path
++        if ($actualHash -cne $expectedHash) {
++            throw "portable payload ConPTY hash mismatch: $relative"
++        }
++    }
++}
++
++function Test-HerdrPortablePayload {
++    param(
++        [Parameter(Mandatory = $true)][string] $Root,
++        [switch] $AllowLease
++    )
++
++    try {
++        Assert-HerdrPortablePayload -Root $Root -AllowLease:$AllowLease
++        return $true
++    } catch {
++        return $false
 +    }
 +}
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs

@@ -1,4 +1,4 @@
-From 46cf89a0d4457dabafd8a5259bd07fb08a82361f Mon Sep 17 00:00:00 2001
+From 76842ca5f0b88ca9880c5c883eaf439031bced96 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
@@ -21,6 +21,7 @@ Transport bounded host color and appearance events, keep software and native cur
  src/pane/cursor.rs                            |   1 +
  src/pane/osc.rs                               | 187 +++++++++-
  src/pane/terminal.rs                          | 109 +++++-
+ src/platform/windows.rs                       |  36 ++
  src/protocol/render_ansi.rs                   | 320 +++++++++++++++++-
  src/protocol/wire.rs                          |  67 +++-
  src/raw_input.rs                              | 108 +++++-
@@ -33,7 +34,7 @@ Transport bounded host color and appearance events, keep software and native cur
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 28 files changed, 1214 insertions(+), 125 deletions(-)
+ 29 files changed, 1250 insertions(+), 125 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index da9c9b710258580c0f193f1c95d4065884accc17..218ef58f1d4628f0e0e087981a081b2d35485102 100644
@@ -1441,6 +1442,60 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      #[test]
      fn process_pty_bytes_returns_cursor_color_query_response_from_foreground_fallback() {
          let (tx, mut rx) = mpsc::channel(4);
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index 55e0fd0b521eb283cbe361178730078db6d7e1fa..16a8938cdeac07c71c9deaf482ecd47422905e80 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -87,6 +87,15 @@ static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>
+ pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
+     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+ 
++    let uses_text_encoding = match key.code {
++        KeyCode::Char(_) => key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT,
++        KeyCode::Enter | KeyCode::Backspace | KeyCode::Tab => key.modifiers.is_empty(),
++        _ => false,
++    };
++    if uses_text_encoding {
++        return None;
++    }
++
+     let (virtual_key_code, virtual_scan_code, unicode, control_key_state) =
+         if let Some(record) = key.windows_record() {
+             (
+@@ -1814,6 +1823,33 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn windows_conpty_native_encoder_leaves_plain_text_to_terminal_encoding() {
++        for (code, virtual_key_code, virtual_scan_code, unicode, control_key_state) in [
++            (crossterm::event::KeyCode::Char('h'), 72, 35, 104, 32),
++            (crossterm::event::KeyCode::Char('H'), 72, 35, 72, 48),
++            (crossterm::event::KeyCode::Enter, 13, 28, 13, 32),
++        ] {
++            let modifiers = if control_key_state == 48 {
++                crossterm::event::KeyModifiers::SHIFT
++            } else {
++                crossterm::event::KeyModifiers::empty()
++            };
++            let key = crate::input::TerminalKey::new(code, modifiers).with_windows_record(
++                crate::input::WindowsKeyRecord {
++                    key_down: true,
++                    repeat_count: 1,
++                    virtual_key_code,
++                    virtual_scan_code,
++                    unicode,
++                    control_key_state,
++                },
++            );
++
++            assert_eq!(super::encode_windows_conpty_fallback(&key), None);
++        }
++    }
++
+     #[test]
+     fn windows_conpty_native_encoder_preserves_semantic_escape_fallback() {
+         let escape = crate::input::TerminalKey::new(
 diff --git a/src/protocol/render_ansi.rs b/src/protocol/render_ansi.rs
 index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b932c752b 100644
 --- a/src/protocol/render_ansi.rs

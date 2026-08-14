@@ -1,4 +1,4 @@
-From 3d4c4b24245a528c8d1e2287783de66302640b69 Mon Sep 17 00:00:00 2001
+From 15c461cb1dc8ffa6f62b5315725421fc5af9572c Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -52,7 +52,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/remote.rs                                 |  173 +-
  src/remote/attach.rs                          | 5151 +++++++++++++++++
  src/remote/unix.rs                            | 3091 +---------
- src/remote/windows.rs                         |  489 ++
+ src/remote/windows.rs                         |  488 ++
  src/remote/windows_attach_probe.ps1           |   83 +
  src/remote/windows_bootstrap.ps1              |  173 +
  src/server/autodetect.rs                      |  161 +-
@@ -61,7 +61,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 57 files changed, 8723 insertions(+), 3486 deletions(-)
+ 57 files changed, 8722 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -2711,7 +2711,7 @@ index 0000000000000000000000000000000000000000..1944e3595feb737a38055bad0b0f6256
 +    }
 +}
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480e0db11b9 100644
+index 16a8938cdeac07c71c9deaf482ecd47422905e80..83f340b6468f894978b5a67bef65558dd7e2a01e 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
 @@ -7,7 +7,7 @@ use std::{
@@ -2763,7 +2763,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  const STILL_ACTIVE: u32 = 259;
  const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
  const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
-@@ -146,6 +152,92 @@ struct CachedGitBashProcess {
+@@ -155,6 +161,92 @@ struct CachedGitBashProcess {
  
  static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
      Mutex::new(ProcessSnapshotCache { cached: None });
@@ -2856,7 +2856,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  
  pub(crate) fn should_draw_host_cursor_by_default() -> bool {
      true
-@@ -327,11 +419,11 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
+@@ -336,11 +428,11 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
  }
  
  pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
@@ -2873,7 +2873,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  }
  
  fn launch_server_daemon_with_wmi(command: &std::process::Command) -> std::io::Result<u32> {
-@@ -476,28 +568,6 @@ fn current_process_is_in_job() -> std::io::Result<bool> {
+@@ -485,28 +577,6 @@ fn current_process_is_in_job() -> std::io::Result<bool> {
      Ok(in_job != 0)
  }
  
@@ -2902,7 +2902,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  pub fn detach_server_daemon_command(command: &mut std::process::Command) {
      use std::os::windows::process::CommandExt;
  
-@@ -556,6 +626,14 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+@@ -565,6 +635,14 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
          .filter(|path| path.is_absolute())
  }
  
@@ -2917,7 +2917,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  fn select_pane_foreground_job(
      shell_pid: u32,
      entries: &[WindowsProcessEntry],
-@@ -1242,9 +1320,68 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
+@@ -1251,9 +1329,68 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
      }
  }
  
@@ -2988,7 +2988,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
      None
  }
  
-@@ -1362,6 +1499,8 @@ struct ProcessHandle(HANDLE);
+@@ -1371,6 +1508,8 @@ struct ProcessHandle(HANDLE);
  
  struct ClipboardGuard;
  
@@ -2997,7 +2997,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  impl Drop for ClipboardGuard {
      fn drop(&mut self) {
          unsafe {
-@@ -1370,6 +1509,14 @@ impl Drop for ClipboardGuard {
+@@ -1379,6 +1518,14 @@ impl Drop for ClipboardGuard {
      }
  }
  
@@ -3012,7 +3012,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..2c1f40ba849fadf70a37d6b2f8afb480
  impl ProcessHandle {
      fn open(pid: u32, access: u32) -> Option<Self> {
          if pid == 0 {
-@@ -1893,6 +2040,18 @@ mod tests {
+@@ -1929,6 +2076,18 @@ mod tests {
          );
      }
  
@@ -12060,10 +12060,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..f0fe7eee4eae4171b2979a5d8e5225e06ca01702
+index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b170fb427a
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,489 @@
+@@ -0,0 +1,488 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -12125,14 +12125,13 @@ index 0000000000000000000000000000000000000000..f0fe7eee4eae4171b2979a5d8e5225e0
 +        )
 +    })?;
 +    let (mut socket_to_stdout, mut stdin_to_socket) = stream.split();
-+    let mut stdout = io::stdout().lock();
-+
-+    let _upload = thread::spawn(move || {
-+        let mut stdin = io::stdin();
-+        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
++    let _download = thread::spawn(move || {
++        let mut stdout = io::stdout().lock();
++        let _ = copy_flush(&mut socket_to_stdout, &mut stdout);
 +    });
 +
-+    copy_flush(&mut socket_to_stdout, &mut stdout).map(|_| ())
++    let mut stdin = io::stdin();
++    copy_flush(&mut stdin, &mut stdin_to_socket).map(|_| ())
 +}
 +
 +#[cfg(windows)]

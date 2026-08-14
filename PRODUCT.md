@@ -159,10 +159,16 @@ tests remain the detailed implementation truth.
 - Keyboard-first terminal operation remains complete end to end.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
-  user's `PATH` or its versioned per-user sidecar. If neither matches, an
+  user's `PATH` or the stable per-user remote runtime at
+  `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. If neither matches, an
   interactive attach offers to transfer the complete digest-verified Windows
-  portable ZIP into that user's profile without running the managed installer or
-  changing `PATH`; an ordinary non-interactive attach never modifies the host.
+  portable payload into that user's profile without running the managed installer
+  or changing `PATH`; an ordinary non-interactive attach never modifies the host.
+  Herdr validates remote configuration before an approved stop, then stages and
+  validates the payload, atomically replaces the stable runtime, removes the
+  transient rollback payload, and starts and verifies the new server. Another
+  active remote Herdr process blocks replacement instead of creating a parallel
+  runtime version.
   The Windows host's OpenSSH default shell must be `cmd.exe` or PowerShell 7
   (`pwsh.exe`) so the interactive binary stream remains byte-exact. Herdr rejects
   Windows PowerShell 5.1 and unrecognized default shells with a corrective action
@@ -171,7 +177,8 @@ tests remain the detailed implementation truth.
   path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
   binary, rejects invalid remote configuration before server activation, starts a
   missing server, reloads configuration when the running binary already matches,
-  and saves then restarts only when binary activation requires it. A non-package-
+  and saves then stops, replaces, and restarts only when binary activation requires
+  it. A non-package-
   managed local Windows x86_64 build can provision itself to x86_64 or ARM64
   Windows through Windows emulation. Windows remote hosts do not support live
   handoff.

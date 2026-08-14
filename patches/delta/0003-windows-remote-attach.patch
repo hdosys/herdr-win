@@ -1,4 +1,4 @@
-From 7d1db1f80b4536adf1c279d088afa10f902862bf Mon Sep 17 00:00:00 2001
+From 4123451dcca39a772fd381e3d0c68a9a20c6b783 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -50,18 +50,18 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/platform/windows/clipboard_image.rs       |  535 ++
  src/plugin_command.rs                         |    3 +-
  src/remote.rs                                 |  173 +-
- src/remote/attach.rs                          | 5375 +++++++++++++++++
+ src/remote/attach.rs                          | 5409 +++++++++++++++++
  src/remote/unix.rs                            | 3091 +---------
- src/remote/windows.rs                         |  488 ++
- src/remote/windows_attach_probe.ps1           |   83 +
- src/remote/windows_bootstrap.ps1              |  173 +
+ src/remote/windows.rs                         |  504 ++
+ src/remote/windows_attach_probe.ps1           |   89 +
+ src/remote/windows_bootstrap.ps1              |  203 +
  src/server/autodetect.rs                      |  161 +-
  src/server/client_transport.rs                |   51 +-
  src/server/clipboard_image.rs                 |   12 +-
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 57 files changed, 8946 insertions(+), 3486 deletions(-)
+ 57 files changed, 9032 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -212,7 +212,7 @@ index dda1629c537c6807c3a903cc22a5601c4dc9c2b0..137ed74cbcc199d65fb1cb64deca2fde
  ## キーバインド
  
 diff --git a/docs/next/website/src/content/docs/ja/persistence-remote.mdx b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
-index f8d3ff02f5be343971171672c9f1793384f3357d..6043272d5cd389e73aa6e49f70faf481a92a68b3 100644
+index f8d3ff02f5be343971171672c9f1793384f3357d..933e8e7e040f26c32f2ab7a6d431482dfec773bf 100644
 --- a/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/ja/persistence-remote.mdx
 @@ -63,11 +63,23 @@ Host workbox
@@ -223,7 +223,7 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..6043272d5cd389e73aa6e49f70faf481
 +リモートアタッチは x86_64 と aarch64 の Linux および macOS ホストをサポートします。Herdr はリモートのプラットフォームを確認し、リモートの `PATH` 上にある一致する `herdr` を優先してから、一般的な直接インストール、Homebrew、mise、Nix プロファイルのパスを確認します。一致するバイナリがない場合、対話的な実行では `~/.local/bin/herdr` へのインストールを提案します。非対話的な実行はホストを変更せずに失敗します。`~/.local/bin` がリモートの `PATH` にない場合、Herdr はインストール後に警告します。
  
 -ネイティブ Windows の `herdr --remote` は Windows ベータの範囲外です。Windows からはサーバーに SSH してそこで `herdr` を実行してください。
-+すべての対応クライアントは x86_64 と ARM64 の Windows ホストにもアタッチできます。Herdr は最初に、SSH ユーザーの `PATH` またはユーザー所有のバージョン付きサイドカーから、バージョンとプロトコルが完全に一致する `herdr.exe` を使います。どちらも一致しない場合、対話的な実行では、ダイジェスト検証済みの完全な Windows ポータブル ZIP を SSH ユーザーのプロファイルへ転送するか確認します。インストーラーの実行や `PATH` の変更は行いません。通常の非対話的アタッチはホストを変更せずに失敗します。ライブハンドオフは引き続き Unix ホスト専用です。
++すべての対応クライアントは x86_64 と ARM64 の Windows ホストにもアタッチできます。Herdr は最初に、SSH ユーザーの `PATH` または `%USERPROFILE%\.herdr\remote\bin\herdr.exe` にあるユーザー所有の安定したリモートランタイムから、バージョンとプロトコルが完全に一致する `herdr.exe` を使います。どちらも一致しない場合、対話的な実行では、ダイジェスト検証済みの完全な Windows ポータブルペイロードを SSH ユーザーのプロファイルへ転送するか確認します。承認後、選択したサーバーを停止し、ペイロードをステージングして検証し、安定したランタイムをアトミックに置き換えてから、サーバーを起動して検証します。別のリモートプロセスが実行中の場合、置き換えはブロックされます。インストーラーの実行や `PATH` の変更は行いません。通常の非対話的アタッチはホストを変更せずに失敗します。ライブハンドオフは引き続き Unix ホスト専用です。
  
 -デフォルトでは、`herdr --remote` はあなたの SSH config を最初に include し、その後にフォールバックのキープアライブ設定を加えた一時的な SSH config を通してブリッジを実行します。既存のユーザーのキープアライブ設定が優先されます。Herdr が生成するブリッジ設定を使わず素の `ssh` を使うには `[remote].manage_ssh_config = false` を設定してください。
 +自動化でバイナリの配置とサーバーの有効化を管理する場合は、明示的なプロビジョニングを使います:
@@ -252,7 +252,7 @@ index f8d3ff02f5be343971171672c9f1793384f3357d..6043272d5cd389e73aa6e49f70faf481
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-index ee0f85679b531a3cf8c470b603375dfb6bf86665..36d3df7c55537e5edef93cd3f9787052182876e0 100644
+index ee0f85679b531a3cf8c470b603375dfb6bf86665..33378c517b1107c2631e91abb38ceb87372fb137 100644
 --- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows ベータビルドはプレビューチャンネルでのみ提供され
@@ -303,12 +303,12 @@ index ee0f85679b531a3cf8c470b603375dfb6bf86665..36d3df7c55537e5edef93cd3f9787052
  ```
  
 -このモードでは Herdr はリモートホスト上で動きます。ネイティブ Windows の `herdr --remote` はベータの範囲外です。
-+Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` またはユーザー所有のバージョン付きサイドカーから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチはダイジェスト検証済みの完全なポータブル ZIP を転送できますが、インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は設定を検証し、起動、再読み込み、または制御された再起動による有効化を管理します。Windows リモートホストではライブハンドオフをサポートしません。
++Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` または `%USERPROFILE%\.herdr\remote\bin\herdr.exe` にあるユーザー所有の安定したリモートランタイムから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチは設定を検証し、承認後に選択したサーバーを停止し、ダイジェスト検証済みの完全なポータブルペイロードをステージングして検証し、安定したランタイムをアトミックに置き換えてから、サーバーを起動して検証します。別のリモートプロセスが実行中の場合、置き換えはブロックされます。インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は対話的な確認なしで同じ有効化パスを使います。Windows リモートホストではライブハンドオフをサポートしません。
  
  Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
  
 diff --git a/docs/next/website/src/content/docs/persistence-remote.mdx b/docs/next/website/src/content/docs/persistence-remote.mdx
-index a365ac8838673144952ce0b6dcf92d3125e27360..65ce85a31eed641fc005124bda0ff589b8677adb 100644
+index a365ac8838673144952ce0b6dcf92d3125e27360..faff0af00422f5d1f47043404f4c7d45c07ac8b7 100644
 --- a/docs/next/website/src/content/docs/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/persistence-remote.mdx
 @@ -65,9 +65,21 @@ herdr --remote workbox
@@ -316,7 +316,7 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..65ce85a31eed641fc005124bda0ff589
  Remote attach supports Linux and macOS hosts on x86_64 and aarch64. Herdr checks the remote platform, prefers a matching `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no matching binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install.
  
 -Native Windows `herdr --remote` is not part of the Windows beta. From Windows, SSH into the server and run `herdr` there.
-+Every supported client can also attach to x86_64 and ARM64 Windows hosts. Herdr first uses an exact version- and protocol-matching `herdr.exe` from the SSH user's `PATH` or its versioned per-user sidecar. If neither matches, an interactive run offers to transfer the complete digest-verified Windows portable ZIP into the SSH user's profile without running an installer or changing `PATH`; an ordinary non-interactive attach fails without modifying the host. Live handoff remains Unix-host-only.
++Every supported client can also attach to x86_64 and ARM64 Windows hosts. Herdr first uses an exact version- and protocol-matching `herdr.exe` from the SSH user's `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. If neither matches, an interactive run offers to transfer the complete digest-verified Windows portable payload into the SSH user's profile without running an installer or changing `PATH`. After approval, it stops the selected server, stages and validates the payload, atomically replaces the stable runtime, then starts and verifies the server. Another active remote process blocks replacement. An ordinary non-interactive attach fails without modifying the host. Live handoff remains Unix-host-only.
  
 -By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings and a private per-attach control socket for connection reuse. Existing user keepalive settings win. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
 +Use explicit provisioning when automation should own binary deployment and server activation:
@@ -345,7 +345,7 @@ index a365ac8838673144952ce0b6dcf92d3125e27360..65ce85a31eed641fc005124bda0ff589
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
-index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..f63f118e376247e7abb3461434dd23267a952969 100644
+index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..f1340530027c6b9c1c10a4e9c1eee838ad1543ff 100644
 --- a/docs/next/website/src/content/docs/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/windows-beta.mdx
 @@ -36,6 +36,7 @@ For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a cus
@@ -396,7 +396,7 @@ index 6533ca6fb31b84245d723dcd4962d9be89f6a1b6..f63f118e376247e7abb3461434dd2326
  ```
  
 -That mode runs Herdr on the remote host. Native Windows `herdr --remote` is not part of the beta.
-+Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or a versioned per-user sidecar. When one is needed, an interactive attach can transfer the complete digest-verified portable ZIP without running an installer or changing remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` validates configuration and owns start, reload, or controlled restart activation. Windows remote hosts do not support live handoff.
++Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates configuration, stops the selected server with approval, stages and validates the complete digest-verified portable payload, atomically replaces the stable runtime, then starts and verifies the server. Another active remote process blocks replacement. It never runs an installer or changes remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` owns the same activation path without an interactive prompt. Windows remote hosts do not support live handoff.
  
  Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
  
@@ -451,7 +451,7 @@ index 237c53b484abb82ecc21052ffc9e68291fbbf86b..15cfd738d0d39a302937d9875762c67c
  ## 按键绑定
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
-index a81a8469e54aba464c1daa01638ac651f31c7e73..bfe7633b9d350719c7dea00de02ba7b219bf7253 100644
+index a81a8469e54aba464c1daa01638ac651f31c7e73..f935535754f4d4267bc9de93484a7529f9736a8a 100644
 --- a/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/persistence-remote.mdx
 @@ -63,11 +63,23 @@ Host workbox
@@ -462,7 +462,7 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..bfe7633b9d350719c7dea00de02ba7b2
 +远程连接支持 x86_64 和 aarch64 的 Linux 与 macOS 主机。Herdr 会检查远程平台,优先使用远程 `PATH` 上已有的匹配 `herdr`,然后检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。如果没有匹配的二进制文件,交互式运行会询问是否安装到 `~/.local/bin/herdr`;非交互式运行则直接失败,不会修改主机。如果 `~/.local/bin` 不在远程 `PATH` 上,Herdr 会在安装后发出警告。
  
 -Windows 原生的 `herdr --remote` 不在 Windows 测试版范围内。在 Windows 上请 SSH 到服务器并在那里运行 `herdr`。
-+所有受支持的客户端也可以连接 x86_64 和 ARM64 Windows 主机。Herdr 会先使用 SSH 用户 `PATH` 中或用户自有的版本化 sidecar 中版本和协议完全匹配的 `herdr.exe`。如果两者都不匹配，交互式运行会询问是否把完整且经过摘要验证的 Windows 便携 ZIP 传输到 SSH 用户的配置文件中；它不会运行安装器或修改 `PATH`。普通非交互式连接会直接失败，不修改主机。实时交接仍仅支持 Unix 主机。
++所有受支持的客户端也可以连接 x86_64 和 ARM64 Windows 主机。Herdr 会先使用 SSH 用户 `PATH` 中或 `%USERPROFILE%\.herdr\remote\bin\herdr.exe` 处用户自有的稳定远程运行时中版本和协议完全匹配的 `herdr.exe`。如果两者都不匹配，交互式运行会询问是否把完整且经过摘要验证的 Windows 便携负载传输到 SSH 用户的配置文件中。批准后，它会停止选定的服务器，暂存并验证负载，以原子方式替换稳定运行时，然后启动并验证服务器。若另一个远程进程仍在运行，替换会被阻止。它不会运行安装器或修改 `PATH`。普通非交互式连接会直接失败，不修改主机。实时交接仍仅支持 Unix 主机。
  
 -默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的桥接配置,而使用普通 `ssh`。
 +需要让自动化负责二进制部署和服务器激活时，请使用显式配置命令:
@@ -491,7 +491,7 @@ index a81a8469e54aba464c1daa01638ac651f31c7e73..bfe7633b9d350719c7dea00de02ba7b2
  ```bash
  HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
 diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-index 781a6f969416873de8ca131f6fdb35600fe7615a..b568d7eb5e8b48ac00f215054a39c99abe75dbb0 100644
+index 781a6f969416873de8ca131f6fdb35600fe7615a..07385b174940b7d611fcbf3888720a985f9d2441 100644
 --- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 @@ -36,6 +36,7 @@ Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默
@@ -542,7 +542,7 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..b568d7eb5e8b48ac00f215054a39c99a
  ```
  
 -这种模式下 Herdr 运行在远程主机上。Windows 原生的 `herdr --remote` 不在测试版范围内。
-+Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或用户自有的版本化 sidecar 中完全匹配的 `herdr.exe`。需要时，交互式连接可以传输完整且经过摘要验证的便携 ZIP，但不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会验证配置，并负责通过启动、重新加载或受控重启来激活服务器。Windows 远程主机不支持实时交接。
++Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或 `%USERPROFILE%\.herdr\remote\bin\herdr.exe` 处用户自有的稳定远程运行时中完全匹配的 `herdr.exe`。需要时，交互式连接会验证配置，在批准后停止选定的服务器，暂存并验证完整且经过摘要验证的便携负载，以原子方式替换稳定运行时，然后启动并验证服务器。若另一个远程进程仍在运行，替换会被阻止。它不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会在没有交互式提示的情况下使用相同的激活路径。Windows 远程主机不支持实时交接。
  
  Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
  
@@ -3785,10 +3785,10 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e3659afbed3
+index 0000000000000000000000000000000000000000..d69c05610d560cb4b0408031b85998339b320080
 --- /dev/null
 +++ b/src/remote/attach.rs
-@@ -0,0 +1,5375 @@
+@@ -0,0 +1,5409 @@
 +//! Remote thin-client launcher over SSH command stdio.
 +
 +use std::cell::Cell;
@@ -4167,6 +4167,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    platform: RemotePlatform,
 +    shell: RemoteShell,
 +    remote_sidecar: bool,
++    payload_sha256: Option<String>,
 +}
 +
 +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4185,11 +4186,16 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +            platform,
 +            shell: RemoteShell::Posix,
 +            remote_sidecar: false,
++            payload_sha256: None,
 +        }
 +    }
 +
-+    fn for_windows(platform: RemotePlatform, user_profile: &str, identity: &str) -> Self {
-+        let install_suffix = format!(".herdr\\remote\\{identity}\\herdr.exe");
++    fn for_windows(
++        platform: RemotePlatform,
++        user_profile: &str,
++        payload_sha256: Option<String>,
++    ) -> Self {
++        let install_suffix = ".herdr\\remote\\bin\\herdr.exe".to_string();
 +        let executable = format!(
 +            "{}\\{}",
 +            user_profile.trim_end_matches(['\\', '/']),
@@ -4201,6 +4207,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +            platform,
 +            shell: RemoteShell::WindowsPowerShell,
 +            remote_sidecar: true,
++            payload_sha256,
 +        }
 +    }
 +
@@ -4211,6 +4218,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +
 +    fn into_path_candidate(mut self) -> Self {
 +        self.remote_sidecar = false;
++        self.payload_sha256 = None;
 +        self
 +    }
 +}
@@ -4695,25 +4703,6 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    )
 +}
 +
-+fn windows_sidecar_identity(source_sha256: Option<&str>) -> String {
-+    if let Some(build_id) = crate::build_info::build_id() {
-+        return build_id.to_string();
-+    }
-+    if let Some(sha256) = source_sha256 {
-+        return format!("dev-{}", &sha256[..24]);
-+    }
-+    current_version()
-+        .chars()
-+        .map(|character| {
-+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-+                character
-+            } else {
-+                '-'
-+            }
-+        })
-+        .collect()
-+}
-+
 +fn windows_sidecar_root(remote_herdr: &RemoteHerdr) -> String {
 +    remote_herdr
 +        .shell_path
@@ -4983,7 +4972,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    platform: RemotePlatform,
 +    user_profile: &str,
 +) -> io::Result<PreparedRemoteHerdr> {
-+    prepare_remote_windows_herdr_with_consent(ssh, platform, user_profile, false, false, false)
++    prepare_remote_windows_herdr_with_consent(ssh, platform, user_profile, false, false)
 +}
 +
 +fn prepare_remote_windows_herdr_with_consent(
@@ -4991,18 +4980,20 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    platform: RemotePlatform,
 +    user_profile: &str,
 +    yes: bool,
-+    defer_server_activation: bool,
 +    probe_confirmed_no_match: bool,
 +) -> io::Result<PreparedRemoteHerdr> {
 +    let override_payload = remote_binary_override_path()?;
 +    let source_identity = windows_install_source_identity(&platform, override_payload.as_deref())?;
++    let local_executable_source = override_payload.is_none() && source_identity.is_some();
 +    let local_development_source =
-+        source_identity.is_some() && crate::build_info::build_id().is_none();
-+    let managed = RemoteHerdr::for_windows(
-+        platform.clone(),
-+        user_profile,
-+        &windows_sidecar_identity(source_identity.as_deref()),
-+    );
++        local_executable_source && crate::build_info::build_id().is_none();
++    let expected_executable_sha256 = if local_executable_source {
++        source_identity.clone()
++    } else {
++        None
++    };
++    let managed =
++        RemoteHerdr::for_windows(platform.clone(), user_profile, expected_executable_sha256);
 +    let path_candidate = if local_development_source || probe_confirmed_no_match {
 +        None
 +    } else {
@@ -5027,20 +5018,25 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +        }
 +    }
 +
-+    if !defer_server_activation {
-+        let status_probe = match path_candidate.as_ref() {
-+            Some(candidate) => Some(candidate),
-+            None if remote_binary_exists(ssh, &managed)? => Some(&managed),
-+            None => None,
-+        };
-+        let stop_before_install = match status_probe {
-+            Some(remote) => confirm_remote_install_with_running_server(ssh, remote, false)?,
-+            None => false,
-+        };
-+        if let Some(remote) = status_probe.filter(|_| stop_before_install) {
-+            stop_remote_server(ssh, remote)?;
++    let status_probe = match path_candidate.as_ref() {
++        Some(candidate) => Some(candidate),
++        None if remote_binary_exists(ssh, &managed)? => Some(&managed),
++        None => None,
++    };
++    let stop_before_install = match status_probe {
++        Some(remote) if yes => {
++            validate_remote_config(ssh, remote)?;
++            matches!(
++                remote_server_status(ssh, remote)?,
++                RemoteServerStatus::Running { .. }
++            )
 +        }
-+    }
++        Some(remote) => {
++            validate_remote_config(ssh, remote)?;
++            confirm_remote_install_with_running_server(ssh, remote, false)?
++        }
++        None => false,
++    };
 +    confirm_remote_install(
 +        ssh.target(),
 +        &managed,
@@ -5062,16 +5058,38 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +            "Windows remote portable payload is missing its verified SHA-256 identity",
 +        )
 +    })?;
++    let stopped_remote = status_probe.filter(|_| stop_before_install);
++    if let Some(remote) = stopped_remote {
++        stop_remote_server(ssh, remote)?;
++    }
 +    // The commit script verifies this checksum plus the staged runtime version
 +    // and protocol before atomically publishing the sidecar.
 +    let install_result =
 +        ssh.install_windows_payload(&managed, &source.path, expected_sha256, source.kind);
 +    source.cleanup();
-+    install_result?;
++    if let Err(install_err) = install_result {
++        if let Some(remote) = stopped_remote {
++            let restart = remote_herdr_output(ssh, remote, &["server", "start"]);
++            return match restart {
++                Ok(output) if output.status.success() => Err(io::Error::new(
++                    install_err.kind(),
++                    format!("{install_err}; the previous remote server was restarted"),
++                )),
++                Ok(output) => Err(io::Error::other(format!(
++                    "{install_err}; restarting the previous remote server also failed: {}",
++                    String::from_utf8_lossy(&output.stderr).trim()
++                ))),
++                Err(restart_err) => Err(io::Error::other(format!(
++                    "{install_err}; restarting the previous remote server also failed: {restart_err}"
++                ))),
++            };
++        }
++        return Err(install_err);
++    }
 +    Ok(PreparedRemoteHerdr {
 +        remote_herdr: managed,
 +        installed_or_replaced: true,
-+        stop_after_install_approved: false,
++        stop_after_install_approved: stop_before_install,
 +    })
 +}
 +
@@ -5144,14 +5162,14 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +
 +#[cfg(windows)]
 +fn detect_remote_windows_attach(ssh: &RemoteSsh) -> io::Result<Option<DetectedRemoteHost>> {
-+    let (sidecar_identity, allow_path_candidate) = local_windows_attach_identity()?;
++    let (expected_payload_sha256, allow_path_candidate) = local_windows_attach_identity()?;
 +    let session_name =
 +        crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME);
 +    let command = super::windows::powershell_attach_probe_command(
-+        &sidecar_identity,
 +        crate::build_info::BASE_VERSION,
 +        &current_version(),
 +        CURRENT_PROTOCOL,
++        expected_payload_sha256.as_deref(),
 +        allow_path_candidate,
 +        session_name.as_deref(),
 +    );
@@ -5203,8 +5221,11 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +                "Windows remote attach probe selected a mismatched Herdr binary",
 +            ));
 +        }
-+        let managed =
-+            RemoteHerdr::for_windows(platform.clone(), &probe.user_profile, &sidecar_identity);
++        let managed = RemoteHerdr::for_windows(
++            platform.clone(),
++            &probe.user_profile,
++            expected_payload_sha256.clone(),
++        );
 +        let remote_herdr = if selected.sidecar {
 +            if !remote_binary_paths_match(
 +                RemoteShell::WindowsPowerShell,
@@ -5241,16 +5262,16 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +}
 +
 +#[cfg(windows)]
-+fn local_windows_attach_identity() -> io::Result<(String, bool)> {
++fn local_windows_attach_identity() -> io::Result<(Option<String>, bool)> {
 +    if crate::build_info::build_id().is_some() {
-+        return Ok((windows_sidecar_identity(None), true));
++        return Ok((None, true));
 +    }
 +    let executable = std::env::current_exe()?;
 +    if crate::update::is_package_manager_managed_exe_path(&executable) {
-+        return Ok((windows_sidecar_identity(None), true));
++        return Ok((None, true));
 +    }
 +    let sha256 = file_sha256(&executable)?;
-+    Ok((windows_sidecar_identity(Some(&sha256)), false))
++    Ok((Some(sha256), false))
 +}
 +
 +fn windows_probe_command_missing(stderr: &str) -> bool {
@@ -5487,6 +5508,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +            ssh.powershell_command_output(&super::windows::powershell_herdr_probe_command(
 +                &remote_herdr.shell_path,
 +                remote_herdr.remote_sidecar,
++                remote_herdr.payload_sha256.as_deref(),
 +            ))?
 +        }
 +    };
@@ -5978,7 +6000,6 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +                        &user_profile,
 +                        yes,
 +                        true,
-+                        true,
 +                    )?,
 +                    None,
 +                ),
@@ -5988,6 +6009,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    };
 +    let server_status =
 +        validate_remote_config_and_status(ssh, &prepared.remote_herdr, known_server_status)?;
++    let server_stopped_for_install = prepared.stop_after_install_approved;
 +    let server_outcome = activate_provisioned_remote(
 +        ssh,
 +        &prepared.remote_herdr,
@@ -5995,6 +6017,10 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +        yes,
 +        server_status,
 +    )?;
++    let server_outcome = match (server_stopped_for_install, server_outcome) {
++        (true, RemoteServerOutcome::Started) => RemoteServerOutcome::Restarted,
++        (_, outcome) => outcome,
++    };
 +
 +    Ok(RemoteProvisionResult {
 +        target: ssh.target().to_string(),
@@ -8196,12 +8222,15 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    }
 +
 +    #[test]
-+    fn windows_sidecar_uses_exact_build_identity_and_portable_asset_key() {
++    fn windows_sidecar_uses_one_stable_path_and_portable_asset_key() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
-+        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can", "build");
++        let remote = RemoteHerdr::for_windows(platform.clone(), "C:\\Users\\can", None);
 +
 +        assert_eq!(platform.asset_key(), "windows-x86_64");
-+        assert!(remote.shell_path.ends_with("\\herdr.exe"));
++        assert_eq!(
++            remote.shell_path,
++            "C:\\Users\\can\\.herdr\\remote\\bin\\herdr.exe"
++        );
 +        assert!(remote.remote_sidecar);
 +        assert_eq!(remote.shell, RemoteShell::WindowsPowerShell);
 +    }
@@ -8209,7 +8238,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +    #[test]
 +    fn windows_install_scripts_use_staged_complete_payload_and_exact_validation() {
 +        let platform = RemotePlatform::windows("AMD64").unwrap();
-+        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can", "build");
++        let remote = RemoteHerdr::for_windows(platform, "C:\\Users\\can", None);
 +        let prepare = windows_install_prepare_script(&remote, "payload-42-abcd.zip");
 +        let cleanup = windows_install_cleanup_script("C:\\Temp\\payload.zip");
 +        let commit = windows_install_commit_script(
@@ -8231,9 +8260,14 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +        assert!(bootstrap.contains("portable payload is missing herdr.exe"));
 +        assert!(bootstrap.contains("ConPTY ownership marker"));
 +        assert!(bootstrap.contains("status client --json"));
++        assert!(bootstrap.contains("'rollback-' + [Guid]::NewGuid"));
++        assert!(bootstrap.contains("$destinationLease = Join-Path $Destination '.lease'"));
++        assert!(bootstrap.contains("[IO.Directory]::Move($Destination, $backup)"));
 +        assert!(bootstrap.contains("[IO.Directory]::Move($stage, $Destination)"));
++        assert!(bootstrap.contains("[IO.Directory]::Move($backup, $Destination)"));
 +        assert!(bootstrap.contains("[IO.File]::Delete($Archive)"));
 +        assert!(bootstrap.contains("FileShare]::None"));
++        assert!(commit.encode_utf16().count() < 32_767);
 +    }
 +
 +    #[test]
@@ -8282,7 +8316,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +        let remote = RemoteHerdr::for_windows(
 +            RemotePlatform::windows("AMD64").unwrap(),
 +            "C:\\Users\\can",
-+            "build",
++            None,
 +        );
 +        let script = windows_start_remote_server_script(&remote, Some("work"));
 +
@@ -8371,7 +8405,7 @@ index 0000000000000000000000000000000000000000..70f9c930ce6d2efcb756691b743b5e36
 +        let managed = RemoteHerdr::for_windows(
 +            RemotePlatform::windows("AMD64").unwrap(),
 +            "C:\\Users\\can",
-+            "build",
++            None,
 +        );
 +        let path_binary = managed
 +            .with_shell_path("C:\\Program Files\\Herdr\\herdr.exe".to_string())
@@ -12284,10 +12318,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b170fb427a
+index 0000000000000000000000000000000000000000..40942140aa8f8450889774dcb2f20b0c7d4625b6
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,488 @@
+@@ -0,0 +1,504 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -12538,7 +12572,11 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +    Ok(command)
 +}
 +
-+pub(super) fn powershell_herdr_probe_command(executable: &str, sidecar: bool) -> String {
++pub(super) fn powershell_herdr_probe_command(
++    executable: &str,
++    sidecar: bool,
++    expected_payload_sha256: Option<&str>,
++) -> String {
 +    let sidecar_environment = if sidecar {
 +        format!(
 +            "$env:{} = '1'; Remove-Item Env:{} -ErrorAction SilentlyContinue; ",
@@ -12548,8 +12586,14 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +    } else {
 +        String::new()
 +    };
++    let payload_check = expected_payload_sha256.map_or_else(String::new, |expected| {
++        format!(
++            "if ((Get-FileHash -LiteralPath $herdr -Algorithm SHA256).Hash.ToLowerInvariant() -cne {}) {{ exit 1 }}; ",
++            powershell_quote(expected)
++        )
++    });
 +    let script = format!(
-+        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}$version = & $herdr --version; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $status = & $herdr status client --json; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine($version); [Console]::Out.WriteLine($status); exit 0",
++        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}{payload_check}$version = & $herdr --version; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $status = & $herdr status client --json; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine($version); [Console]::Out.WriteLine($status); exit 0",
 +        powershell_quote(executable)
 +    );
 +    encoded_powershell_command(&script)
@@ -12557,10 +12601,10 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +
 +#[cfg(windows)]
 +pub(super) fn powershell_attach_probe_command(
-+    sidecar_identity: &str,
 +    expected_herdr_version: &str,
 +    expected_runtime_version: &str,
 +    expected_protocol: u32,
++    expected_payload_sha256: Option<&str>,
 +    allow_path_candidate: bool,
 +    session_name: Option<&str>,
 +) -> String {
@@ -12568,12 +12612,15 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +        Some(session_name) => format!("@('--session', {})", powershell_quote(session_name)),
 +        None => "@()".to_string(),
 +    };
++    let expected_payload_sha256 = expected_payload_sha256
++        .map(powershell_quote)
++        .unwrap_or_else(|| "$null".to_string());
 +    let variables = format!(
-+        "$HerdrSidecarIdentity = {}\n$HerdrExpectedVersion = {}\n$HerdrExpectedRuntime = {}\n$HerdrExpectedProtocol = {}\n$HerdrAllowPathCandidate = {}\n$HerdrServerArguments = {}\n",
-+        powershell_quote(sidecar_identity),
++        "$ExpectedVersion = {}\n$ExpectedRuntime = {}\n$ExpectedProtocol = {}\n$ExpectedPayloadSha256 = {}\n$AllowPathCandidate = {}\n$ServerArguments = {}\n",
 +        powershell_quote(expected_herdr_version),
 +        powershell_quote(expected_runtime_version),
 +        expected_protocol,
++        expected_payload_sha256,
 +        if allow_path_candidate {
 +            "$true"
 +        } else {
@@ -12729,6 +12776,7 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +        let script = decoded_powershell_command(&powershell_herdr_probe_command(
 +            "C:\\Program Files\\Herdr\\herdr.exe",
 +            false,
++            None,
 +        ));
 +
 +        assert!(!script.contains(sidecar_environment_name()));
@@ -12740,25 +12788,27 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +    #[test]
 +    fn windows_attach_probe_combines_platform_binary_and_server_inspection() {
 +        let command = powershell_attach_probe_command(
-+            "build-identity",
 +            "0.8.0",
 +            "local",
 +            20,
++            Some("0123456789abcdef"),
 +            true,
 +            Some("agent's work"),
 +        );
 +        let script = decoded_powershell_command(&command);
 +
 +        assert!(command.encode_utf16().count() < 8191);
-+        assert!(script.contains("$HerdrSidecarIdentity = 'build-identity'"));
-+        assert!(script.contains("$HerdrExpectedVersion = '0.8.0'"));
-+        assert!(script.contains("$HerdrExpectedProtocol = 20"));
-+        assert!(script.contains("$HerdrAllowPathCandidate = $true"));
-+        assert!(script.contains("$HerdrServerArguments = @('--session', 'agent''s work')"));
++        assert!(script.contains("$ExpectedVersion = '0.8.0'"));
++        assert!(script.contains("$ExpectedProtocol = 20"));
++        assert!(script.contains("$ExpectedPayloadSha256 = '0123456789abcdef'"));
++        assert!(script.contains("$AllowPathCandidate = $true"));
++        assert!(script.contains("$ServerArguments = @('--session', 'agent''s work')"));
 +        assert!(script.contains("PROCESSOR_ARCHITECTURE"));
 +        assert!(script.contains("default_shell"));
 +        assert!(script.contains("OpenSSH"));
 +        assert!(script.contains("Get-Command -Name 'herdr.exe'"));
++        assert!(script.contains("Get-FileHash -LiteralPath $Path -Algorithm SHA256"));
++        assert!(script.contains("'remote',\n    'bin',\n    'herdr.exe'"));
 +        assert!(script.contains("'status' 'client' '--json'"));
 +        assert!(script.contains("@('status', 'server', '--json')"));
 +        assert!(script.contains("ConvertTo-Json -Compress"));
@@ -12778,10 +12828,10 @@ index 0000000000000000000000000000000000000000..cb9092490e6157546a86706456adb3b1
 +}
 diff --git a/src/remote/windows_attach_probe.ps1 b/src/remote/windows_attach_probe.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53e552e310
+index 0000000000000000000000000000000000000000..71c7f402403661dc03af8f573ec47a24d0f5a681
 --- /dev/null
 +++ b/src/remote/windows_attach_probe.ps1
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,89 @@
 +$ErrorActionPreference = 'Stop'
 +$ProgressPreference = 'SilentlyContinue'
 +
@@ -12800,6 +12850,12 @@ index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53
 +        return $null
 +    }
 +    if ($Sidecar) {
++        if ($null -ne $ExpectedPayloadSha256) {
++            $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
++            if ($actualSha256 -cne $ExpectedPayloadSha256) {
++                return $null
++            }
++        }
 +        $env:HERDR_REMOTE_SIDECAR_V1 = '1'
 +        Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
 +    } else {
@@ -12815,13 +12871,13 @@ index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53
 +        return $null
 +    }
 +    if (
-+        [string]$client.herdr_version -cne $HerdrExpectedVersion -or
-+        [string]$client.version -cne $HerdrExpectedRuntime -or
-+        [uint32]$client.protocol -ne $HerdrExpectedProtocol
++        [string]$client.herdr_version -cne $ExpectedVersion -or
++        [string]$client.version -cne $ExpectedRuntime -or
++        [uint32]$client.protocol -ne $ExpectedProtocol
 +    ) {
 +        return $null
 +    }
-+    $serverArguments = @($HerdrServerArguments) + @('status', 'server', '--json')
++    $serverArguments = @($ServerArguments) + @('status', 'server', '--json')
 +    $serverLines = @(& $Path @serverArguments)
 +    $serverExit = $LASTEXITCODE
 +    if ($serverExit -ne 0) {
@@ -12841,7 +12897,7 @@ index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53
 +}
 +
 +$selected = $null
-+if ($HerdrAllowPathCandidate) {
++if ($AllowPathCandidate) {
 +    $pathCommands = @(Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue)
 +    if ($pathCommands.Count -gt 0) {
 +        $selected = Get-HerdrAttachCandidate ([string]$pathCommands[0].Source) $false
@@ -12851,7 +12907,7 @@ index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53
 +    $env:USERPROFILE,
 +    '.herdr',
 +    'remote',
-+    $HerdrSidecarIdentity,
++    'bin',
 +    'herdr.exe'
 +)
 +if ($null -eq $selected) {
@@ -12867,10 +12923,10 @@ index 0000000000000000000000000000000000000000..4e3c1777e1aa7d5080620972ea992c53
 +exit 0
 diff --git a/src/remote/windows_bootstrap.ps1 b/src/remote/windows_bootstrap.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585af5abecb
+index 0000000000000000000000000000000000000000..d39f29d0822c7e8e0d1926e6b1f32f5194c29ba1
 --- /dev/null
 +++ b/src/remote/windows_bootstrap.ps1
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,203 @@
 +Set-StrictMode -Version Latest
 +$ErrorActionPreference = 'Stop'
 +
@@ -13010,10 +13066,18 @@ index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585
 +
 +        [IO.File]::WriteAllBytes((Join-Path $stage '.lease'), [byte[]]@())
 +        if ([IO.Directory]::Exists($Destination)) {
-+            Remove-HerdrRemoteSidecar -Path $Destination
++            $destinationLease = Join-Path $Destination '.lease'
++            if ([IO.File]::Exists($destinationLease)) {
++                $lease = [IO.File]::Open(
++                    $destinationLease,
++                    [IO.FileMode]::Open,
++                    [IO.FileAccess]::ReadWrite,
++                    [IO.FileShare]::None
++                )
++                $lease.Dispose()
++            }
 +        }
-+        [IO.Directory]::Move($stage, $Destination)
-+
++        $legacy = @()
 +        foreach ($candidate in Get-ChildItem -LiteralPath $parent -Directory -Force) {
 +            if ($candidate.FullName -eq $Destination -or $candidate.Name -like 'stage-*') {
 +                continue
@@ -13022,18 +13086,40 @@ index 0000000000000000000000000000000000000000..7e5bf42332b69102020c59e59bc2f585
 +                continue
 +            }
 +            $candidateExe = Join-Path $candidate.FullName 'herdr.exe'
-+            $candidateMarker = Join-Path $candidate.FullName 'conpty\herdr-conpty.json'
 +            $candidateLease = Join-Path $candidate.FullName '.lease'
-+            if (-not [IO.File]::Exists($candidateExe) -or
-+                -not [IO.File]::Exists($candidateMarker) -or
-+                -not [IO.File]::Exists($candidateLease)) {
++            if (-not [IO.File]::Exists($candidateExe) -or -not [IO.File]::Exists($candidateLease)) {
 +                continue
 +            }
-+            try {
-+                Remove-HerdrRemoteSidecar -Path $candidate.FullName
-+            } catch [IO.IOException] {
-+            } catch [UnauthorizedAccessException] {
++            $lease = [IO.File]::Open(
++                $candidateLease,
++                [IO.FileMode]::Open,
++                [IO.FileAccess]::ReadWrite,
++                [IO.FileShare]::None
++            )
++            $lease.Dispose()
++            $legacy += $candidate.FullName
++        }
++        $backup = ''
++        if ([IO.Directory]::Exists($Destination)) {
++            $backup = Join-Path $parent ('rollback-' + [Guid]::NewGuid().ToString('N'))
++            [IO.Directory]::Move($Destination, $backup)
++        }
++        try {
++            [IO.Directory]::Move($stage, $Destination)
++        } catch {
++            if (-not [string]::IsNullOrWhiteSpace($backup) -and
++                [IO.Directory]::Exists($backup) -and
++                -not [IO.Directory]::Exists($Destination)) {
++                [IO.Directory]::Move($backup, $Destination)
 +            }
++            throw
++        }
++        if (-not [string]::IsNullOrWhiteSpace($backup)) {
++            Remove-HerdrRemoteSidecar -Path $backup
++        }
++
++        foreach ($candidate in $legacy) {
++            Remove-HerdrRemoteSidecar -Path $candidate
 +        }
 +    } finally {
 +        if ([IO.Directory]::Exists($stage)) {

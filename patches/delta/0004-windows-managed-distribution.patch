@@ -1,8 +1,111 @@
-From a57e90558131cadd77a24eca781d1c85c5d4af06 Mon Sep 17 00:00:00 2001
+From 52ccc83aab06b758c5c2708163b8ab563b967b45 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
 
+---
+ Cargo.toml                                    |   13 +
+ README.zh-CN.md                               |    2 +-
+ build.rs                                      |   60 +-
+ docs/next/README.zh-CN.md                     |    2 +-
+ .../src/content/docs/cli-reference.mdx        |    5 +-
+ .../next/website/src/content/docs/install.mdx |   30 +-
+ .../src/content/docs/ja/cli-reference.mdx     |    5 +-
+ .../website/src/content/docs/ja/install.mdx   |   26 +-
+ .../src/content/docs/ja/windows-beta.mdx      |   12 +-
+ .../website/src/content/docs/windows-beta.mdx |   12 +-
+ .../src/content/docs/zh-cn/cli-reference.mdx  |    5 +-
+ .../src/content/docs/zh-cn/install.mdx        |   26 +-
+ .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
+ .../website/src/data/config-reference.json    |   12 +-
+ justfile                                      |    6 +-
+ packaging/windows/installer/artwork/README.md |   28 +
+ .../installer-welcome-finish-164x314.bmp      |  Bin 0 -> 154542 bytes
+ .../installer-welcome-finish-205x393.bmp      |  Bin 0 -> 242142 bytes
+ .../installer-welcome-finish-246x471.bmp      |  Bin 0 -> 348594 bytes
+ .../installer-welcome-finish-287x550.bmp      |  Bin 0 -> 475254 bytes
+ .../installer-welcome-finish-328x628.bmp      |  Bin 0 -> 618006 bytes
+ .../installer-welcome-finish-source.png       |  Bin 0 -> 1698169 bytes
+ packaging/windows/installer/project.nsi       |  544 ++++
+ .../windows/installer/validate-build.ps1      |  207 ++
+ packaging/windows/managed-skill-hashes.txt    |    3 +
+ scripts/package_windows_conpty.py             |   39 +-
+ scripts/package_windows_installer.ps1         |  608 ++++
+ scripts/preview.py                            |  167 +-
+ scripts/test_package_windows_conpty.py        |   36 +-
+ scripts/test_preview.py                       |  282 +-
+ scripts/test_vendor_libghostty_vt.py          |    4 +-
+ scripts/test_vendor_portable_pty.py           |    4 +-
+ scripts/test_windows_installer.py             |  540 ++++
+ .../windows_install_conpty_package_test.ps1   |  207 +-
+ scripts/windows_installer_fault_test.ps1      | 1165 +++++++
+ src/app/api/plugins/panes.rs                  |    2 +-
+ src/app/api/plugins/runtime.rs                |    2 +-
+ src/app/input/navigate.rs                     |    2 +-
+ src/bin/herdr-installer-helper.rs             |   41 +
+ src/bin/herdr-launcher.rs                     |   36 +
+ src/build_info.rs                             |   93 +-
+ src/cli.rs                                    |  198 --
+ src/cli/spec.rs                               |   15 -
+ src/cli/status.rs                             |   37 +-
+ src/config.rs                                 |    2 +-
+ src/config/model.rs                           |   49 -
+ src/distribution.rs                           |   42 +
+ src/main.rs                                   |   24 +-
+ src/managed_install.rs                        |  318 ++
+ src/platform/mod.rs                           |   25 +
+ src/platform/windows.rs                       |  152 +-
+ src/platform/windows/installer_helper.rs      |  215 ++
+ .../windows/installer_helper_files.rs         | 1014 +++++++
+ .../windows/installer_helper_lifecycle.rs     | 2674 +++++++++++++++++
+ .../windows/installer_helper_registry.rs      |  937 ++++++
+ .../windows/installer_helper_skills.rs        |  408 +++
+ src/platform/windows/launcher.rs              | 1084 +++++++
+ src/platform/windows/managed_install.rs       |  689 +++++
+ src/product_announcements.rs                  |    4 +-
+ src/release_notes.rs                          |   59 +-
+ src/remote/attach.rs                          |   23 +-
+ src/server/autodetect.rs                      |    6 +-
+ src/server/handoff.rs                         |    2 +-
+ src/update.rs                                 | 1059 +++++--
+ tests/api_ping.rs                             |   11 +-
+ tests/cli/sessions.rs                         |   32 +-
+ website/agent-guide.md                        |    7 +-
+ website/index.html                            |    2 +-
+ website/install.ps1                           |  688 -----
+ website/scripts/prepare-docs.mjs              |    1 -
+ website/src/content/docs/install.mdx          |   32 +-
+ website/src/content/docs/ja/install.mdx       |    8 +-
+ website/src/content/docs/ja/windows-beta.mdx  |   12 +-
+ website/src/content/docs/windows-beta.mdx     |   12 +-
+ website/src/content/docs/zh-cn/install.mdx    |    8 +-
+ .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
+ 76 files changed, 12448 insertions(+), 1651 deletions(-)
+ create mode 100644 packaging/windows/installer/artwork/README.md
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-246x471.bmp
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-287x550.bmp
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-328x628.bmp
+ create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-source.png
+ create mode 100644 packaging/windows/installer/project.nsi
+ create mode 100644 packaging/windows/installer/validate-build.ps1
+ create mode 100644 packaging/windows/managed-skill-hashes.txt
+ create mode 100644 scripts/package_windows_installer.ps1
+ create mode 100644 scripts/test_windows_installer.py
+ create mode 100644 scripts/windows_installer_fault_test.ps1
+ create mode 100644 src/bin/herdr-installer-helper.rs
+ create mode 100644 src/bin/herdr-launcher.rs
+ create mode 100644 src/distribution.rs
+ create mode 100644 src/managed_install.rs
+ create mode 100644 src/platform/windows/installer_helper.rs
+ create mode 100644 src/platform/windows/installer_helper_files.rs
+ create mode 100644 src/platform/windows/installer_helper_lifecycle.rs
+ create mode 100644 src/platform/windows/installer_helper_registry.rs
+ create mode 100644 src/platform/windows/installer_helper_skills.rs
+ create mode 100644 src/platform/windows/launcher.rs
+ create mode 100644 src/platform/windows/managed_install.rs
+ delete mode 100644 website/install.ps1
 
 diff --git a/Cargo.toml b/Cargo.toml
 index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe09aa63094 100644
@@ -298,7 +401,7 @@ index b894c1328f9459255c82a0fff256fddbd0795a76..585a938af266210d6bdcc6b289be7927
  デフォルトでは、`herdr update` は新しいバイナリをインストールし、互換性のある実行中セッションには手を付けません。アップデートが Herdr のクライアント/サーバープロトコルを変更する場合、Herdr はインストール後に古いサーバーを停止するか尋ねます。新しいバージョンを使うには古いサーバーを停止してください。停止するとペインのプロセスは終了します。デフォルトセッションでは `herdr server stop` を実行してから再度 `herdr` を実行します。名前付きセッションでは `herdr session stop <name>` を実行してから再度 `herdr session attach <name>` を実行します。
  
 diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-index 36d3df7c55537e5edef93cd3f9787052182876e0..71967c98c43b12c5544b38368acdfadf02deb422 100644
+index 33378c517b1107c2631e91abb38ceb87372fb137..f8f9085d0aff77886fd5deb152d9faa3e95336fe 100644
 --- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
 @@ -9,15 +9,9 @@ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モ
@@ -321,7 +424,7 @@ index 36d3df7c55537e5edef93cd3f9787052182876e0..71967c98c43b12c5544b38368acdfadf
  
 @@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
  
- Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` またはユーザー所有のバージョン付きサイドカーから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチはダイジェスト検証済みの完全なポータブル ZIP を転送できますが、インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は設定を検証し、起動、再読み込み、または制御された再起動による有効化を管理します。Windows リモートホストではライブハンドオフをサポートしません。
+ Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` または `%USERPROFILE%\.herdr\remote\bin\herdr.exe` にあるユーザー所有の安定したリモートランタイムから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチは設定を検証し、承認後に選択したサーバーを停止し、ダイジェスト検証済みの完全なポータブルペイロードをステージングして検証し、安定したランタイムをアトミックに置き換えてから、サーバーを起動して検証します。別のリモートプロセスが実行中の場合、置き換えはブロックされます。インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は対話的な確認なしで同じ有効化パスを使います。Windows リモートホストではライブハンドオフをサポートしません。
  
 -Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
 +Windows のアップデートは管理対象のセットアップ資産を使います。既存のセッションは現在の不変ランタイムを使い続け、アクティブなリースが終了した後に今後の起動が切り替わります。ライブハンドオフは Unix 専用です。
@@ -329,7 +432,7 @@ index 36d3df7c55537e5edef93cd3f9787052182876e0..71967c98c43b12c5544b38368acdfadf
  ## Windows ベータの問題を報告する
  
 diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
-index f63f118e376247e7abb3461434dd23267a952969..378028ee61f61a4892c44747a29f3c0f21fff9c4 100644
+index f1340530027c6b9c1c10a4e9c1eee838ad1543ff..4c790ebb2fde5b8c85d2994d8f0445a74c393b91 100644
 --- a/docs/next/website/src/content/docs/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/windows-beta.mdx
 @@ -9,15 +9,9 @@ Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the
@@ -352,7 +455,7 @@ index f63f118e376247e7abb3461434dd23267a952969..378028ee61f61a4892c44747a29f3c0f
  
 @@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
  
- Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or a versioned per-user sidecar. When one is needed, an interactive attach can transfer the complete digest-verified portable ZIP without running an installer or changing remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` validates configuration and owns start, reload, or controlled restart activation. Windows remote hosts do not support live handoff.
+ Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates configuration, stops the selected server with approval, stages and validates the complete digest-verified portable payload, atomically replaces the stable runtime, then starts and verifies the server. Another active remote process blocks replacement. It never runs an installer or changes remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` owns the same activation path without an interactive prompt. Windows remote hosts do not support live handoff.
  
 -Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
 +Windows updates run through the managed setup asset. Existing sessions keep their current immutable runtime, and future launches switch after active leases exit. Live handoff is Unix-only.
@@ -422,7 +525,7 @@ index 8305fd7a7cda906ef3555654e0d09e6b9b0e8fe0..941c8ae49a0c8e763375527c7338ab6f
  默认情况下,`herdr update` 安装新二进制文件,并不打扰兼容的运行中会话。如果某次更新改变了 Herdr 的客户端/服务器协议,Herdr 会在安装后询问是否停止旧服务器。要使用新版本,请停止旧服务器。停止会退出窗格进程。对于默认会话,运行 `herdr server stop`,再运行 `herdr`。对于命名会话,运行 `herdr session stop <name>`,再运行 `herdr session attach <name>`。
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-index b568d7eb5e8b48ac00f215054a39c99abe75dbb0..a4bbe53b37a080c3577a95a1f4ecf785cf477ba9 100644
+index 07385b174940b7d611fcbf3888720a985f9d2441..5559f96e4f04a75c51a19c2fd1cb7130285cec77 100644
 --- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 @@ -9,15 +9,9 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不
@@ -445,7 +548,7 @@ index b568d7eb5e8b48ac00f215054a39c99abe75dbb0..a4bbe53b37a080c3577a95a1f4ecf785
  
 @@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
  
- Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或用户自有的版本化 sidecar 中完全匹配的 `herdr.exe`。需要时，交互式连接可以传输完整且经过摘要验证的便携 ZIP，但不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会验证配置，并负责通过启动、重新加载或受控重启来激活服务器。Windows 远程主机不支持实时交接。
+ Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或 `%USERPROFILE%\.herdr\remote\bin\herdr.exe` 处用户自有的稳定远程运行时中完全匹配的 `herdr.exe`。需要时，交互式连接会验证配置，在批准后停止选定的服务器，暂存并验证完整且经过摘要验证的便携负载，以原子方式替换稳定运行时，然后启动并验证服务器。若另一个远程进程仍在运行，替换会被阻止。它不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会在没有交互式提示的情况下使用相同的激活路径。Windows 远程主机不支持实时交接。
  
 -Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
 +Windows 更新使用受管理的安装程序资产。现有会话继续使用当前的不可变运行时,活动租约结束后,后续启动会切换到新运行时。实时交接仅限 Unix。
@@ -57312,7 +57415,7 @@ index 23520e3a55dd6f33acfa342dcfdafe0db57e7c1c..639c9a71e2c15ba9702b4878a4390961
  fn configure_background_command_platform(_command: &mut std::process::Command) {}
  
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 2c1f40ba849fadf70a37d6b2f8afb480e0db11b9..6012afc2002aade479e9f8ae025c313be805a020 100644
+index 83f340b6468f894978b5a67bef65558dd7e2a01e..8f403fed995368ba43aac5baff6c4b2dfcd4225c 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
 @@ -4,7 +4,8 @@ use std::{
@@ -57362,7 +57465,7 @@ index 2c1f40ba849fadf70a37d6b2f8afb480e0db11b9..6012afc2002aade479e9f8ae025c313b
  
  const STILL_ACTIVE: u32 = 259;
  const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
-@@ -1247,6 +1256,108 @@ pub fn process_exists(pid: u32) -> bool {
+@@ -1256,6 +1265,108 @@ pub fn process_exists(pid: u32) -> bool {
      ok && exit_code == STILL_ACTIVE
  }
  
@@ -57471,7 +57574,7 @@ index 2c1f40ba849fadf70a37d6b2f8afb480e0db11b9..6012afc2002aade479e9f8ae025c313b
  pub fn write_clipboard(bytes: &[u8]) -> bool {
      let Ok(text) = std::str::from_utf8(bytes) else {
          return false;
-@@ -2052,6 +2163,37 @@ mod tests {
+@@ -2088,6 +2199,37 @@ mod tests {
          );
      }
  
@@ -64686,10 +64789,10 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c712e5ea3d2 100644
+index d69c05610d560cb4b0408031b85998339b320080..5e9568e5778248c2423f744508c2edd7bbf1d41b 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
-@@ -25,14 +25,16 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
+@@ -26,8 +26,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
  const REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
  const REMOTE_SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
  const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
@@ -64697,7 +64800,8 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
 -const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
  const REMOTE_BINARY_ENV_VAR: &str = "HERDR_REMOTE_BINARY";
  const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
- pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
+ const PWSH_EXECUTABLE: &str = "pwsh.exe";
+@@ -36,6 +34,10 @@ pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
  
  pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
  
@@ -64708,7 +64812,7 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
  pub(crate) enum RemoteKeybindings {
      Local,
-@@ -2422,10 +2424,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -2836,10 +2838,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  
      let dir = private_download_dir(&asset_key)?;
      let path = dir.join("herdr.tmp");
@@ -64721,7 +64825,7 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
          .status()
          .map_err(|err| io::Error::new(err.kind(), format!("download failed: {err}")))?;
      if !status.success() {
-@@ -2472,16 +2473,16 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -2886,16 +2887,16 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  }
  
  fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
@@ -64741,7 +64845,7 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
          ])
          .output()
          .map_err(|err| io::Error::new(err.kind(), format!("curl failed: {err}")))?;
-@@ -2519,7 +2520,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2933,7 +2934,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
          let build_id = crate::build_info::build_id().ok_or_else(|| {
              io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
          })?;
@@ -64750,7 +64854,7 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
          let manifest: RemotePreviewManifest =
              serde_json::from_slice(&manifest_bytes).map_err(|err| {
                  io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
-@@ -2538,7 +2539,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2952,7 +2953,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
      }
  
      let current_version = current_version();
@@ -64759,7 +64863,7 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
      let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
          .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
      let release = manifest.release_for_version(&current_version).ok_or_else(|| {
-@@ -3134,7 +3135,7 @@ fn run_client_process(
+@@ -3551,7 +3552,7 @@ fn run_client_process(
      reattach_command: &str,
      keybindings: RemoteKeybindings,
  ) -> io::Result<()> {
@@ -64769,10 +64873,10 @@ index 886468e56545992f2bfbfcc19292fb5855998f39..adb71da7ffd22b833da843dbf3f93c71
          .arg("client")
          .env(
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
-index 2ca72f332e4d702f08de19460733b63fe36a919c..9977854fe37730a52cb379106cb72b56d3ba12a7 100644
+index 698c871fef7f81b571e4e6335c77e8a9df7a72ff..da4bb92262f2de7c90ae8663c1881c2cde49b30d 100644
 --- a/src/server/autodetect.rs
 +++ b/src/server/autodetect.rs
-@@ -215,9 +215,11 @@ fn validate_running_server_compatibility() -> io::Result<()> {
+@@ -293,9 +293,11 @@ fn validate_running_server_compatibility() -> io::Result<()> {
  ///   socket overrides, etc.), except inherited socket overrides are cleared when
  ///   this CLI invocation explicitly selected a session.
  ///

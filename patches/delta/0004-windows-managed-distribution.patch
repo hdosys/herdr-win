@@ -1,4 +1,4 @@
-From 52ccc83aab06b758c5c2708163b8ab563b967b45 Mon Sep 17 00:00:00 2001
+From b49794449dcc65e6c6983bbeee9c85d8e47a3089 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -64789,7 +64789,7 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index d69c05610d560cb4b0408031b85998339b320080..5e9568e5778248c2423f744508c2edd7bbf1d41b 100644
+index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481beac55b9 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -26,8 +26,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;

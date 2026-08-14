@@ -1,4 +1,4 @@
-From 4123451dcca39a772fd381e3d0c68a9a20c6b783 Mon Sep 17 00:00:00 2001
+From 35234c1e4ddc94466163e373a8d15b5a0a0f9672 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -3785,7 +3785,7 @@ index ce4ca91bcabb66e3d0ef29e42c499b8a66b57da4..f1ac26929b2cde2e69c2ac8094bcc615
          let err = std::io::Error::other(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..d69c05610d560cb4b0408031b85998339b320080
+index 0000000000000000000000000000000000000000..a57984bf3f4587853dd72d4a8b74cb34b5aff680
 --- /dev/null
 +++ b/src/remote/attach.rs
 @@ -0,0 +1,5409 @@
@@ -6569,7 +6569,7 @@ index 0000000000000000000000000000000000000000..d69c05610d560cb4b0408031b8599833
 +
 +    wait_for_remote_server_shutdown(ssh, remote_herdr)?;
 +    eprintln!(
-+        "stopped the remote herdr server on {}; it will restart when the remote client bridge attaches.",
++        "stopped the remote herdr server on {} for remote binary replacement.",
 +        ssh.target()
 +    );
 +    Ok(())

@@ -1,4 +1,4 @@
-From 402f639a89d8acef590da9fd6227629f7290dc68 Mon Sep 17 00:00:00 2001
+From 248496dc9cda9c1f3e12f6b47d7f18744499849d Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Wed, 5 Aug 2026 09:38:50 +0200
 Subject: [PATCH 5/5] fix(security): harden curl transfers

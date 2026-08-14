@@ -1,4 +1,4 @@
-From b75c568b52a6c108446e5bc4f6999c70d6b76291 Mon Sep 17 00:00:00 2001
+From 249a268dc67c73d269a07047addb382b92c06b6c Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
 Subject: [PATCH 4/5] fix(opencode): preserve truthful lifecycle state

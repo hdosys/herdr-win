@@ -41,10 +41,8 @@ active memory owner.
   sockets, and protocol. Fork identity belongs only in repository/release/update
   presentation.
 - Keep the delta small, explicit, replayable, and upstreamable.
-- Treat existing fork implementation as migration cost, not architectural
-  precedent. Choose changed behavior against recorded upstream and the simplest
-  long-lived design; retain old fork structure only for a current compatibility
-  contract.
+- Choose changed behavior against recorded upstream and the simplest long-lived
+  design. Keep one implementation path for each current contract.
 - `patches/delta/` owns maintained product behavior; `series` owns order and
   `BASE` records the exact commit behind the latest non-draft, non-prerelease
   upstream stable release selected during the last explicit manual refresh. It
@@ -60,7 +58,7 @@ active memory owner.
   Synchronizing this fork's configured `origin` for normal collaboration and
   delivery remains allowed because it is not official upstream. A manual
   `workflow_dispatch` release uses recorded `BASE`.
-- `patches/upstream/` is a frozen historical archive. Never regenerate, rename, or
+- `patches/upstream/` is a frozen patch archive. Never regenerate, rename, or
   delete it; external links may depend on exact paths.
 - `scripts/test_delta_patches.py` and `scripts/test_upstream_patches.py` own queue
   control invariants.
@@ -97,12 +95,10 @@ active memory owner.
 - Preserve the user-visible promises in `PRODUCT.md` and technical boundaries in
   `ARCHITECTURE.md`; do not hide a changed product or architecture decision inside
   a mailbox refresh or procedural edit.
-- Do not add Windows installer compatibility handling for non-current install
-  layouts: no alternate manifest/layout parser, migration, backup, junction bridge,
-  or parent-PID exception. Preserve and reject such roots with the documented
-  uninstall-first action. This does not weaken current managed locked-binary safety;
-  immutable runtimes, per-build leases, pending activation, and process-safe
-  uninstall remain required.
+- The Windows installer accepts only the current managed install layout and exact
+  product-owned roots. Reject every other root with the documented uninstall-first
+  action. Preserve current managed locked-binary safety through immutable runtimes,
+  per-build leases, pending activation, and process-safe uninstall.
 - Status inspection is pure and never starts or retries work.
 - Keyboard-first terminal interaction remains complete end to end.
 - Windows PTY integration owns process-tree cleanup, handle inheritance, resize,

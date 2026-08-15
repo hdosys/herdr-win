@@ -21,7 +21,7 @@ Before editing, classify the change:
   `patches/delta/`.
 - **Fork control plane:** edit repository branding, patch inventory tests, or the
   two workflows directly in this repository.
-- **Legacy patch archive:** do not refresh or rename files in
+- **Frozen patch archive:** do not refresh or rename files in
   `patches/upstream/`; existing links must remain valid.
 - **Stable user-visible fork behavior:** update `PRODUCT.md`, the owning logical
   mailbox when applicable, and the mirrored public README projection.
@@ -42,47 +42,56 @@ Do not make a product-source edit only in this repository's control checkout. Th
 manual candidate build starts from recorded `BASE`, so every finished product
 change must still be represented by the canonical queue.
 
-Use one replayed task worktree for one coherent product milestone. It may stay open
-across several days and many small edits. Do not use the end of a day or week as a
-mandatory patch boundary, and do not mix unrelated work merely to delay folding.
-Finalize before a product handoff, shared acceptance milestone, or release.
+Iteration is the default. Reuse one replayed WIP worktree for product changes that
+will be finalized together. It may stay open across days and agent sessions and
+follows the global shared-checkout coordination rules. Changes that require
+independent finalization use a separate branch and worktree because tree identity
+covers the complete replayed source tree.
 
 Create the task tree once from the exact local commit already recorded in `BASE`:
 
 ```powershell
-python scripts/delta_workflow.py start --name <task-slug> --path <absolute-new-path>
+python scripts/delta_workflow.py start --name <task-slug> --path <durable-absolute-new-path>
 ```
 
-The helper creates a registered task branch, applies `series` once with
-`git am --3way`, and never queries or fetches official upstream. During iteration:
+Place the worktree outside the control checkout under a host-mapped workspace root
+so it survives Sandbox replacement. The helper creates a registered task branch,
+applies `series` once with `git am --3way`, and never queries or fetches official
+upstream.
 
-1. Edit and commit normal source changes in that worktree.
+Finalization starts only from a current user instruction containing `Finalize` or
+`finalisieren` and naming the exact milestone. Until that instruction arrives:
+
+1. Edit and commit coherent source checkpoints in that worktree. Push the WIP
+   branch frequently for remote backup. Its first push uses
+   `git push --set-upstream origin HEAD`; later checkpoints use `git push`.
 2. Run only formatting and the smallest tests or real boundary probe that exercise
    the changed behavior.
-3. Do not regenerate mailboxes, create fresh replay trees, or run the release/native
-   matrix while the behavior is still moving.
-4. When behavior is frozen and the focused evidence passes, record its exact tree
-   with `git rev-parse 'HEAD^{tree}'`.
+3. Report the worktree, branch, source commit, owned files and resources, and focused
+   evidence at handoff.
+4. Leave mailboxes, final replay, the control branch, and worktree removal
+   untouched. A WIP-branch push is not finalization.
 
-Then finalize the complete milestone once:
+After the explicit finalization instruction, one session owns the frozen final path:
 
-1. Fold its source commits into the existing mailbox that owns the behavior. Add a
-   mailbox only for a genuinely independent responsibility.
-2. Regenerate that mailbox with `git format-patch --full-index --binary`, keeping
-   its stable filename and logical position. Do not regenerate later mailboxes
-   merely because commit IDs changed. Refresh a later mailbox only when replay or
-   the intended final tree proves that its diff actually needs new context.
-3. Replay the checked-in queue into an isolated temporary Git index and require it
+1. Reinspect shared ownership, collect completed handoffs, stop overlapping writes,
+   run the focused gate, and record `git rev-parse 'HEAD^{tree}'`.
+2. Fold the milestone's source commits into the existing mailbox that owns the
+   behavior. Add a mailbox only for a genuinely independent responsibility.
+3. Regenerate that mailbox with `git format-patch --full-index --binary`, keeping
+   its stable filename and logical position. Keep later mailboxes byte-identical
+   unless replay or the intended final tree requires new context.
+4. Replay the checked-in queue into an isolated temporary Git index and require it
    to reproduce the already tested source tree exactly:
 
    ```powershell
    python scripts/delta_workflow.py check --expected-tree <tested-tree-id>
    ```
 
-4. Run the inventory tests below. A matching tree transfers the source evidence to
+5. Run the inventory tests below. A matching tree transfers the source evidence to
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.
-5. Review the ordinary source diff before folding and the final control diff after
+6. Review the ordinary source diff before folding and the final control diff after
    folding. Commit and push the finished control milestone, then remove the task
    worktree only after remote durability and ownership are clear.
 
@@ -103,8 +112,8 @@ that separate operation. For every approved refresh:
    prerelease.
 2. Fetch its exact `v<version>` tag, peel the release commit, and verify the tag
    version matches replayed Cargo package version.
-3. Replay and review the complete queue on that commit, dropping upstreamed or
-   obsolete hunks from their existing logical owners.
+3. Replay and review the complete queue on that commit, dropping upstreamed hunks
+   and anything no longer required by current fork behavior from its logical owner.
 4. Update `BASE` only after the reviewed replay succeeds, regenerate every changed
    mailbox, replay the checked-in queue again from a fresh checkout, and run all
    refresh gates.

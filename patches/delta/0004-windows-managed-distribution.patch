@@ -1,4 +1,4 @@
-From 07c04f111c29c7e101955ec1dc905f8f5c2ced1c Mon Sep 17 00:00:00 2001
+From 71ed53a5a413f2dfda9d5a1d1d6e86afcb4312e2 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -30,7 +30,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  .../windows/installer/validate-build.ps1      |  207 ++
  packaging/windows/managed-skill-hashes.txt    |    3 +
  scripts/package_windows_conpty.py             |   39 +-
- scripts/package_windows_installer.ps1         |  612 ++++
+ scripts/package_windows_installer.ps1         |  690 ++++
  scripts/preview.py                            |  167 +-
  scripts/test_package_windows_conpty.py        |   36 +-
  scripts/test_preview.py                       |  282 +-
@@ -81,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 77 files changed, 12878 insertions(+), 1651 deletions(-)
+ 77 files changed, 12956 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -53002,10 +53002,10 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  if __name__ == "__main__":
 diff --git a/scripts/package_windows_installer.ps1 b/scripts/package_windows_installer.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cfd3482ac5
+index 0000000000000000000000000000000000000000..974d8d0dfafedf9176b34f7629d35b379c962099
 --- /dev/null
 +++ b/scripts/package_windows_installer.ps1
-@@ -0,0 +1,612 @@
+@@ -0,0 +1,690 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)]
@@ -53108,6 +53108,42 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +    return $quoted.ToString()
 +}
 +
++function Stop-OwnedProcessTree {
++    param([Parameter(Mandatory = $true)][Diagnostics.Process]$Process)
++
++    $cleanup = [Diagnostics.Stopwatch]::StartNew()
++    $taskkillPath = Join-Path $env:SystemRoot "System32\taskkill.exe"
++    $taskkillItem = Get-Item -LiteralPath $taskkillPath -Force
++    if ($taskkillItem.PSIsContainer -or
++        ($taskkillItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
++        $taskkillItem.Length -le 0) {
++        throw "Build-tool cleanup could not validate the Windows process-tree terminator."
++    }
++    $termination = Start-Process -FilePath $taskkillPath `
++        -ArgumentList @("/PID", [string]$Process.Id, "/T", "/F") `
++        -WindowStyle Hidden `
++        -PassThru
++    try {
++        if (-not $termination.WaitForExit(2500)) {
++            try {
++                $termination.Kill()
++            } catch {
++            }
++            $remaining = [Math]::Max(0, 5000 - [int]$cleanup.ElapsedMilliseconds)
++            if (-not $termination.WaitForExit($remaining)) {
++                throw "Build-tool process-tree termination exceeded its 5-second cleanup limit."
++            }
++        }
++        $remaining = [Math]::Max(0, 5000 - [int]$cleanup.ElapsedMilliseconds)
++        if (-not $Process.WaitForExit($remaining)) {
++            throw "Build-tool process-tree termination did not reap the root within 5 seconds."
++        }
++    } finally {
++        $termination.Dispose()
++        $cleanup.Stop()
++    }
++}
++
 +function Invoke-NativeCaptured {
 +    param(
 +        [Parameter(Mandatory = $true)][string]$Command,
@@ -53143,14 +53179,19 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +        $stdout = $process.StandardOutput.ReadToEndAsync()
 +        $stderr = $process.StandardError.ReadToEndAsync()
 +        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-+            $process.Kill()
-+            [void]$process.WaitForExit(5000)
++            Stop-OwnedProcessTree -Process $process
 +            throw "$Command exceeded its $TimeoutSeconds second packaging timeout."
++        }
++        if (-not [Threading.Tasks.Task]::WaitAll(
++            [Threading.Tasks.Task[]]@($stdout, $stderr),
++            5000
++        )) {
++            throw "$Command exited without closing captured packaging output."
 +        }
 +        return [PSCustomObject]@{
 +            ExitCode = $process.ExitCode
-+            Stdout = $stdout.GetAwaiter().GetResult()
-+            Stderr = $stderr.GetAwaiter().GetResult()
++            Stdout = $stdout.Result
++            Stderr = $stderr.Result
 +        }
 +    } finally {
 +        $process.Dispose()
@@ -53410,7 +53451,11 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +    throw "Stage must be a regular directory: $StageDir"
 +}
 +if (Test-Path -LiteralPath $OutputPath) {
-+    throw "Refusing to overwrite an existing installer output: $OutputPath"
++    $existingOutput = Get-Item -LiteralPath $OutputPath -Force
++    if ($existingOutput.PSIsContainer -or
++        ($existingOutput.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++        throw "Installer output is not a replaceable regular file: $OutputPath"
++    }
 +}
 +$requiredSources = @(
 +    $packager,
@@ -53500,12 +53545,22 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +
 +$archivePath = Get-VerifiedNsisArchive
 +$outputParent = Split-Path -Parent $OutputPath
-+if (-not (Test-Path -LiteralPath $outputParent)) {
++if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
 +    New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
 +}
++$outputParentItem = Get-Item -LiteralPath $outputParent -Force
++if (-not $outputParentItem.PSIsContainer -or
++    ($outputParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++    throw "Installer output parent is not a regular directory: $outputParent"
++}
 +
-+$workingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("herdr-nsis-" + [Guid]::NewGuid().ToString("N"))
++$workingRoot = Join-Path $outputParent (".$InstallerOriginalFilename.build-" + [Guid]::NewGuid().ToString("N"))
 +New-Item -ItemType Directory -Path $workingRoot | Out-Null
++$workingRootItem = Get-Item -LiteralPath $workingRoot -Force
++if (-not $workingRootItem.PSIsContainer -or
++    ($workingRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++    throw "Private installer build directory is unsafe: $workingRoot"
++}
 +try {
 +    $canonicalSkillSource = Join-Path $workingRoot "SKILL.md"
 +    [IO.File]::WriteAllBytes($canonicalSkillSource, $canonicalSkillBytes)
@@ -53513,6 +53568,8 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +    $canonicalSkillHashManifestBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($skillHashManifestValidationText)
 +    [IO.File]::WriteAllBytes($canonicalSkillHashManifest, $canonicalSkillHashManifestBytes)
 +    $definitionPath = Join-Path $workingRoot "installer-build.json"
++    $temporaryOutput = Join-Path $workingRoot $InstallerOriginalFilename
++    $backupOutput = Join-Path $workingRoot ("previous-" + $InstallerOriginalFilename)
 +    $definition = [ordered]@{
 +        Schema = 1
 +        StageDir = $StageDir
@@ -53529,7 +53586,7 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +        NumericVersion = $NumericVersion
 +        UiVersion = $UiVersion
 +        ExpectedCliVersion = $ExpectedCliVersion
-+        OutputPath = $OutputPath
++        OutputPath = $temporaryOutput
 +        OriginalFilename = $InstallerOriginalFilename
 +        ProductName = $ProductName
 +        DistributionName = $DistributionName
@@ -53566,10 +53623,10 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +        throw "Verified makensis reported '$reportedVersion' instead of v$NsisVersion."
 +    }
 +
-+    $temporaryOutput = Join-Path $workingRoot "herdr-installer.exe"
 +    $makensisArguments = @(
-+        "/V3",
 +        "/WX",
++        "/V2",
++        "/NOCONFIG",
 +        "/INPUTCHARSET", "UTF8",
 +        "/DARG_STAGE_DIR=$StageDir",
 +        "/DARG_LAUNCHER_EXE=$LauncherExe",
@@ -53612,12 +53669,33 @@ index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cf
 +    }
 +    Invoke-NativeChecked $makensis $makensisArguments -TimeoutSeconds 180
 +    Assert-X86Pe -Path $temporaryOutput
-+    Move-Item -LiteralPath $temporaryOutput -Destination $OutputPath
++    if (Test-Path -LiteralPath $OutputPath) {
++        $existingOutput = Get-Item -LiteralPath $OutputPath -Force
++        if ($existingOutput.PSIsContainer -or
++            ($existingOutput.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++            throw "Installer output changed into an unsafe path before publication: $OutputPath"
++        }
++        [IO.File]::Replace($temporaryOutput, $OutputPath, $backupOutput)
++        Remove-Item -LiteralPath $backupOutput -Force
++    } else {
++        [IO.File]::Move($temporaryOutput, $OutputPath)
++    }
 +} finally {
 +    Remove-Item -LiteralPath $workingRoot -Recurse -Force -ErrorAction SilentlyContinue
 +}
 +
-+Write-Host "Created $DistributionName installer: $OutputPath"
++$artifact = Get-Item -LiteralPath $OutputPath -Force
++if ($artifact.PSIsContainer -or
++    ($artifact.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
++    $artifact.Length -le 0) {
++    throw "Published installer artifact is not a nonempty regular file: $OutputPath"
++}
++([ordered]@{
++    artifact = $artifact.FullName
++    bytes = [long]$artifact.Length
++    sha256 = Get-Sha256 -Path $artifact.FullName
++    nsis = "v$NsisVersion"
++}).GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }
 diff --git a/scripts/preview.py b/scripts/preview.py
 index fa55d623d865cfe1f797ab3efad58ae842f91c7c..a9ee8d43c8eeb7f4f732380a6f069f1d68dcda87 100644
 --- a/scripts/preview.py

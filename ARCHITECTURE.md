@@ -230,6 +230,11 @@ behavior; code and tests remain the detailed implementation truth.
   the branded Welcome/Finish artwork; five checked-in BMP3 derivatives provide
   native 100–200% DPI buckets without runtime resampling. Installer compression
   uses datablock optimization, an 8 MiB LZMA dictionary, and solid final LZMA settings.
+  Packaging runs the pinned NSIS compiler with warnings as errors and without
+  ambient NSIS configuration, writing its candidate in a private regular sibling
+  of the requested output. Only a validated x86 PE is atomically moved or replaced
+  into the final path, so failure leaves an existing regular artifact intact.
+  Success reports the absolute path, byte count, SHA-256, and compiler version.
   There is no replaced-executable definition or compatibility slot; the fixed
   launcher and helper package leaves remain owned directly by the one package
   schema.

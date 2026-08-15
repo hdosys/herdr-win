@@ -52,16 +52,27 @@ active. Size alone does not justify another worktree. Independent milestones use
 separate branches and worktrees because tree identity covers the complete replayed
 source tree.
 
-Create the task tree once from the exact local commit already recorded in `BASE`:
+Create the task tree once from the exact local commit already recorded in `BASE`.
+In a Herdr-managed session, the global worktree lifecycle remains authoritative:
+
+```powershell
+$control = (Get-Location).Path
+$base = (Get-Content -LiteralPath patches/delta/BASE -Raw).Trim()
+$created = herdr worktree create --cwd $control --branch "agent/delta-<task-slug>" --base $base --no-focus --json | ConvertFrom-Json
+python scripts/delta_workflow.py materialize --worktree $created.result.worktree.path
+```
+
+Omit `--path` so Herdr selects its configured worktree root and opens the linked
+checkout as a managed workspace. Outside a Herdr-managed session, the repository
+helper can create the same task tree below an existing durable parent:
 
 ```powershell
 python scripts/delta_workflow.py start --name <task-slug> --path <durable-absolute-new-path>
 ```
 
-Place the worktree outside the control checkout under a host-mapped workspace root
-so it survives Sandbox replacement. The helper creates a registered task branch,
-applies `series` once with `git am --3way`, and never queries or fetches official
-upstream.
+`materialize` validates the existing checkout, branch, clean state, shared
+repository identity, and exact `BASE` before applying `series` once with
+`git am --3way`. Neither path queries or fetches official upstream.
 
 The task owner completes the accepted milestone end to end and does not wait for a
 second user instruction before finalizing it. During iteration:
@@ -103,8 +114,8 @@ path:
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.
 4. Review the final control diff after folding. Commit and push the finished
-   control milestone, then remove the task worktree only after remote durability
-   and ownership are clear.
+   control milestone, then remove the task worktree through the lifecycle that
+   created it only after remote durability and ownership are clear.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning

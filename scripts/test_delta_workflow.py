@@ -9,6 +9,7 @@ from typing import Sequence
 from scripts.delta_workflow import (
     DeltaWorkflowError,
     finalize_delta_mailbox,
+    materialize_delta_worktree,
     start_delta_worktree,
     verify_replay_tree,
 )
@@ -145,6 +146,33 @@ class DeltaWorkflowTests(unittest.TestCase):
 
             self.assertEqual(result.branch, "agent/delta-fast-path")
             self.assertEqual(result.mailbox_count, 2)
+            self.assertEqual(result.tree, fixture.source_tree)
+            self.assertEqual(
+                run_git(worktree, ["rev-list", "--count", f"{fixture.base}..HEAD"]),
+                "2",
+            )
+
+    def test_materialize_replays_an_existing_task_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+            worktree = worktrees / "managed"
+            run_git(
+                fixture.control,
+                [
+                    "worktree",
+                    "add",
+                    "-b",
+                    "agent/delta-managed",
+                    str(worktree),
+                    fixture.base,
+                ],
+            )
+
+            result = materialize_delta_worktree(worktree, fixture.control)
+
+            self.assertEqual(result.branch, "agent/delta-managed")
             self.assertEqual(result.tree, fixture.source_tree)
             self.assertEqual(
                 run_git(worktree, ["rev-list", "--count", f"{fixture.base}..HEAD"]),

@@ -266,12 +266,10 @@ def _normalized_git_path(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
-def _require_source_worktree(
+def _require_clean_delta_worktree(
     project_root: Path,
     worktree: Path,
-    expected_tree: str,
-    replay: ReplayResult,
-) -> tuple[str, str]:
+) -> tuple[Path, str]:
     if not worktree.is_absolute():
         raise DeltaWorkflowError("--worktree must be an absolute path")
     worktree = worktree.resolve()
@@ -331,6 +329,16 @@ def _require_source_worktree(
             raise DeltaWorkflowError(
                 f"source worktree has an in-progress Git operation: {marker}"
             )
+    return worktree, branch
+
+
+def _require_source_worktree(
+    project_root: Path,
+    worktree: Path,
+    expected_tree: str,
+    replay: ReplayResult,
+) -> tuple[str, str]:
+    worktree, _ = _require_clean_delta_worktree(project_root, worktree)
 
     ancestor = _run_git(
         worktree,
@@ -608,6 +616,64 @@ def finalize_delta_mailbox(
     )
 
 
+def materialize_delta_worktree(
+    worktree: Path,
+    project_root: Path = PROJECT_ROOT,
+) -> WorktreeResult:
+    """Replay the queue into an existing clean task worktree at recorded BASE."""
+
+    project_root = project_root.resolve()
+    _require_control_master(project_root)
+    _require_clean_delta(project_root)
+    base = _read_base(project_root)
+    mailboxes = _read_series(project_root)
+    worktree, branch = _require_clean_delta_worktree(project_root, worktree)
+
+    initial_head = _run_git(
+        worktree, ["rev-parse", "HEAD"], cwd=worktree
+    ).stdout.strip()
+    if initial_head != base:
+        raise DeltaWorkflowError(
+            "source worktree must start at the exact commit recorded in BASE: "
+            f"expected {base}, found {initial_head}"
+        )
+
+    replay_environment = {
+        "GIT_COMMITTER_NAME": "herdr-win replay",
+        "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+    }
+    try:
+        for mailbox in mailboxes:
+            _run_git(
+                project_root,
+                [
+                    "am",
+                    "--3way",
+                    str(project_root / "patches" / "delta" / mailbox),
+                ],
+                cwd=worktree,
+                environment=replay_environment,
+            )
+        _run_git(worktree, ["diff", "--check", f"{base}..HEAD"], cwd=worktree)
+    except DeltaWorkflowError as error:
+        raise DeltaWorkflowError(
+            f"delta replay stopped in {worktree}; preserve and inspect that worktree: {error}"
+        ) from error
+
+    head = _run_git(worktree, ["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+    tree = _run_git(
+        worktree, ["rev-parse", "HEAD^{tree}"], cwd=worktree
+    ).stdout.strip()
+    return WorktreeResult(
+        branch=branch,
+        path=worktree,
+        base=base,
+        head=head,
+        tree=tree,
+        mailbox_count=len(mailboxes),
+    )
+
+
 def start_delta_worktree(
     name: str,
     path: Path,
@@ -640,7 +706,6 @@ def start_delta_worktree(
     _require_clean_delta(project_root)
 
     base = _read_base(project_root)
-    mailboxes = _read_series(project_root)
     branch = f"agent/delta-{name}"
     _run_git(project_root, ["check-ref-format", "--branch", branch])
     branch_exists = _run_git(
@@ -655,38 +720,7 @@ def start_delta_worktree(
         raise DeltaWorkflowError(detail)
 
     _run_git(project_root, ["worktree", "add", "-b", branch, str(path), base])
-    replay_environment = {
-        "GIT_COMMITTER_NAME": "herdr-win replay",
-        "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
-    }
-    try:
-        for mailbox in mailboxes:
-            _run_git(
-                project_root,
-                [
-                    "am",
-                    "--3way",
-                    str(project_root / "patches" / "delta" / mailbox),
-                ],
-                cwd=path,
-                environment=replay_environment,
-            )
-        _run_git(path, ["diff", "--check", f"{base}..HEAD"], cwd=path)
-    except DeltaWorkflowError as error:
-        raise DeltaWorkflowError(
-            f"delta replay stopped in {path}; preserve and inspect that worktree: {error}"
-        ) from error
-
-    head = _run_git(path, ["rev-parse", "HEAD"], cwd=path).stdout.strip()
-    tree = _run_git(path, ["rev-parse", "HEAD^{tree}"], cwd=path).stdout.strip()
-    return WorktreeResult(
-        branch=branch,
-        path=path,
-        base=base,
-        head=head,
-        tree=tree,
-        mailbox_count=len(mailboxes),
-    )
+    return materialize_delta_worktree(path, project_root)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -704,6 +738,17 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="absolute path below an existing parent",
+    )
+
+    materialize = commands.add_parser(
+        "materialize",
+        help="replay the queue into an existing clean task worktree at BASE",
+    )
+    materialize.add_argument(
+        "--worktree",
+        required=True,
+        type=Path,
+        help="absolute path to an existing agent/delta-* worktree at BASE",
     )
 
     check = commands.add_parser(
@@ -743,6 +788,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
     try:
         if options.command == "start":
             result = start_delta_worktree(options.name, options.path)
+            print(f"worktree: {result.path}")
+            print(f"branch: {result.branch}")
+            print(f"base: {result.base}")
+            print(f"head: {result.head}")
+            print(f"tree: {result.tree}")
+            print(f"mailboxes: {result.mailbox_count}")
+            return 0
+
+        if options.command == "materialize":
+            result = materialize_delta_worktree(options.worktree)
             print(f"worktree: {result.path}")
             print(f"branch: {result.branch}")
             print(f"base: {result.base}")

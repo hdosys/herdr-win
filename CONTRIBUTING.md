@@ -35,30 +35,62 @@ pull request. A useful bug report includes the herdr-win release tag, Windows
 version, terminal, shell, exact reproduction, current behavior, and expected
 behavior.
 
-## Updating the maintained delta
+## Developing the maintained delta
 
-Do not make a product-source edit only in this repository's working tree. The
-manual candidate-build operation builds a fresh checkout of recorded `BASE`, so
-product changes must be represented by the canonical queue.
+The patch queue is the release representation, not the day-to-day editing surface.
+Do not make a product-source edit only in this repository's control checkout. The
+manual candidate build starts from recorded `BASE`, so every finished product
+change must still be represented by the canonical queue.
 
-1. Start a clean temporary branch at the exact upstream commit already recorded
-   in `patches/delta/BASE`; ordinary changes never advance that base implicitly.
-2. Apply every entry in `patches/delta/series` with `git am --3way`.
-3. Make and focused-test the change in that replayed tree until its logical
-   behavior is frozen.
-4. Fold it into the patch that already owns the behavior. Add another patch only
-   for a genuinely independent responsibility.
-5. Regenerate the mailbox with `git format-patch --full-index --binary`, keeping
-   its stable filename and logical position.
-6. Replay the checked-in mailboxes again on a fresh checkout of that same recorded
-   base. Never rely on conflict resolution that exists only in a local branch.
+Use one replayed task worktree for one coherent product milestone. It may stay open
+across several days and many small edits. Do not use the end of a day or week as a
+mandatory patch boundary, and do not mix unrelated work merely to delay folding.
+Finalize before a product handoff, shared acceptance milestone, or release.
+
+Create the task tree once from the exact local commit already recorded in `BASE`:
+
+```powershell
+python scripts/delta_workflow.py start --name <task-slug> --path <absolute-new-path>
+```
+
+The helper creates a registered task branch, applies `series` once with
+`git am --3way`, and never queries or fetches official upstream. During iteration:
+
+1. Edit and commit normal source changes in that worktree.
+2. Run only formatting and the smallest tests or real boundary probe that exercise
+   the changed behavior.
+3. Do not regenerate mailboxes, create fresh replay trees, or run the release/native
+   matrix while the behavior is still moving.
+4. When behavior is frozen and the focused evidence passes, record its exact tree
+   with `git rev-parse 'HEAD^{tree}'`.
+
+Then finalize the complete milestone once:
+
+1. Fold its source commits into the existing mailbox that owns the behavior. Add a
+   mailbox only for a genuinely independent responsibility.
+2. Regenerate that mailbox with `git format-patch --full-index --binary`, keeping
+   its stable filename and logical position. Do not regenerate later mailboxes
+   merely because commit IDs changed. Refresh a later mailbox only when replay or
+   the intended final tree proves that its diff actually needs new context.
+3. Replay the checked-in queue into an isolated temporary Git index and require it
+   to reproduce the already tested source tree exactly:
+
+   ```powershell
+   python scripts/delta_workflow.py check --expected-tree <tested-tree-id>
+   ```
+
+4. Run the inventory tests below. A matching tree transfers the source evidence to
+   the checked-in queue, so mailbox regeneration alone does not require another
+   product gate.
+5. Review the ordinary source diff before folding and the final control diff after
+   folding. Commit and push the finished control milestone, then remove the task
+   worktree only after remote durability and ownership are clear.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning
-mailbox from its reviewed logical commit. Do not regenerate the mailbox or run the
-full replay/native matrix after every intermediate edit: use focused checks while
-the logical change is moving, then regenerate once and run broad gates on the
-frozen snapshot. Rerun only after relevant source or inputs change.
+mailbox from its reviewed logical commit. A replay conflict or tree mismatch is a
+real finalization blocker. Repeated builds, broad gates, and raw review of generated
+mailbox churn are not substitutes for source review plus exact tree identity.
 
 ### Refreshing from official upstream
 
@@ -152,14 +184,20 @@ repoint an asset.
 
 ## Verification
 
-At minimum, run the inventory checks from the control repository:
+At finalization, run the fast inventory checks from the control repository:
 
 ```powershell
 python -m unittest scripts.test_delta_patches scripts.test_upstream_patches
 ```
 
-Run formatting, Clippy, and tests in the freshly replayed source tree. Changes
-to Windows packaging also require the package and vendor checks:
+Run formatting and the smallest changed-behavior test in the replayed task tree
+before recording its tested tree ID. A successful `delta_workflow.py check`
+transfers that evidence to the checked-in queue without another checkout, compile,
+or test pass. Do not run blanket Clippy or all Rust tests for every ordinary edit.
+
+Changes to Windows packaging require the focused package and vendor checks. Run
+the full Clippy and native matrix only when the changed boundary or an explicit
+release assignment requires it:
 
 ```powershell
 python -m unittest scripts.test_package_windows_conpty scripts.test_windows_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
@@ -179,8 +217,8 @@ gate or equivalent real-platform evidence.
 
 Documentation, process, and canonical-owner-only changes that do not alter a
 mailbox or executable workflow use inline review, `git diff --check`, README mirror
-checks when applicable, and the queue inventory tests. They do not require an
-independent verifier, product replay, Rust gate, or native installer matrix.
+checks when applicable, and the queue inventory tests. They do not require product
+replay, a Rust gate, or the native installer matrix.
 
 ## Documentation
 

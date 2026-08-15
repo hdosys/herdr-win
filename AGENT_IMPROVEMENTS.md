@@ -20,18 +20,17 @@ configuration repository.
 
 ## Proposals
 
-- **Status: proposed. Add a repository-owned Windows mailbox replay helper.**
-  Evidence: this milestone repeated manual `worktree`/`format-patch` commands,
-  encountered linked-worktree safe-directory errors, and required a second cleanup
-  path after Git hit Windows path-length limits. A later replay also produced
-  unreadable Cargo build scripts in two fresh workspace target directories while
-  the same build succeeded with a Sandbox-local target. Proposed change: add one
-  bounded helper that creates a task worktree, folds one logical mailbox, uses
-  local temporary Cargo intermediates, publishes only the final workspace artifact,
-  verifies the patch, and removes the worktree with long-path support. Expected
-  benefit: fewer recovery branches, reliable native builds, safer cleanup, and
-  faster repeatable mailbox refreshes. Owner: `CONTRIBUTING.md` plus the future
-  helper and focused tests.
+- **Status: proposed. Automate the remaining mailbox finalization mechanics.**
+  Evidence: earlier milestones repeated manual `format-patch` and worktree cleanup,
+  hit Windows path-length and linked-worktree trust failures, and lost time to
+  unusable workspace-local Cargo intermediates. The accepted fast path now owns
+  one replayed task tree and exact tree verification, but logical folding, bounded
+  Cargo target selection, artifact publication, and proven-safe cleanup remain
+  manual. Proposed change: after real use confirms those steps still dominate,
+  extend `scripts/delta_workflow.py` with one bounded finalization operation.
+  Expected benefit: remove the remaining repeated mechanics without adding another
+  source authority. Owner: `scripts/delta_workflow.py`, its focused tests, and
+  `CONTRIBUTING.md`.
 
 - **Status: proposed. Add a repository-owned local Windows input acceptance probe.**
   Evidence: a task-local probe hardcoded the development state directory and used

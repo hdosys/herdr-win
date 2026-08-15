@@ -19,8 +19,9 @@ Before editing, classify the change:
   project's contribution policy. Do not use the fork to bypass upstream review.
 - **Maintained Windows behavior:** update the owning logical mailbox in
   `patches/delta/`.
-- **Fork control plane:** edit repository branding, patch inventory tests, or the
-  two workflows directly in this repository.
+- **Fork control plane:** edit repository branding, contributor and delta-workflow
+  automation, patch inventory tests, or the two workflows directly in this
+  repository.
 - **Frozen patch archive:** do not refresh or rename files in
   `patches/upstream/`; existing links must remain valid.
 - **Stable user-visible fork behavior:** update `PRODUCT.md`, the owning logical
@@ -30,10 +31,11 @@ Before editing, classify the change:
 - **Open product work or process improvements:** use `BACKLOG.md` or
   `AGENT_IMPROVEMENTS.md` respectively; do not leave them in task logs.
 
-For a substantial change, open an issue in this fork to align on scope before a
-pull request. A useful bug report includes the herdr-win release tag, Windows
-version, terminal, shell, exact reproduction, current behavior, and expected
-behavior.
+Open an issue only when a substantial change still needs product or architecture
+scope alignment before implementation. A bounded change whose scope is already
+accepted does not wait on issue ceremony. A useful bug report includes the
+herdr-win release tag, Windows version, terminal, shell, exact reproduction,
+current behavior, and expected behavior.
 
 ## Developing the maintained delta
 
@@ -42,11 +44,13 @@ Do not make a product-source edit only in this repository's control checkout. Th
 manual candidate build starts from recorded `BASE`, so every finished product
 change must still be represented by the canonical queue.
 
-Iteration is the default. Reuse one replayed WIP worktree for product changes that
-will be finalized together. It may stay open across days and agent sessions and
-follows the global shared-checkout coordination rules. Changes that require
-independent finalization use a separate branch and worktree because tree identity
-covers the complete replayed source tree.
+A replayed task worktree is required only for maintained product-source changes,
+because the patch queue is their release representation. Documentation and
+control-plane changes stay in the control checkout. Use one task worktree for one
+accepted logical milestone and reuse it only while that same milestone remains
+active. Size alone does not justify another worktree. Independent milestones use
+separate branches and worktrees because tree identity covers the complete replayed
+source tree.
 
 Create the task tree once from the exact local commit already recorded in `BASE`:
 
@@ -59,24 +63,29 @@ so it survives Sandbox replacement. The helper creates a registered task branch,
 applies `series` once with `git am --3way`, and never queries or fetches official
 upstream.
 
-Finalization starts only from a current user instruction containing `Finalize` or
-`finalisieren` and naming the exact milestone. Until that instruction arrives:
+The task owner completes the accepted milestone end to end and does not wait for a
+second user instruction before finalizing it. During iteration:
 
-1. Edit and commit coherent source checkpoints in that worktree. Push the WIP
-   branch frequently for remote backup. Its first push uses
-   `git push --set-upstream origin HEAD`; later checkpoints use `git push`.
-2. Run only formatting and the smallest tests or real boundary probe that exercise
-   the changed behavior.
-3. Report the worktree, branch, source commit, owned files and resources, and focused
-   evidence at handoff.
-4. Leave mailboxes, final replay, the control branch, and worktree removal
-   untouched. A WIP-branch push is not finalization.
+1. Edit the replayed source directly and run only the required formatter plus the
+   smallest test or real boundary probe that exercises the changed behavior.
+2. When the change has a local package or installer path, build and report the
+   first coherent artifact at its canonical `target/` path now. Queue inventory,
+   fresh replay, broad lint, and native or release matrices do not precede that
+   artifact unless an exact unsafe boundary has no cheaper reliable evidence.
+3. Review the ordinary source diff, commit the focused-tested source milestone,
+   and record `git rev-parse 'HEAD^{tree}'`. Long or resumable work may push
+   coherent source checkpoints for recovery, but checkpoint mechanics never delay
+   the first artifact or a ready finalization.
+4. At a handoff, report the worktree, branch, source commit, owned files and
+   resources, focused evidence, and artifact when applicable.
 
-After the explicit finalization instruction, one session owns the frozen final path:
+As soon as that accepted source milestone is frozen, one session owns the final
+path:
 
-1. Reinspect shared ownership, collect completed handoffs, stop overlapping writes,
-   run the focused gate, and record `git rev-parse 'HEAD^{tree}'`.
-2. Run the explicit finalizer with that tree and the existing mailbox that owns the
+1. Reinspect shared ownership, collect completed handoffs, and stop overlapping
+   writes. Reuse the focused evidence while its source, inputs, and environment
+   assumptions remain unchanged.
+2. Run the finalizer with the recorded tree and the existing mailbox that owns the
    behavior:
 
    ```powershell
@@ -93,9 +102,9 @@ After the explicit finalization instruction, one session owns the frozen final p
 3. Run the inventory tests below. A matching tree transfers the source evidence to
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.
-4. Review the ordinary source diff before folding and the final control diff after
-   folding. Commit and push the finished control milestone, then remove the task
-   worktree only after remote durability and ownership are clear.
+4. Review the final control diff after folding. Commit and push the finished
+   control milestone, then remove the task worktree only after remote durability
+   and ownership are clear.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning
@@ -202,34 +211,46 @@ python -m unittest scripts.test_delta_patches scripts.test_upstream_patches
 ```
 
 Run formatting and the smallest changed-behavior test in the replayed task tree
-before recording its tested tree ID. A successful `delta_workflow.py check`
-transfers that evidence to the checked-in queue without another checkout, compile,
-or test pass. Do not run blanket Clippy or all Rust tests for every ordinary edit.
+before recording its tested tree ID. The finalizer's exact tree match transfers
+that evidence to the checked-in queue without another checkout, compile, or test
+pass. Do not run blanket Clippy or all Rust tests for every ordinary edit.
 
-Changes to Windows packaging require the focused package and vendor checks. Run
-the full Clippy and native matrix only when the changed boundary or an explicit
-release assignment requires it:
+For Windows packaging changes, select only the focused package or vendor modules
+that own the changed boundary rather than running the whole list by default:
 
 ```powershell
-python -m unittest scripts.test_package_windows_conpty scripts.test_windows_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
-cargo fmt --check
+python -m unittest scripts.test_package_windows_conpty
+python -m unittest scripts.test_windows_installer
+python -m unittest scripts.test_vendor_libghostty_vt
+python -m unittest scripts.test_vendor_portable_pty
+```
+
+After the first artifact, run Windows-target Clippy only when the exact changed
+boundary requires it. Broad native and cross-platform matrices belong to an
+explicit release or unattended verification assignment:
+
+```powershell
 cargo clippy --bins --locked --target x86_64-pc-windows-msvc -- -D warnings
 ```
 
-Use the manually dispatched workflow's `build` operation for the Linux/macOS target
-builds and machine checks as well as the signed ConPTY package, enhanced-input,
-native quiet-uninstall checks, installer-helper lifecycle and fault-retry matrix,
-managed launcher, and system-fallback gates that depend on GitHub's Windows runner.
+An explicit release assignment uses the manually dispatched workflow's `build`
+operation for the Linux/macOS target builds and machine checks as well as the
+signed ConPTY package, enhanced-input, native quiet-uninstall checks,
+installer-helper lifecycle and fault-retry matrix, managed launcher, and
+system-fallback gates that depend on GitHub's Windows runner.
 
 Workflow changes require `actionlint` plus review of triggers, permissions,
 credential persistence, immutable source identity, artifact digests, and failure
-behavior. Native package or installer changes require the corresponding release
-gate or equivalent real-platform evidence.
+behavior. Native package or installer changes build and report the local artifact
+first, then run the smallest equivalent real-platform evidence. The full release
+gate remains reserved for an explicit release assignment.
 
 Documentation, process, and canonical-owner-only changes that do not alter a
 mailbox or executable workflow use inline review, `git diff --check`, README mirror
-checks when applicable, and the queue inventory tests. They do not require product
-replay, a Rust gate, or the native installer matrix.
+checks when applicable. Run queue inventory tests only when the change touches
+`BASE`, `series`, mailbox or archive invariants, or their control scripts. Pure
+documentation and process changes do not require product replay, a Rust gate, or
+the native installer matrix.
 
 ## Documentation
 

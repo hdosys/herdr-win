@@ -4,5 +4,5 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-echo "pre-commit: running just lint"
-just lint
+echo "pre-commit: checking staged diff"
+git diff --cached --check

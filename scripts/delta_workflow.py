@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize, explicitly finalize, and verify the maintained delta."""
+"""Materialize, finalize, and verify the maintained delta."""
 
 from __future__ import annotations
 
@@ -691,7 +691,7 @@ def start_delta_worktree(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Materialize, explicitly finalize, and verify the herdr-win delta."
+        description="Materialize, finalize, and verify the herdr-win delta."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -716,7 +716,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     finalize = commands.add_parser(
         "finalize",
-        help="fold one explicitly finalized WIP tree into its owning mailbox",
+        help="fold one tested WIP tree into its owning mailbox",
     )
     finalize.add_argument(
         "--worktree",

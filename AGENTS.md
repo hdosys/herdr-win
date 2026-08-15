@@ -1,9 +1,11 @@
 # herdr-win repository overlay
 
 The global OpenCode working agreement owns reusable personal workflow. This file
-owns only herdr-win repository behavior and constraints; it overrides global
-defaults where they differ. Do not copy global workflow or create project
-`.opencode/` configuration.
+owns only herdr-win repository invariants and must not restate or silently
+override generic delivery procedure. Project-specific commands select exact
+owners and unsafe boundaries while the global interactive ordering remains
+authoritative. Do not copy global workflow or create project `.opencode/`
+configuration.
 
 ## Canonical owners and precedence
 

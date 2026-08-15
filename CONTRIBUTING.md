@@ -74,8 +74,9 @@ python scripts/delta_workflow.py start --name <task-slug> --path <durable-absolu
 repository identity, and exact `BASE` before applying `series` once with
 `git am --3way`. Neither path queries or fetches official upstream.
 
-The task owner completes the accepted milestone end to end and does not wait for a
-second user instruction before finalizing it. During iteration:
+The default interactive result is a verified, remotely backed up source candidate,
+not an updated mailbox. Candidate work stays within one logical mailbox owner and
+one accepted milestone. During candidate iteration:
 
 1. Edit the replayed source directly and run only the required formatter plus the
    smallest test or real boundary probe that exercises the changed behavior.
@@ -83,15 +84,26 @@ second user instruction before finalizing it. During iteration:
    first coherent artifact at its canonical `target/` path now. Queue inventory,
    fresh replay, broad lint, and native or release matrices do not precede that
    artifact unless an exact unsafe boundary has no cheaper reliable evidence.
-3. Review the ordinary source diff, commit the focused-tested source milestone,
-   and record `git rev-parse 'HEAD^{tree}'`. Long or resumable work may push
-   coherent source checkpoints for recovery, but checkpoint mechanics never delay
-   the first artifact or a ready finalization.
-4. At a handoff, report the worktree, branch, source commit, owned files and
-   resources, focused evidence, and artifact when applicable.
+3. Review the ordinary source diff, commit the focused-tested source candidate,
+   and record `git rev-parse 'HEAD^{tree}'`.
+4. Push each coherent artifact-backed commit as a fast-forward remote backup. The
+   remote candidate ref, not the worktree, is the durable owner:
 
-As soon as that accepted source milestone is frozen, one session owns the final
-path:
+   ```powershell
+   git push origin "HEAD:refs/heads/candidate/<mailbox-id>/<task-slug>"
+   ```
+
+   Never force-push a candidate. A non-fast-forward failure is an ownership or
+   integration blocker. Do not rely on a Sandbox or worktree surviving.
+5. Report the worktree, local and remote branches, source commit and tree, owned
+   files and resources, focused evidence, and artifact. Then stop. Do not regenerate
+   a mailbox, modify the control checkout, push `master`, or remove the candidate
+   worktree.
+
+Mailbox promotion requires a later explicit current-user instruction that names
+the candidate and owning mailbox. The original implementation request, elapsed
+time, a passing candidate, a nightly process, or an agent recommendation is not
+promotion approval. After approval, one session owns the complete promotion path:
 
 1. Reinspect shared ownership, collect completed handoffs, and stop overlapping
    writes. Reuse the focused evidence while its source, inputs, and environment
@@ -115,13 +127,58 @@ path:
    product gate.
 4. Review the final control diff after folding. Commit and push the finished
    control milestone, then remove the task worktree through the lifecycle that
-   created it only after remote durability and ownership are clear.
+   created it only after remote durability and ownership are clear. Candidate
+   branch retention or deletion is a separate explicit maintenance decision.
+
+There is no scheduled or nightly delta replay. Run replay and mailbox inventory
+only during an explicitly approved promotion, an explicitly assigned release, or
+a separately requested diagnosis. A release and any `BASE` refresh remain blocked
+until every selected candidate has been promoted into the canonical queue.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning
 mailbox from its reviewed logical commit. A replay conflict or tree mismatch is a
-real finalization blocker. Repeated builds, broad gates, and raw review of generated
+real promotion blocker. Repeated builds, broad gates, and raw review of generated
 mailbox churn are not substitutes for source review plus exact tree identity.
+
+### Fast local Windows installer candidates
+
+The control checkout owns one thin local entrypoint that reuses the materialized
+source packager. It adds no installer implementation. Prepare a persistent ignored
+input bundle only when the runtime, launcher, helper, or staged ConPTY payload
+changes:
+
+```powershell
+python scripts/local_windows_installer.py prepare `
+  --source-worktree <materialized-source-worktree> `
+  --stage-dir <validated-stage-directory> `
+  --launcher-exe <herdr-launcher.exe> `
+  --installer-helper-exe <herdr-installer-helper.exe>
+```
+
+The command copies only regular non-reparse inputs below
+`target/x86_64-pc-windows-msvc/installer-inputs/<build-id>/`, records every file
+SHA-256, and binds the bundle to the runtime and launcher identities. It never
+extracts a prior setup with 7-Zip. The source ConPTY validator remains the stage
+owner.
+
+For installer, artwork, copy, validator, or packaging-only iterations, reuse that
+bundle without rebuilding Rust payloads:
+
+```powershell
+python scripts/local_windows_installer.py build `
+  --source-worktree <materialized-source-worktree> `
+  --input-bundle <reported-input-bundle>
+```
+
+Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtime
+and launcher identity, then delegates to the materialized source's existing NSIS
+packager. The setup is written to the one short replaceable path
+`target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
+reports its new hash. A known packaging-only edit must reach that artifact within
+two minutes of the user request; candidate commit, remote backup, and promotion are
+separate timings. Missing or corrupt inputs are a clear preparation blocker, not
+authority to unpack an old installer or repeatedly rebuild unchanged payloads.
 
 ### Refreshing from official upstream
 
@@ -215,7 +272,7 @@ repoint an asset.
 
 ## Verification
 
-At finalization, run the fast inventory checks from the control repository:
+During explicit promotion, run the fast inventory checks from the control repository:
 
 ```powershell
 python -m unittest scripts.test_delta_patches scripts.test_upstream_patches

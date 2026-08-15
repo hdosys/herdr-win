@@ -155,6 +155,16 @@ behavior; code and tests remain the detailed implementation truth.
   reporting failure. The helper publishes the result and deletes its handoff after
   the waiting process exits. Fresh installs, updates, quiet uninstall, and post-exit
   maintenance therefore ship and invoke no PowerShell payload.
+- For a normal exact managed root, uninstall validates the root while holding the
+  lifecycle mutex, resolves Active, opens that build's shared lease, and invokes
+  `runtime/<active-build-id>/herdr.exe` directly with one exact hidden shutdown
+  token. It never enters the stable launcher, so shutdown cannot activate Pending
+  state before launcher coordination. The runtime enumerates default and named
+  sessions and requests graceful server stops under one 30-second total deadline.
+  The helper contains that command in a private job with a 35-second deadline and
+  terminates only the command job on timeout. Any session that remains reachable,
+  or any active or ambiguous installed process or lease, aborts uninstall before
+  destructive mutation.
 - NSIS accepts `/WINGET` as the sole explicit package-manager origin signal and
   passes a bounded Direct/WinGet value into the helper. The helper owns the optional
   strict UTF-8 `state/package-manager` record; only the exact
@@ -184,17 +194,18 @@ behavior; code and tests remain the detailed implementation truth.
   is acquired, any stale regular staging tree is disposable and its grammar never
   decides whether the user's requested operation may continue. Cleanup failure
   preserves that private staging with a warning. Uninstall has no sibling
-  transaction, cleanup manifest, or rollback parser. Under the launcher gate it
-  validates active processes and leases, publishes `state/uninstall.pending`, then
-  atomically renames each validated `bin` and immutable runtime directory into
-  disposable same-parent uninstall staging before best-effort deletion. Interruption
-  therefore cannot leave a partially deleted managed directory. The remaining exact
-  residual keeps that marker as its final filesystem ownership sentinel while PATH
-  and Installed Apps cleanup runs with both retry commands still present. Final
-  cleanup enumerates the residual again before removing the marker. Bounded
-  in-memory snapshots restore only the actual control bytes and exact registry state
-  changed by this attempt; they add no persistent journal or second recovery
-  authority.
+  transaction, cleanup manifest, or rollback parser. Before taking the launcher
+  gate, a normal exact root completes the bounded session shutdown above. Under the
+  gate it validates active processes and leases, publishes
+  `state/uninstall.pending`, then atomically renames each validated `bin` and
+  immutable runtime directory into disposable same-parent uninstall staging before
+  best-effort deletion. Interruption therefore cannot leave a partially deleted
+  managed directory. The remaining exact residual keeps that marker as its final
+  filesystem ownership sentinel while PATH and Installed Apps cleanup runs with
+  both retry commands still present. Final cleanup enumerates the residual again
+  before removing the marker. Bounded in-memory snapshots restore only the actual
+  control bytes and exact registry state changed by this attempt; they add no
+  persistent journal or second recovery authority.
 - Payload launch independently acquires `state/launcher.lock`, validates the stable
   launcher, and rejects any present `state/uninstall.pending` marker before runtime
   selection or `CreateProcess`. Thus a killed uninstaller cannot admit a new session

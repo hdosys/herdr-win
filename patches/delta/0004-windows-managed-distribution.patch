@@ -1,4 +1,4 @@
-From b49794449dcc65e6c6983bbeee9c85d8e47a3089 Mon Sep 17 00:00:00 2001
+From 07c04f111c29c7e101955ec1dc905f8f5c2ced1c Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -26,19 +26,19 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  .../installer-welcome-finish-287x550.bmp      |  Bin 0 -> 475254 bytes
  .../installer-welcome-finish-328x628.bmp      |  Bin 0 -> 618006 bytes
  .../installer-welcome-finish-source.png       |  Bin 0 -> 1698169 bytes
- packaging/windows/installer/project.nsi       |  544 ++++
+ packaging/windows/installer/project.nsi       |  598 ++++
  .../windows/installer/validate-build.ps1      |  207 ++
  packaging/windows/managed-skill-hashes.txt    |    3 +
  scripts/package_windows_conpty.py             |   39 +-
- scripts/package_windows_installer.ps1         |  608 ++++
+ scripts/package_windows_installer.ps1         |  612 ++++
  scripts/preview.py                            |  167 +-
  scripts/test_package_windows_conpty.py        |   36 +-
  scripts/test_preview.py                       |  282 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  540 ++++
+ scripts/test_windows_installer.py             |  610 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1165 +++++++
+ scripts/windows_installer_fault_test.ps1      | 1258 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -51,28 +51,29 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  src/config.rs                                 |    2 +-
  src/config/model.rs                           |   49 -
  src/distribution.rs                           |   42 +
- src/main.rs                                   |   24 +-
- src/managed_install.rs                        |  318 ++
+ src/main.rs                                   |   73 +-
+ src/managed_install.rs                        |  322 ++
  src/platform/mod.rs                           |   25 +
  src/platform/windows.rs                       |  152 +-
  src/platform/windows/installer_helper.rs      |  215 ++
- .../windows/installer_helper_files.rs         | 1014 +++++++
- .../windows/installer_helper_lifecycle.rs     | 2674 +++++++++++++++++
+ .../windows/installer_helper_files.rs         | 1014 ++++++
+ .../windows/installer_helper_lifecycle.rs     | 2773 +++++++++++++++++
  .../windows/installer_helper_registry.rs      |  937 ++++++
  .../windows/installer_helper_skills.rs        |  408 +++
  src/platform/windows/launcher.rs              | 1084 +++++++
- src/platform/windows/managed_install.rs       |  689 +++++
+ src/platform/windows/managed_install.rs       |  689 ++++
  src/product_announcements.rs                  |    4 +-
  src/release_notes.rs                          |   59 +-
  src/remote/attach.rs                          |   23 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
+ src/session.rs                                |   57 +
  src/update.rs                                 | 1059 +++++--
  tests/api_ping.rs                             |   11 +-
  tests/cli/sessions.rs                         |   32 +-
  website/agent-guide.md                        |    7 +-
  website/index.html                            |    2 +-
- website/install.ps1                           |  688 -----
+ website/install.ps1                           |  688 ----
  website/scripts/prepare-docs.mjs              |    1 -
  website/src/content/docs/install.mdx          |   32 +-
  website/src/content/docs/ja/install.mdx       |    8 +-
@@ -80,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 76 files changed, 12448 insertions(+), 1651 deletions(-)
+ 77 files changed, 12878 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -52067,11 +52068,15 @@ HcmV?d00001
 
 diff --git a/packaging/windows/installer/project.nsi b/packaging/windows/installer/project.nsi
 new file mode 100644
-index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd50a22b60
+index 0000000000000000000000000000000000000000..f0cb1bfb97e291308c7440a43fe9d3e959f2c5f4
 --- /dev/null
 +++ b/packaging/windows/installer/project.nsi
-@@ -0,0 +1,544 @@
-+; Product identity, payloads, and runtime protocol names are build inputs.
+@@ -0,0 +1,598 @@
++; Managed-runtime adaptation of the reviewed per-user NSIS 3.12 / MUI2 template.
++; Product identity and payload names remain validated build inputs. The native
++; helper deliberately owns immutable-runtime lifecycle, PATH and Installed
++; Apps state, quiet uninstall, and final root cleanup. NSIS owns wizard flow,
++; exact option parsing, embedded inputs, cancellation, progress, and terminal UI.
 +!ifndef ARG_STAGE_DIR
 +  !error "ARG_STAGE_DIR is required"
 +!endif
@@ -52141,7 +52146,11 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +Unicode true
 +!define APP_LANG_ENGLISH 1033
-+!define APP_ENVIRONMENT_BROADCAST_TIMEOUT_MS 100
++!define APP_ENVIRONMENT_BROADCAST_TIMEOUT_MS 250
++!define APP_EXIT_INVALID_ARGUMENTS 30
++!define APP_EXIT_UNSUPPORTED_PLATFORM 50
++!define APP_EXIT_INSTALL_FAILED 70
++!define APP_EXIT_UNINSTALL_FAILED 80
 +
 +Name "${INFO_DISTRIBUTIONNAME}"
 +Caption "${INFO_DISTRIBUTIONNAME} Setup"
@@ -52158,6 +52167,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +ShowUninstDetails show
 +AutoCloseWindow true
 +ManifestDPIAware true
++ManifestSupportedOS all
 +VIProductVersion "${INFO_PRODUCTVERSION_FIXED}"
 +VIFileVersion "${INFO_PRODUCTVERSION_FIXED}"
 +VIAddVersionKey /LANG=${APP_LANG_ENGLISH} "ProductName" "${INFO_DISTRIBUTIONNAME}"
@@ -52178,6 +52188,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +Var HelperExitCode
 +Var HelperOutput
++Var FailureExitCode
 +Var StartGate
 +Var InstallManager
 +Var SettingsDisposition
@@ -52209,6 +52220,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +!define MUI_WELCOMEPAGE_TITLE "Install ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}"
 +!define MUI_WELCOMEPAGE_TEXT "This setup installs ${INFO_DISTRIBUTIONNAME}, an unofficial Windows distribution of ${INFO_PRODUCTNAME}. It advances Windows support by applying this fork's patches to the latest reviewed stable ${INFO_PRODUCTNAME} ${INFO_UPSTREAMVERSION} release.$\r$\n$\r$\nNo administrator access is required. Open a new terminal after setup so it can find ${INFO_COMMANDNAME} on PATH."
 +!define MUI_FINISHPAGE_NOREBOOTSUPPORT
++!define MUI_FINISHPAGE_TEXT_LARGE
 +!define MUI_FINISHPAGE_TITLE "${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI} is installed"
 +!define MUI_FINISHPAGE_TEXT "Setup completed successfully.$\r$\n$\r$\n${INFO_DISTRIBUTIONNAME} is an unofficial distribution; the command remains ${INFO_COMMANDNAME} and no application window opens.$\r$\n$\r$\nOpen a new terminal, then run:$\r$\n${INFO_COMMANDNAME}"
 +!define MUI_FINISHPAGE_LINK "Open ${INFO_DISTRIBUTIONNAME} setup and usage guide"
@@ -52227,7 +52239,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +LangString AppSettingsPageTitle ${LANG_ENGLISH} "Remove local ${INFO_DISTRIBUTIONNAME} data"
 +LangString AppSettingsPageSubtitle ${LANG_ENGLISH} "Choose what remains after uninstall."
-+LangString AppSettingsPageText ${LANG_ENGLISH} "Uninstall always removes the managed program, user PATH entry, and Windows Installed Apps registration. Unmodified skill copies are selected for removal; customized copies are kept unless you select skill removal. Other files in those skill folders are never removed. Settings and session data are also kept unless selected."
++LangString AppSettingsPageText ${LANG_ENGLISH} "Uninstall stops running managed sessions, then removes the managed program, user PATH entry, and Windows Installed Apps registration. Unmodified skill copies are selected for removal; customized copies are kept unless you select skill removal. Other files in those skill folders are never removed. Settings and session data are also kept unless selected."
 +LangString AppSkillCheckbox ${LANG_ENGLISH} "Remove installed ${INFO_PRODUCTNAME} skill copies, including customized SKILL.md files"
 +LangString AppSettingsCheckbox ${LANG_ENGLISH} "Also delete ${INFO_PRODUCTNAME} settings and session data"
 +LangString AppDetailRemoveSettings ${LANG_ENGLISH} "Removing ${INFO_PRODUCTNAME} settings and session data..."
@@ -52270,7 +52282,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +  IfSilent install_failure_silent
 +  MessageBox MB_OK|MB_ICONSTOP "$0"
 +install_failure_silent:
-+  SetErrorLevel 1
++  SetErrorLevel $FailureExitCode
 +  Quit
 +FunctionEnd
 +
@@ -52315,7 +52327,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +  IfSilent uninstall_failure_silent
 +  MessageBox MB_OK|MB_ICONSTOP "$0"
 +uninstall_failure_silent:
-+  SetErrorLevel 1
++  SetErrorLevel $FailureExitCode
 +  Quit
 +FunctionEnd
 +
@@ -52340,7 +52352,17 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +FunctionEnd
 +
 +Function SelectInstallerWelcomeBitmap
-+  System::Call 'USER32::GetDpiForWindow(p $HWNDPARENT)i.r0'
++  InitPluginsDir
++  System::Call 'KERNEL32::GetModuleHandleW(w "USER32.DLL") p.r0'
++  System::Call 'KERNEL32::GetProcAddress(p r0, m "GetDpiForWindow") p.r1'
++  ${If} $1 == 0
++    StrCpy $0 96
++  ${Else}
++    System::Call '::$1(p $HWNDPARENT)i.r0'
++    ${If} $0 == 0
++      StrCpy $0 96
++    ${EndIf}
++  ${EndIf}
 +  ${If} $0 >= 180
 +    File "/oname=$PLUGINSDIR\modern-wizard.bmp" "${INSTALLER_WELCOME_BITMAP_200}"
 +  ${ElseIf} $0 >= 156
@@ -52398,6 +52420,9 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +Function .onInit
 +  SetShellVarContext current
++  StrCpy $FailureExitCode ${APP_EXIT_INSTALL_FAILED}
++  StrCpy $InstallManager "Direct"
++  StrCpy $InstallMutationActive "0"
 +  !ifdef TEST_USER_PROFILE_ROOT
 +    StrCpy $INSTDIR "${TEST_USER_PROFILE_ROOT}\AppData\Local\Programs\${INFO_PRODUCTNAME}"
 +  !else
@@ -52410,16 +52435,20 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +  StrCpy $INSTDIR "$PROFILE\AppData\Local\Programs\${INFO_PRODUCTNAME}"
 +installer_local_appdata_ready:
 +  !endif
-+  StrCpy $InstallManager "Direct"
-+  StrCpy $InstallMutationActive "0"
 +  ${GetParameters} $0
-+  StrCpy $2 "$0 "
-+  ClearErrors
-+  ${GetOptions} "$2" "/WINGET " $1
-+  ${IfNot} ${Errors}
-+    StrCpy $InstallManager "WinGet"
-+  ${EndIf}
++  StrCmp $0 "" installer_arguments_ready
++  StrCmp $0 "/S" installer_arguments_ready
++  StrCmp $0 "/WINGET" installer_winget_arguments
++  StrCmp $0 "/S /WINGET" installer_winget_arguments
++  StrCmp $0 "/WINGET /S" installer_winget_arguments
++  StrCpy $FailureExitCode ${APP_EXIT_INVALID_ARGUMENTS}
++  Push "Unsupported setup arguments. Use only /S and the exact /WINGET option."
++  Call FailInstall
++installer_winget_arguments:
++  StrCpy $InstallManager "WinGet"
++installer_arguments_ready:
 +  ${IfNot} ${RunningX64}
++    StrCpy $FailureExitCode ${APP_EXIT_UNSUPPORTED_PLATFORM}
 +    Push "${INFO_DISTRIBUTIONNAME} requires 64-bit Windows."
 +    Call FailInstall
 +  ${EndIf}
@@ -52428,6 +52457,7 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +Function un.onInit
 +  SetShellVarContext current
++  StrCpy $FailureExitCode ${APP_EXIT_UNINSTALL_FAILED}
 +  StrCmp $PROFILE "" 0 uninstaller_profile_ready
 +  Push "The current Windows user profile is unavailable; uninstall preserved the existing installation."
 +  Call un.FailUninstall
@@ -52439,32 +52469,53 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +  StrCpy $QuietHelperArgs ""
 +  StrCpy $InstallMutationActive "0"
 +  ${GetParameters} $0
-+  StrCpy $2 "$0 "
++  StrCmp $0 "" un_arguments_ready
++  StrCmp $0 "/S" un_arguments_ready
++  StrCmp $0 "/REMOVE_SETTINGS" un_arguments_settings
++  StrCmp $0 "/S /REMOVE_SETTINGS" un_arguments_settings
++  StrCmp $0 "/REMOVE_SETTINGS /S" un_arguments_settings
++  StrCmp $0 "/REMOVE_SKILL" un_arguments_skill
++  StrCmp $0 "/S /REMOVE_SKILL" un_arguments_skill
++  StrCmp $0 "/REMOVE_SKILL /S" un_arguments_skill
++  StrCmp $0 "/REMOVE_SETTINGS /REMOVE_SKILL" un_arguments_both
++  StrCmp $0 "/REMOVE_SKILL /REMOVE_SETTINGS" un_arguments_both
++  StrCmp $0 "/S /REMOVE_SETTINGS /REMOVE_SKILL" un_arguments_both
++  StrCmp $0 "/S /REMOVE_SKILL /REMOVE_SETTINGS" un_arguments_both
++  StrCmp $0 "/REMOVE_SETTINGS /S /REMOVE_SKILL" un_arguments_both
++  StrCmp $0 "/REMOVE_SETTINGS /REMOVE_SKILL /S" un_arguments_both
++  StrCmp $0 "/REMOVE_SKILL /S /REMOVE_SETTINGS" un_arguments_both
++  StrCmp $0 "/REMOVE_SKILL /REMOVE_SETTINGS /S" un_arguments_both
++  Goto un_quiet_probe
++un_arguments_settings:
++  StrCpy $SettingsDisposition "Remove"
++  Goto un_arguments_ready
++un_arguments_skill:
++  StrCpy $SkillDisposition "Remove"
++  Goto un_arguments_ready
++un_arguments_both:
++  StrCpy $SettingsDisposition "Remove"
++  StrCpy $SkillDisposition "Remove"
++  Goto un_arguments_ready
++un_quiet_probe:
 +  ClearErrors
-+  ${GetOptions} "$2" "/REMOVE_SETTINGS " $1
-+  ${IfNot} ${Errors}
-+    StrCpy $SettingsDisposition "Remove"
++  ${GetOptionsS} "$0" "/NATIVE_QUIET_RUNNER_PID=" $QuietRunnerPid
++  ${If} ${Errors}
++    Goto un_arguments_invalid
 +  ${EndIf}
 +  ClearErrors
-+  ${GetOptions} "$2" "/REMOVE_SKILL " $1
-+  ${IfNot} ${Errors}
-+    StrCpy $SkillDisposition "Remove"
++  ${GetOptionsS} "$0" "/NATIVE_QUIET_TOKEN=" $QuietToken
++  ${If} ${Errors}
++    Goto un_arguments_invalid
 +  ${EndIf}
-+  ClearErrors
-+  ${GetOptions} "$2" "/NATIVE_QUIET_RUNNER_PID=" $QuietRunnerPid
-+  ClearErrors
-+  ${GetOptions} "$2" "/NATIVE_QUIET_TOKEN=" $QuietToken
-+  StrCmp $QuietRunnerPid "" un_quiet_pid_missing un_quiet_pid_present
-+un_quiet_pid_missing:
-+  StrCmp $QuietToken "" un_quiet_ready un_quiet_invalid
-+un_quiet_pid_present:
-+  StrCmp $QuietToken "" un_quiet_invalid 0
-+  StrCpy $QuietHelperArgs '--quiet-runner-process-id "$QuietRunnerPid" --quiet-token "$QuietToken"'
-+  Goto un_quiet_ready
-+un_quiet_invalid:
-+  Push "Native quiet uninstall received an incomplete rendezvous."
++  StrCpy $1 "/S /NATIVE_QUIET_RUNNER_PID=$QuietRunnerPid /NATIVE_QUIET_TOKEN=$QuietToken"
++  StrCmp $0 $1 un_quiet_ready un_arguments_invalid
++un_arguments_invalid:
++  StrCpy $FailureExitCode ${APP_EXIT_INVALID_ARGUMENTS}
++  Push "Unsupported uninstall arguments. Use only /S, /REMOVE_SETTINGS, /REMOVE_SKILL, or the native quiet-uninstall rendezvous."
 +  Call un.FailUninstall
 +un_quiet_ready:
++  StrCpy $QuietHelperArgs '--quiet-runner-process-id "$QuietRunnerPid" --quiet-token "$QuietToken"'
++un_arguments_ready:
 +  InitPluginsDir
 +  SetOutPath "$PLUGINSDIR"
 +  ClearErrors
@@ -52553,6 +52604,8 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +
 +installer_inputs_ready:
 +  DetailPrint "Validating and activating ${INFO_DISTRIBUTIONNAME} ${INFO_PRODUCTVERSION_UI}..."
++  ; Deliberate managed-runtime deviation: setup publishes a pending immutable
++  ; runtime instead of stopping active sessions. Future launches activate it.
 +  StrCpy $InstallMutationActive "1"
 +  Call DisableInstallCancellation
 +  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" install --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --package-root "$PLUGINSDIR" --build-id "${APP_BUILD_ID}" --display-version "${INFO_PRODUCTVERSION_DISPLAY}" --numeric-version "${INFO_PRODUCTVERSION_FIXED}" --install-manager "$InstallManager" ${APP_INSTALL_FAULT_ARGS}'
@@ -52582,7 +52635,9 @@ index 0000000000000000000000000000000000000000..f5c6de960b794c85cc52b78a4ed45cfd
 +Section "Uninstall"
 +  SetAutoClose true
 +  ; The uninstaller carries its own native helper so every retry uses one
-+  ; validation and lifecycle-lock owner after installed state is removed.
++  ; validation and lifecycle-lock owner. That helper stops managed sessions
++  ; under the installer mutex before taking the launch gate or mutating state.
++  DetailPrint "Stopping running ${INFO_DISTRIBUTIONNAME} sessions before uninstall..."
 +  StrCpy $InstallMutationActive "1"
 +  Call un.DisableUninstallCancellation
 +  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\installer-helper.exe" uninstall --install-root "$INSTDIR" --user-profile-root "${APP_USER_PROFILE_ROOT}" --settings-disposition "$SettingsDisposition" --skill-hash-manifest "$PLUGINSDIR\managed-skill-hashes.txt" --skill-disposition "$SkillDisposition" ${APP_UNINSTALL_FAULT_ARGS} $QuietHelperArgs'
@@ -52947,10 +53002,10 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  if __name__ == "__main__":
 diff --git a/scripts/package_windows_installer.ps1 b/scripts/package_windows_installer.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..5e7dfd718212b4da09297406d0719f31f912d46d
+index 0000000000000000000000000000000000000000..e46530ed8de343922145c42bb0a5a0cfd3482ac5
 --- /dev/null
 +++ b/scripts/package_windows_installer.ps1
-@@ -0,0 +1,608 @@
+@@ -0,0 +1,612 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)]
@@ -53066,6 +53121,10 @@ index 0000000000000000000000000000000000000000..5e7dfd718212b4da09297406d0719f31
 +    $startInfo.CreateNoWindow = $true
 +    $startInfo.RedirectStandardOutput = $true
 +    $startInfo.RedirectStandardError = $true
++    # Identity probes are new direct processes, not continuations of a remote
++    # sidecar. Do not let the caller's private remote mode require a package-local
++    # sidecar lease that does not belong to the validated installer stage.
++    [void]$startInfo.EnvironmentVariables.Remove("HERDR_REMOTE_SIDECAR_V1")
 +    if ($null -ne $startInfo.PSObject.Properties["ArgumentList"]) {
 +        foreach ($argument in $Arguments) {
 +            [void]$startInfo.ArgumentList.Add($argument)
@@ -54281,10 +54340,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880dd2604721
+index 0000000000000000000000000000000000000000..8b18f5b396b4f1cfd9395de27d1492d518bac5fd
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,610 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -54311,6 +54370,8 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +HELPER_REGISTRY = PROJECT_ROOT / "src/platform/windows/installer_helper_registry.rs"
 +HELPER_SKILLS = PROJECT_ROOT / "src/platform/windows/installer_helper_skills.rs"
 +MANAGED_INSTALL = PROJECT_ROOT / "src/managed_install.rs"
++MAIN = PROJECT_ROOT / "src/main.rs"
++SESSION = PROJECT_ROOT / "src/session.rs"
 +WINDOWS_LAUNCHER = PROJECT_ROOT / "src/platform/windows/launcher.rs"
 +WINDOWS_PLATFORM = PROJECT_ROOT / "src/platform/windows.rs"
 +UPDATE = PROJECT_ROOT / "src/update.rs"
@@ -54387,6 +54448,8 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +        files = text(HELPER_FILES)
 +        lifecycle = text(HELPER_LIFECYCLE)
 +        managed = text(MANAGED_INSTALL)
++        main = text(MAIN)
++        session = text(SESSION)
 +        launcher = text(WINDOWS_LAUNCHER)
 +
 +        self.assertIn('#[path = "../platform/windows/installer_helper.rs"]', entry)
@@ -54416,6 +54479,17 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +
 +        self.assertIn('join("installer-helper.exe")', managed)
 +        self.assertNotIn('join("installer-helper.ps1")', managed)
++        self.assertIn(
++            'INSTALLER_STOP_SESSIONS_COMMAND: &str = "__installer-stop-sessions"',
++            managed,
++        )
++        self.assertEqual(
++            (managed + main + lifecycle).count('"__installer-stop-sessions"'), 1
++        )
++        self.assertIn("installer_stop_sessions_requested", main)
++        self.assertIn("stop_all_sessions_for_uninstall", main)
++        self.assertIn("stop_all_sessions_for_uninstall", session)
++        self.assertIn("INSTALLER_STOP_WAIT_TIMEOUT", session)
 +        self.assertIn('Command::new(&helper)', launcher)
 +        self.assertIn('.arg("complete-maintenance")', launcher)
 +        self.assertNotIn("WindowsPowerShell", launcher)
@@ -54440,6 +54514,9 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +            "remove_inactive_runtimes",
 +            "validate_uninstall_cleanup_root",
 +            "remove_uninstall_residual",
++            "stop_installed_sessions",
++            "INSTALLER_STOP_SESSIONS_COMMAND",
++            "INSTALLER_STOP_TIMEOUT",
 +        ):
 +            self.assertIn(contract, lifecycle)
 +        self.assertNotIn("ManagedLegacy", lifecycle)
@@ -54454,6 +54531,33 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +            lifecycle.index("acquire_lifecycle_lock", lifecycle.index("pub(crate) fn install")),
 +            lifecycle.index("registry::assert_arp_ownership", lifecycle.index("pub(crate) fn install")),
 +        )
++        uninstall_layout = lifecycle[lifecycle.index("fn uninstall_layout") :]
++        self.assertLess(
++            uninstall_layout.index("validate_managed_root"),
++            uninstall_layout.index("stop_installed_sessions"),
++        )
++        self.assertLess(
++            uninstall_layout.index("stop_installed_sessions"),
++            uninstall_layout.index("acquire_coordination"),
++        )
++        self.assertLess(
++            uninstall_layout.index("acquire_coordination"),
++            uninstall_layout.index("uninstall.pending"),
++        )
++        stop_sessions = lifecycle[
++            lifecycle.index("fn stop_installed_sessions") : lifecycle.index(
++                "fn stage_managed_directory_for_uninstall"
++            )
++        ]
++        self.assertIn("read_required_active_pointer", stop_sessions)
++        self.assertIn("payload_path", stop_sessions)
++        self.assertIn("open_shared_lease", stop_sessions)
++        self.assertIn("configure_payload_child", stop_sessions)
++        self.assertIn("installer_stop_retry_message", stop_sessions)
++        self.assertIn(
++            "Close all managed Herdr sessions and retry uninstall.", lifecycle
++        )
++        self.assertNotIn('join("bin").join("herdr.exe")', stop_sessions)
 +        self.assertNotIn("eprintln!", entry + lifecycle)
 +        for forbidden in (
 +            "invoke-webrequest",
@@ -54618,6 +54722,18 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +        self.assertIn("AllowSkipFiles off", nsi)
 +        self.assertIn("CRCCheck force", nsi)
 +        self.assertIn("ManifestDPIAware true", nsi)
++        self.assertIn("ManifestSupportedOS all", nsi)
++        self.assertIn('GetProcAddress(p r0, m "GetDpiForWindow")', nsi)
++        self.assertIn("APP_EXIT_INVALID_ARGUMENTS 30", nsi)
++        self.assertIn("APP_EXIT_UNSUPPORTED_PLATFORM 50", nsi)
++        self.assertIn("APP_EXIT_INSTALL_FAILED 70", nsi)
++        self.assertIn("APP_EXIT_UNINSTALL_FAILED 80", nsi)
++        self.assertIn("SetErrorLevel $FailureExitCode", nsi)
++        self.assertIn('StrCmp $0 "/WINGET" installer_winget_arguments', nsi)
++        self.assertIn('StrCmp $0 "/REMOVE_SETTINGS" un_arguments_settings', nsi)
++        self.assertIn('StrCmp $0 "/REMOVE_SKILL" un_arguments_skill', nsi)
++        self.assertIn("Unsupported setup arguments", nsi)
++        self.assertIn("Unsupported uninstall arguments", nsi)
 +        self.assertIn("MUI_CUSTOMFUNCTION_ABORT PreventInstallMutationAbort", nsi)
 +        self.assertIn(
 +            "MUI_CUSTOMFUNCTION_UNABORT un.PreventUninstallMutationAbort", nsi
@@ -54637,7 +54753,7 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +        )
 +        self.assertIn("SendMessageTimeoutW", nsi)
 +        self.assertIn(
-+            "Uninstall always removes the managed program, user PATH entry, and Windows Installed Apps registration",
++            "Uninstall stops running managed sessions, then removes the managed program, user PATH entry, and Windows Installed Apps registration",
 +            nsi,
 +        )
 +
@@ -54667,6 +54783,9 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +        self.assertNotIn("https://github.com/ogulcancelik/herdr", packager)
 +        self.assertIn('"/WX"', packager)
 +        self.assertIn("Invoke-HerdrIdentityQuery", packager)
++        self.assertIn(
++            'EnvironmentVariables.Remove("HERDR_REMOTE_SIDECAR_V1")', packager
++        )
 +        self.assertIn('"--herdr-private-launcher-build-id-v1"', packager)
 +        self.assertIn("[string]$ReleaseVersion", packager)
 +        self.assertIn("[string]$BaseVersion", packager)
@@ -54703,11 +54822,21 @@ index 0000000000000000000000000000000000000000..27387c6d356c23116918b0e0a24b880d
 +            "Interrupted ARP ownership publication recovery passed",
 +            "Hard-termination cleanup recovery passed",
 +            "Incomplete current ARP update repair passed",
++            "Exact setup argument rejection passed",
++            "Exact uninstall argument rejection and running-server shutdown passed",
 +            "Malformed pending-launcher state did not fail closed",
 +            "Malformed ARP display identity did not fail closed",
 +            "Assert-TestUserPathRestored",
 +            "New-TestIdentityLauncher",
 +            "Start-TestLeaseHolder",
++            "[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete",
++            "XDG_CONFIG_HOME",
++            "HERDR_SESSION",
++            "HERDR_SOCKET_PATH",
++            "HERDR_CLIENT_SOCKET_PATH",
++            "HERDR_REMOTE_SIDECAR_V1",
++            'Start-Process -FilePath $managedLauncher -ArgumentList @("server")',
++            '"_?=$installRoot"',
 +            '"state\\pending"',
 +            '"runtime\\$BuildId"',
 +            '"quiet-uninstall"',
@@ -55048,10 +55177,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede86623d78d021
+index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336f5f73b80
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1165 @@
+@@ -0,0 +1,1258 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -55100,6 +55229,11 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +$originalUserProfile = $env:USERPROFILE
 +$originalLocalAppData = $env:LOCALAPPDATA
 +$originalClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
++$originalXdgConfigHome = $env:XDG_CONFIG_HOME
++$originalSession = $env:HERDR_SESSION
++$originalSocketPath = $env:HERDR_SOCKET_PATH
++$originalClientSocketPath = $env:HERDR_CLIENT_SOCKET_PATH
++$originalRemoteSidecar = $env:HERDR_REMOTE_SIDECAR_V1
 +$userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
 +if ($null -eq $userEnvironmentKey) {
 +    throw "HKCU\\Environment is unavailable; refusing to run the installer fault matrix."
@@ -55260,8 +55394,13 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +$env:USERPROFILE = $AgentUserProfileRoot
 +$env:LOCALAPPDATA = Join-Path $env:USERPROFILE "AppData\Local"
 +$env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE ".claude"
++$env:XDG_CONFIG_HOME = Join-Path $AgentUserProfileRoot "xdg-config"
++Remove-Item Env:HERDR_SESSION, Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH, Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
 +if (-not (Test-Path -LiteralPath $env:LOCALAPPDATA)) {
 +    New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
++}
++if (-not (Test-Path -LiteralPath $env:XDG_CONFIG_HOME)) {
++    New-Item -ItemType Directory -Path $env:XDG_CONFIG_HOME -Force | Out-Null
 +}
 +$installRoot = Join-Path $env:LOCALAPPDATA "Programs\$ProductName"
 +$arpKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$PackageName"
@@ -55424,7 +55563,12 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +function Get-TestFileSha256 {
 +    param([Parameter(Mandatory = $true)][string]$Path)
 +
-+    $stream = [IO.File]::OpenRead($Path)
++    $stream = [IO.File]::Open(
++        $Path,
++        [IO.FileMode]::Open,
++        [IO.FileAccess]::Read,
++        [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
++    )
 +    $hasher = [Security.Cryptography.SHA256]::Create()
 +    try {
 +        return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "")
@@ -55844,7 +55988,11 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +        -ProductName $ProductName `
 +        -OutputPath $modifiedInstaller `
 +        -TestUserProfileRoot $AgentUserProfileRoot
-+    $modifiedInstallExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S", "/WINGETjunk")
++    $invalidSetupExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S", "/WINGETjunk")
++    if ($invalidSetupExit -ne 30 -or (Test-Path -LiteralPath $installRoot) -or (Test-Path -LiteralPath $arpKey)) {
++        throw "Setup did not reject an unknown option before mutation with exit code 30; got $invalidSetupExit."
++    }
++    $modifiedInstallExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S")
 +    if ($modifiedInstallExit -ne 0) {
 +        throw "Modified-tree installer exited with $modifiedInstallExit."
 +    }
@@ -55853,9 +56001,7 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +            (Test-Path -LiteralPath $arpKey)
 +    }
 +    Assert-TestSkillInstalled
-+    if (Test-Path -LiteralPath (Join-Path $installRoot "state\package-manager")) {
-+        throw "Setup accepted /WINGETjunk as package-manager ownership."
-+    }
++    Write-Host "Exact setup argument rejection passed."
 +    Remove-ItemProperty -LiteralPath $arpKey -Name PathValueCreated
 +    $incompleteArpUpdateExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S")
 +    if ($incompleteArpUpdateExit -ne 0) {
@@ -55882,16 +56028,55 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +    New-Item -ItemType Directory -Path (Join-Path $skillRoot "resources") | Out-Null
 +    [IO.File]::WriteAllText((Join-Path $skillRoot "resources\nested.txt"), "preserve-nested")
 +    $modifiedUninstaller = Join-Path $installRoot "uninstall.exe"
-+    $prefixUninstallExit = Start-TestProcess -FilePath $modifiedUninstaller -Arguments @("/S", "/REMOVE_SETTINGSjunk", "/REMOVE_SKILLjunk")
-+    if ($prefixUninstallExit -ne 0) {
-+        throw "Prefix-option uninstall exited with $prefixUninstallExit."
-+    }
-+    Wait-TestCondition -Description "prefix-option uninstall" -Condition {
-+        -not (Test-Path -LiteralPath $installRoot) -and -not (Test-Path -LiteralPath $arpKey)
-+    }
-+    Wait-TestUninstallerIdle
-+    if (-not (Test-Path -LiteralPath $settingsRoot) -or -not (Test-Path -LiteralPath $skillPath) -or -not (Test-Path -LiteralPath $claudeSkillPath)) {
-+        throw "A destructive option prefix was accepted as an exact uninstall flag."
++    $managedLauncher = Join-Path $installRoot "bin\herdr.exe"
++    $managedServer = Start-Process -FilePath $managedLauncher -ArgumentList @("server") -PassThru -WindowStyle Hidden
++    try {
++        Wait-TestCondition -Description "managed server before uninstall" -Condition {
++            try {
++                $sessions = (& $managedLauncher session list --json 2>$null | Out-String | ConvertFrom-Json).sessions
++                return @($sessions | Where-Object { $_.default -and $_.running }).Count -eq 1
++            } catch {
++                return $false
++            }
++        }
++        # The normal NSIS bootstrap exits before its copied worker, so run the
++        # exact installed image in documented direct mode to observe the
++        # worker's invalid-argument exit code. The _?= root must be last.
++        $prefixUninstallExit = Start-TestProcess -FilePath $modifiedUninstaller -Arguments @(
++            "/S", "/REMOVE_SETTINGSjunk", "/REMOVE_SKILLjunk", "_?=$installRoot"
++        )
++        if ($prefixUninstallExit -ne 30) {
++            throw "Unknown-option uninstall returned $prefixUninstallExit instead of 30."
++        }
++        Wait-TestUninstallerIdle
++        if ((Test-Path -LiteralPath $installRoot) -eq $false -or
++            (Test-Path -LiteralPath $arpKey) -eq $false -or
++            (Test-Path -LiteralPath $settingsRoot) -eq $false -or
++            (Test-Path -LiteralPath $skillPath) -eq $false -or
++            (Test-Path -LiteralPath $claudeSkillPath) -eq $false -or
++            $managedServer.HasExited) {
++            throw "Unknown uninstall options changed installed state or stopped the managed server."
++        }
++        $ordinaryUninstallExit = Start-TestProcess -FilePath $modifiedUninstaller -Arguments @("/S")
++        if ($ordinaryUninstallExit -ne 0) {
++            throw "Ordinary uninstall with a running managed server exited with $ordinaryUninstallExit."
++        }
++        Wait-TestCondition -Description "running-server uninstall" -Condition {
++            -not (Test-Path -LiteralPath $installRoot) -and
++                -not (Test-Path -LiteralPath $arpKey) -and
++                $managedServer.HasExited
++        }
++        Wait-TestUninstallerIdle
++        if (-not (Test-Path -LiteralPath $settingsRoot) -or -not (Test-Path -LiteralPath $skillPath) -or -not (Test-Path -LiteralPath $claudeSkillPath)) {
++            throw "Ordinary uninstall did not preserve customized user data."
++        }
++        Write-Host "Exact uninstall argument rejection and running-server shutdown passed."
++    } finally {
++        if (-not $managedServer.HasExited) {
++            & taskkill.exe /PID $managedServer.Id /T /F 2>&1 | Out-Null
++            [void]$managedServer.WaitForExit(5000)
++        }
++        $managedServer.Dispose()
 +    }
 +    $reinstallExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S")
 +    if ($reinstallExit -ne 0) {
@@ -56119,11 +56304,23 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +    $expectedLauncherHash = Get-TestFileSha256 -Path $newLauncher
 +    Wait-TestCondition -Description "native pending-update maintenance" -Condition {
 +        $active = Join-Path $installRoot "state\active"
++        try {
++            $installedLauncherHash = Get-TestFileSha256 -Path (Join-Path $installRoot "bin\herdr.exe")
++        } catch {
++            $exception = $_.Exception
++            while ($null -ne $exception.InnerException) {
++                $exception = $exception.InnerException
++            }
++            if ($exception -is [IO.IOException]) {
++                return $false
++            }
++            throw
++        }
 +        (Test-Path -LiteralPath $active -PathType Leaf) -and
 +            ([IO.File]::ReadAllText($active).Replace("`r`n", "`n") -ceq "herdr-pointer-v1`nbuild_id=$newBuildId`n") -and
 +            -not (Test-Path -LiteralPath (Join-Path $installRoot "state\pending")) -and
 +            -not (Test-Path -LiteralPath (Join-Path $installRoot "runtime\$BuildId")) -and
-+            ((Get-TestFileSha256 -Path (Join-Path $installRoot "bin\herdr.exe")) -ceq $expectedLauncherHash)
++            ($installedLauncherHash -ceq $expectedLauncherHash)
 +    }
 +    $nativeUninstallArguments = @(
 +        "uninstall",
@@ -56211,6 +56408,31 @@ index 0000000000000000000000000000000000000000..704f74fb28f28b0caf1b89714ede8662
 +    $env:USERPROFILE = $originalUserProfile
 +    $env:LOCALAPPDATA = $originalLocalAppData
 +    $env:CLAUDE_CONFIG_DIR = $originalClaudeConfigDir
++    if ($null -eq $originalXdgConfigHome) {
++        Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue
++    } else {
++        $env:XDG_CONFIG_HOME = $originalXdgConfigHome
++    }
++    if ($null -eq $originalSession) {
++        Remove-Item Env:HERDR_SESSION -ErrorAction SilentlyContinue
++    } else {
++        $env:HERDR_SESSION = $originalSession
++    }
++    if ($null -eq $originalSocketPath) {
++        Remove-Item Env:HERDR_SOCKET_PATH -ErrorAction SilentlyContinue
++    } else {
++        $env:HERDR_SOCKET_PATH = $originalSocketPath
++    }
++    if ($null -eq $originalClientSocketPath) {
++        Remove-Item Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
++    } else {
++        $env:HERDR_CLIENT_SOCKET_PATH = $originalClientSocketPath
++    }
++    if ($null -eq $originalRemoteSidecar) {
++        Remove-Item Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
++    } else {
++        $env:HERDR_REMOTE_SIDECAR_V1 = $originalRemoteSidecar
++    }
 +    try {
 +        Restore-TestUserPath
 +    } finally {
@@ -56957,7 +57179,7 @@ index 0000000000000000000000000000000000000000..320cf6d97fa808c5aa2c429d75987dac
 +    }
 +}
 diff --git a/src/main.rs b/src/main.rs
-index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e0503b0a348c 100644
+index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295c0a82648 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -63,6 +63,7 @@ mod cli;
@@ -56992,15 +57214,51 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
  # version_check = true
  
  # Check herdr.dev for remote agent-detection manifest updates in the background.
-@@ -477,6 +477,7 @@ where
+@@ -476,7 +476,21 @@ where
+         .collect()
  }
  
++#[cfg(windows)]
++fn installer_stop_sessions_requested(args: &[String]) -> Result<bool, String> {
++    if args.get(1).map(String::as_str)
++        != Some(crate::managed_install::INSTALLER_STOP_SESSIONS_COMMAND)
++    {
++        return Ok(false);
++    }
++    if args.len() != 2 {
++        return Err("the installer-only session shutdown command accepts no arguments".to_string());
++    }
++    Ok(true)
++}
++
  fn main() -> io::Result<()> {
 +    let _managed_runtime_lease = crate::platform::adopt_managed_runtime_lease()?;
      let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
          Ok(args) => args,
          Err(err) => {
-@@ -588,14 +589,12 @@ fn main() -> io::Result<()> {
+@@ -485,6 +499,21 @@ fn main() -> io::Result<()> {
+             std::process::exit(2);
+         }
+     };
++    #[cfg(windows)]
++    match installer_stop_sessions_requested(&raw_args) {
++        Ok(true) => match session::stop_all_sessions_for_uninstall() {
++            Ok(_) => std::process::exit(0),
++            Err(err) => {
++                eprintln!("Herdr installer shutdown failed: {err}");
++                std::process::exit(1);
++            }
++        },
++        Ok(false) => {}
++        Err(err) => {
++            eprintln!("Herdr installer shutdown failed: {err}");
++            std::process::exit(2);
++        }
++    }
+     let args = match session::configure_from_args(&raw_args) {
+         Ok(args) => args,
+         Err(err) => {
+@@ -597,14 +626,12 @@ fn main() -> io::Result<()> {
          println!("       herdr session attach <name>");
          println!("       herdr completion zsh");
          println!("       herdr update [--handoff]");
@@ -57015,7 +57273,7 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
          println!("       herdr workspace <subcommand> ...");
          println!("       herdr worktree <subcommand> ...");
          println!("       herdr tab <subcommand> ...");
-@@ -622,10 +621,6 @@ fn main() -> io::Result<()> {
+@@ -631,10 +658,6 @@ fn main() -> io::Result<()> {
                  "herdr server stop",
                  "Stop the running server via the API socket",
              ),
@@ -57026,7 +57284,7 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
              (
                  "herdr server reload-config",
                  "Reload config.toml in the running server",
-@@ -634,10 +629,6 @@ fn main() -> io::Result<()> {
+@@ -643,10 +666,6 @@ fn main() -> io::Result<()> {
                  "herdr config reset-keys",
                  "Back up config.toml and remove custom keybindings",
              ),
@@ -57037,7 +57295,7 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
              (
                  "herdr api <subcommand>",
                  "Inspect socket API metadata and live runtime state",
-@@ -702,7 +693,7 @@ fn main() -> io::Result<()> {
+@@ -711,7 +730,7 @@ fn main() -> io::Result<()> {
      }
  
      if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -57046,7 +57304,7 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
          return Ok(());
      }
  
-@@ -748,7 +739,6 @@ fn main() -> io::Result<()> {
+@@ -757,7 +776,6 @@ fn main() -> io::Result<()> {
                  "update",
                  "status",
                  "config",
@@ -57054,12 +57312,38 @@ index 506e76374cec0ea105c9b3e69292abf76fa165d4..526557a7e7d6fb21c8f628a2b083e050
                  "workspace",
                  "worktree",
                  "pane",
+@@ -985,4 +1003,25 @@ mod tests {
+             "argument 2 is not valid UTF-8"
+         );
+     }
++
++    #[cfg(windows)]
++    #[test]
++    fn installer_stop_command_is_exact_and_hidden_from_normal_dispatch() {
++        let command = crate::managed_install::INSTALLER_STOP_SESSIONS_COMMAND;
++        assert!(installer_stop_sessions_requested(&["herdr".into()]).is_ok_and(|run| !run));
++        assert!(
++            installer_stop_sessions_requested(&["herdr".into(), command.into()])
++                .is_ok_and(|run| run)
++        );
++        assert!(installer_stop_sessions_requested(&[
++            "herdr".into(),
++            command.into(),
++            "extra".into(),
++        ])
++        .is_err());
++        assert!(
++            installer_stop_sessions_requested(&["herdr".into(), format!("{command}-extra"),])
++                .is_ok_and(|run| !run)
++        );
++    }
+ }
 diff --git a/src/managed_install.rs b/src/managed_install.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..fcb64ad4e1e4f551ed12581c5253165bb05d0efc
+index 0000000000000000000000000000000000000000..9aff5705992f659ca47a5348891ed2248478d1bd
 --- /dev/null
 +++ b/src/managed_install.rs
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,322 @@
 +//! Shared managed-install identity and path contract.
 +
 +#[cfg(windows)]
@@ -57076,6 +57360,10 @@ index 0000000000000000000000000000000000000000..fcb64ad4e1e4f551ed12581c5253165b
 +#[allow(dead_code)]
 +pub(crate) const WINGET_PACKAGE_MANAGER_RECORD: &[u8] =
 +    b"herdr-package-manager-v1\nmanager=winget\n";
++#[cfg(windows)]
++// Shared with the product and installer-helper binaries; the launcher does not invoke it.
++#[allow(dead_code)]
++pub(crate) const INSTALLER_STOP_SESSIONS_COMMAND: &str = "__installer-stop-sessions";
 +
 +#[derive(Clone, Debug, PartialEq, Eq)]
 +pub(crate) struct BuildId(String);
@@ -58855,10 +59143,10 @@ index 0000000000000000000000000000000000000000..81359270df805796f8d44ad32f1c56a8
 +}
 diff --git a/src/platform/windows/installer_helper_lifecycle.rs b/src/platform/windows/installer_helper_lifecycle.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d282139fda2
+index 0000000000000000000000000000000000000000..7e6545e6a576c2fc3dfaf0f3bf51cb5e5fe27217
 --- /dev/null
 +++ b/src/platform/windows/installer_helper_lifecycle.rs
-@@ -0,0 +1,2674 @@
+@@ -0,0 +1,2773 @@
 +use std::{
 +    collections::BTreeSet,
 +    ffi::{OsStr, OsString},
@@ -58870,6 +59158,7 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +        ffi::{OsStrExt as _, OsStringExt as _},
 +        fs::{MetadataExt as _, OpenOptionsExt as _},
 +        io::AsRawHandle as _,
++        process::CommandExt as _,
 +    },
 +    path::{Path, PathBuf},
 +    process::{Child, Command, Stdio},
@@ -58900,13 +59189,16 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +        },
 +        Threading::{
 +            CreateMutexW, OpenProcess, QueryFullProcessImageNameW, ReleaseMutex,
-+            WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
++            WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
++            PROCESS_QUERY_LIMITED_INFORMATION,
 +        },
 +    },
 +};
 +
 +use crate::{
-+    managed_install::{BuildId, ManagedInstall, WINGET_PACKAGE_MANAGER_RECORD},
++    managed_install::{
++        BuildId, ManagedInstall, INSTALLER_STOP_SESSIONS_COMMAND, WINGET_PACKAGE_MANAGER_RECORD,
++    },
 +    windows_managed_install::CoordinationLease,
 +};
 +
@@ -58919,6 +59211,9 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +const LOCK_RETRY: Duration = Duration::from_millis(50);
 +const QUIET_UNINSTALL_OPERATION_TIMEOUT: Duration = Duration::from_secs(25);
 +const QUIET_UNINSTALL_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
++const INSTALLER_STOP_TIMEOUT: Duration = Duration::from_secs(35);
++const INSTALLER_STOP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
++const INSTALLER_STOP_RETRY_GUIDANCE: &str = "Close all managed Herdr sessions and retry uninstall.";
 +const LIFECYCLE_MUTEX_NAME: &str = r"Local\HerdrWinInstallerLifecycle";
 +
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60215,13 +60510,14 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +            "only an exact managed root can be uninstalled",
 +        ));
 +    }
-+    let install = ManagedInstall::new(install_root.to_path_buf());
-+    let _coordination = acquire_coordination(&install, LOCK_TIMEOUT)?;
 +    if kind == RootKind::UninstallRetry {
 +        validate_uninstall_retry_root(install_root)?;
 +    } else {
 +        validate_managed_root(install_root, false)?;
++        stop_installed_sessions(install_root)?;
 +    }
++    let install = ManagedInstall::new(install_root.to_path_buf());
++    let _coordination = acquire_coordination(&install, LOCK_TIMEOUT)?;
 +    let leases = if files::path_exists(&install.leases_dir())? {
 +        lease_status(&install.leases_dir())?
 +    } else {
@@ -60271,6 +60567,83 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +    drop(_coordination);
 +    validate_uninstall_residual(install_root)?;
 +    Ok((preserved, warning))
++}
++
++fn stop_installed_sessions(install_root: &Path) -> io::Result<()> {
++    let install = ManagedInstall::new(install_root.to_path_buf());
++    let active = install.read_required_active_pointer()?;
++    let runtime = install.payload_path(&active);
++    files::assert_regular_file(&runtime)?;
++    let lease = install.open_shared_lease(&active)?;
++    let job = ProcessJob::new()?;
++    let mut command = Command::new(&runtime);
++    command
++        .arg(INSTALLER_STOP_SESSIONS_COMMAND)
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .creation_flags(CREATE_NO_WINDOW);
++    lease.configure_payload_child(&mut command);
++    let mut child = command.spawn().map_err(|err| {
++        files::contextual(
++            err,
++            installer_stop_retry_message(format!(
++                "failed to start installed Herdr session shutdown command {}",
++                runtime.display()
++            )),
++        )
++    })?;
++    if let Err(err) = job.assign(&child) {
++        let _ = child.kill();
++        let _ = child.wait();
++        return Err(files::contextual(
++            err,
++            installer_stop_retry_message(
++                "failed to contain installed Herdr session shutdown command",
++            ),
++        ));
++    }
++
++    let deadline = Instant::now() + INSTALLER_STOP_TIMEOUT;
++    loop {
++        if let Some(status) = child.try_wait()? {
++            return if status.success() {
++                Ok(())
++            } else {
++                Err(files::invalid_data(installer_stop_retry_message(format!(
++                    "installed Herdr session shutdown command exited with {status}",
++                ))))
++            };
++        }
++        if Instant::now() >= deadline {
++            let cleanup = job.terminate().and_then(|_| {
++                job.wait_for_empty(
++                    &mut child,
++                    INSTALLER_STOP_CLEANUP_TIMEOUT,
++                    "installed Herdr session shutdown process tree did not terminate within 5 seconds",
++                )
++            });
++            return match cleanup {
++                Ok(()) => Err(io::Error::new(
++                    io::ErrorKind::TimedOut,
++                    installer_stop_retry_message(
++                        "installed Herdr session shutdown exceeded its 35 second deadline",
++                    ),
++                )),
++                Err(err) => Err(files::contextual(
++                    err,
++                    installer_stop_retry_message(
++                        "installed Herdr session shutdown timed out and cleanup failed",
++                    ),
++                )),
++            };
++        }
++        thread::sleep(LOCK_RETRY);
++    }
++}
++
++fn installer_stop_retry_message(reason: impl std::fmt::Display) -> String {
++    format!("{reason}. {INSTALLER_STOP_RETRY_GUIDANCE}")
 +}
 +
 +fn stage_managed_directory_for_uninstall(install_root: &Path, name: &str) -> io::Result<()> {
@@ -61483,6 +61856,20 @@ index 0000000000000000000000000000000000000000..4e8fc04650c1c0b261f8a1e119264d28
 +    #[test]
 +    fn lifecycle_mutex_name_is_stable_and_unversioned() {
 +        assert_eq!(LIFECYCLE_MUTEX_NAME, r"Local\HerdrWinInstallerLifecycle");
++    }
++
++    #[test]
++    fn installer_stop_failures_include_retry_guidance() {
++        for reason in [
++            "installed Herdr session shutdown command exited with exit code: 1",
++            "installed Herdr session shutdown exceeded its 35 second deadline",
++            "installed Herdr session shutdown timed out and cleanup failed",
++        ] {
++            assert_eq!(
++                installer_stop_retry_message(reason),
++                format!("{reason}. {INSTALLER_STOP_RETRY_GUIDANCE}")
++            );
++        }
 +    }
 +
 +    #[test]
@@ -64789,7 +65176,7 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481beac55b9 100644
+index ce4db70ea3e7500b0aacced3cdc5a201a96113ba..50b8dfeb9504ab4d13e2dd34741cd6a1c970bd71 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -26,8 +26,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
@@ -64812,7 +65199,7 @@ index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
  pub(crate) enum RemoteKeybindings {
      Local,
-@@ -2836,10 +2838,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -2992,10 +2994,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  
      let dir = private_download_dir(&asset_key)?;
      let path = dir.join("herdr.tmp");
@@ -64825,7 +65212,7 @@ index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481
          .status()
          .map_err(|err| io::Error::new(err.kind(), format!("download failed: {err}")))?;
      if !status.success() {
-@@ -2886,16 +2887,16 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -3042,16 +3043,16 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  }
  
  fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
@@ -64845,7 +65232,7 @@ index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481
          ])
          .output()
          .map_err(|err| io::Error::new(err.kind(), format!("curl failed: {err}")))?;
-@@ -2933,7 +2934,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -3089,7 +3090,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
          let build_id = crate::build_info::build_id().ok_or_else(|| {
              io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
          })?;
@@ -64854,7 +65241,7 @@ index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481
          let manifest: RemotePreviewManifest =
              serde_json::from_slice(&manifest_bytes).map_err(|err| {
                  io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
-@@ -2952,7 +2953,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -3108,7 +3109,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
      }
  
      let current_version = current_version();
@@ -64863,7 +65250,7 @@ index a57984bf3f4587853dd72d4a8b74cb34b5aff680..2b2c78bc573a2c767f45ecc15ff9a481
      let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
          .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
      let release = manifest.release_for_version(&current_version).ok_or_else(|| {
-@@ -3551,7 +3552,7 @@ fn run_client_process(
+@@ -3707,7 +3708,7 @@ fn run_client_process(
      reattach_command: &str,
      keybindings: RemoteKeybindings,
  ) -> io::Result<()> {
@@ -64903,6 +65290,88 @@ index d17bfa91b62a42d32f06bb596315ca02a05c3f96..8ebfaeb5245404eecdfa8037646322b4
              io::Error::new(
                  err.kind(),
                  format!("failed to determine herdr executable path: {err}"),
+diff --git a/src/session.rs b/src/session.rs
+index 09657fa0c0c2b4d804750cbcd5c490f54c84741a..faa864c06050e40caa7c2eb00895c5e41247568f 100644
+--- a/src/session.rs
++++ b/src/session.rs
+@@ -14,6 +14,8 @@ const MAX_SESSION_NAME_LEN: usize = 64;
+ const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+ const STOP_WAIT_POLL: Duration = Duration::from_millis(25);
+ const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
++#[cfg(windows)]
++const INSTALLER_STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+ 
+ static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
+ 
+@@ -233,6 +235,43 @@ pub fn stop_session(name: Option<&str>) -> Result<SessionInfo, String> {
+     stop_session_with_timeout(name, STOP_WAIT_TIMEOUT)
+ }
+ 
++#[cfg(windows)]
++pub(crate) fn stop_all_sessions_for_uninstall() -> Result<usize, String> {
++    let deadline = Instant::now() + INSTALLER_STOP_WAIT_TIMEOUT;
++    let mut stopped = 0;
++
++    loop {
++        let running = list_sessions()
++            .map_err(|err| format!("failed to enumerate Herdr sessions before uninstall: {err}"))?
++            .into_iter()
++            .filter(|session| session.running)
++            .collect::<Vec<_>>();
++        if running.is_empty() {
++            return Ok(stopped);
++        }
++
++        for session in running {
++            let remaining = time_until(deadline);
++            if remaining.is_zero() {
++                return Err(format!(
++                    "running Herdr sessions did not stop within {}ms",
++                    INSTALLER_STOP_WAIT_TIMEOUT.as_millis()
++                ));
++            }
++            let name = (!session.default).then_some(session.name.as_str());
++            if let Err(err) = stop_session_with_timeout(name, remaining.min(STOP_WAIT_TIMEOUT)) {
++                if session_info(name).running {
++                    return Err(format!(
++                        "failed to stop session {} before uninstall: {err}",
++                        session.name
++                    ));
++                }
++            }
++            stopped += 1;
++        }
++    }
++}
++
+ pub(crate) fn stop_active_server() -> Result<(), String> {
+     let socket_path = active_api_socket_path();
+     let client_socket_path = crate::server::socket_paths::client_socket_path();
+@@ -499,6 +538,24 @@ mod tests {
+         assert_eq!(STOP_WAIT_TIMEOUT, Duration::from_secs(15));
+     }
+ 
++    #[cfg(windows)]
++    #[test]
++    fn installer_session_shutdown_is_bounded_and_accepts_an_idle_profile() {
++        let _guard = env_lock().lock().unwrap();
++        let config_home =
++            std::env::temp_dir().join(format!("herdr-installer-stop-idle-{}", std::process::id()));
++        std::env::set_var("XDG_CONFIG_HOME", &config_home);
++        std::env::remove_var(SESSION_ENV_VAR);
++        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
++        clear_explicit_session_for_test();
++
++        assert_eq!(INSTALLER_STOP_WAIT_TIMEOUT, Duration::from_secs(30));
++        assert_eq!(stop_all_sessions_for_uninstall().unwrap(), 0);
++
++        let _ = std::fs::remove_dir_all(&config_home);
++        std::env::remove_var("XDG_CONFIG_HOME");
++    }
++
+     #[test]
+     fn stop_request_errors_wait_for_socket_state() {
+         for kind in [
 diff --git a/src/update.rs b/src/update.rs
 index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2cc495f46c 100644
 --- a/src/update.rs

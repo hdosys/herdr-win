@@ -132,9 +132,12 @@ tests remain the detailed implementation truth.
   show the WinGet command. Running direct setup over the exact current managed root
   preserves existing WinGet ownership rather than creating competing update paths.
   Uninstall removes that ownership with the managed program.
-- Uninstall requires managed sessions to be closed and never terminates them. It
-  removes the managed program, only literal spellings of its own user `PATH` path, **Herdr Win** Installed
-  Apps registration, and installer-known `SKILL.md` copies at its managed universal
+- Uninstall first asks every running managed session to stop through Herdr's
+  graceful server API under one bounded deadline. If any session remains
+  reachable, uninstall preserves the managed installation and reports the
+  required action. After sessions stop, it removes the managed program, only
+  literal spellings of its own user `PATH` path, **Herdr Win** Installed Apps
+  registration, and installer-known `SKILL.md` copies at its managed universal
   and Claude locations. Its single skill-removal checkbox covers both locations and
   starts selected only when every existing copy is installer-known or absent; any
   unknown copy leaves it clear. Selecting it explicitly authorizes removal of the

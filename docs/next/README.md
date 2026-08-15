@@ -106,7 +106,7 @@ winget upgrade --id hdosys.herdr-win --exact --source winget
 
 GitHub may publish a snapshot before the WinGet catalog finishes accepting it. A WinGet-owned copy shows an update only after the official `winget` source contains that exact release version, so its update action always points to installable bytes.
 
-Uninstall from **Windows Settings → Apps → Installed apps**. Settings are preserved unless you explicitly choose to remove them. Uninstall never terminates active Herdr sessions or removes unowned or unsafe content; it stops or preserves the blocked residue and explains the required action.
+Uninstall from **Windows Settings → Apps → Installed apps**. Uninstall first stops running managed Herdr sessions through their graceful server API. If a session cannot stop within the bounded deadline, the managed installation is preserved and the required action is reported. Settings are preserved unless you explicitly choose to remove them. Uninstall never force-terminates sessions or removes unowned or unsafe content.
 
 ### Verify the download
 

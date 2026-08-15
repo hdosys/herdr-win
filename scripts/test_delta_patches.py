@@ -222,7 +222,7 @@ class DeltaPatchTests(unittest.TestCase):
             "https://github.com/hdosys/herdr-win/releases",
             "herdr-win_v<version>_windows_amd64_setup.exe",
             "has not shipped in a stable release yet",
-            "never terminates active Herdr sessions",
+            "stops running managed Herdr sessions",
             "Upstreamed in Herdr v0.6.9",
             "Herdr v0.8.0 added the modern app-local ConPTY packaging",
             "matching binaries from the same herdr-win release",

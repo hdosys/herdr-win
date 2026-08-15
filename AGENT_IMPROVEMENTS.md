@@ -24,12 +24,16 @@ configuration repository.
   Evidence: a task-local probe hardcoded the development state directory and used
   a PATH-dependent sentinel that detached servers did not inherit, producing false
   negatives before direct pane readback isolated the native ConPTY encoding fault.
-  Proposed change: add one bounded real-Windows-Terminal probe that derives state
-  ownership from the tested binary, verifies injected text through `pane read`,
-  reports the selected input backend, and cleans its named session. Expected
-  benefit: faster local-versus-remote attribution and reliable keyboard regression
-  evidence. Owner: a focused script and tests under `scripts/`, documented in
-  `CONTRIBUTING.md`.
+  A later probe spent 93 seconds rebuilding a trace client, then initially targeted
+  the independent debug state directory and incurred two 10-second rendered-text
+  waits before an exact socket override and client/server logs isolated the input
+  path. Proposed change: add one bounded real-Windows-Terminal probe that derives
+  state ownership from the tested binary, accepts an exact socket/session target,
+  scopes tracing to one client role, waits on protocol state instead of rendered
+  text, verifies injected input through the shared path, and cleans its named
+  session. Expected benefit: faster local-versus-remote attribution and reliable
+  keyboard regression evidence. Owner: a focused script and tests under `scripts/`,
+  documented in `CONTRIBUTING.md`.
 
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle

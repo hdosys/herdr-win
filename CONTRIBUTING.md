@@ -76,22 +76,24 @@ After the explicit finalization instruction, one session owns the frozen final p
 
 1. Reinspect shared ownership, collect completed handoffs, stop overlapping writes,
    run the focused gate, and record `git rev-parse 'HEAD^{tree}'`.
-2. Fold the milestone's source commits into the existing mailbox that owns the
-   behavior. Add a mailbox only for a genuinely independent responsibility.
-3. Regenerate that mailbox with `git format-patch --full-index --binary`, keeping
-   its stable filename and logical position. Keep later mailboxes byte-identical
-   unless replay or the intended final tree requires new context.
-4. Replay the checked-in queue into an isolated temporary Git index and require it
-   to reproduce the already tested source tree exactly:
+2. Run the explicit finalizer with that tree and the existing mailbox that owns the
+   behavior:
 
    ```powershell
-   python scripts/delta_workflow.py check --expected-tree <tested-tree-id>
+   python scripts/delta_workflow.py finalize `
+     --worktree <durable-absolute-worktree-path> `
+     --mailbox <series-entry.patch> `
+     --expected-tree <tested-tree-id>
    ```
 
-5. Run the inventory tests below. A matching tree transfers the source evidence to
+   It requires a clean current WIP branch, preserves its commits, regenerates only
+   the named mailbox, keeps later mailboxes byte-identical, and writes the mailbox
+   only after a complete candidate replay matches the tested tree. A conflict or
+   mismatch leaves the checked-in mailbox unchanged.
+3. Run the inventory tests below. A matching tree transfers the source evidence to
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.
-6. Review the ordinary source diff before folding and the final control diff after
+4. Review the ordinary source diff before folding and the final control diff after
    folding. Commit and push the finished control milestone, then remove the task
    worktree only after remote durability and ownership are clear.
 

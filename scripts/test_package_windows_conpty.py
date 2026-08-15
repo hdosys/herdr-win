@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -47,6 +50,105 @@ class WindowsConptyPackageTests(unittest.TestCase):
         self.assertIn('conpty\\x64\\OpenConsole.exe', wrapper)
         self.assertIn('conpty\\conpty.dll', wrapper)
         self.assertIn('"*Microsoft Corporation*"', wrapper)
+        self.assertIn(
+            '"System32\\WindowsPowerShell\\v1.0\\powershell.exe"', wrapper
+        )
+        self.assertIn("$env:PSModulePath =", wrapper)
+        self.assertIn('PSEdition -ne "Desktop"', wrapper)
+        self.assertIn("Microsoft.PowerShell.Security.psd1", wrapper)
+        self.assertIn("return", wrapper)
+        self.assertNotIn("exit $LASTEXITCODE", wrapper)
+
+    @unittest.skipUnless(os.name == "nt", "requires native Windows PowerShell")
+    def test_wrapper_owns_native_windows_powershell_module_roots(self) -> None:
+        system_root = Path(os.environ["SystemRoot"])
+        windows_powershell = (
+            system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        )
+        pwsh = shutil.which("pwsh.exe")
+        self.assertIsNotNone(pwsh)
+        self.assertTrue(windows_powershell.is_file())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command_dir = root / "commands"
+            command_dir.mkdir()
+            capture = root / "module-path.txt"
+            command = (
+                "@echo off\r\n"
+                '> "%MODULE_CAPTURE%" echo %PSModulePath%\r\n'
+                "exit /b 0\r\n"
+            )
+            for name in ("python.cmd", "dotnet.cmd"):
+                (command_dir / name).write_text(command, encoding="ascii", newline="")
+
+            stage = root / "stage"
+            for relative in (
+                "conpty/conpty.dll",
+                "conpty/x64/OpenConsole.exe",
+                "conpty/arm64/OpenConsole.exe",
+            ):
+                destination = stage / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(windows_powershell, destination)
+
+            herdr = root / "herdr.exe"
+            package_path = root / "conpty.nupkg"
+            output = root / "herdr.zip"
+            continuation = root / "continued.txt"
+            herdr.write_bytes(b"fixture")
+            package_path.write_bytes(b"fixture")
+            hostile_module_root = root / "PowerShell/Modules"
+            hostile_module_root.mkdir(parents=True)
+            environment = os.environ.copy()
+            environment["MODULE_CAPTURE"] = str(capture)
+            environment["PSModulePath"] = str(hostile_module_root)
+            environment["PATH"] = os.pathsep.join(
+                (str(command_dir), environment.get("PATH", ""))
+            )
+
+            def quoted(path: Path) -> str:
+                return "'" + str(path).replace("'", "''") + "'"
+
+            driver = root / "invoke-wrapper.ps1"
+            wrapper = package.PROJECT_ROOT / "scripts/package_windows_conpty.ps1"
+            driver.write_text(
+                f"& {quoted(wrapper)} "
+                f"-HerdrExe {quoted(herdr)} "
+                f"-PackagePath {quoted(package_path)} "
+                f"-StageDir {quoted(stage)} "
+                f"-OutputPath {quoted(output)}\n"
+                f"[IO.File]::WriteAllText({quoted(continuation)}, 'continued')\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            result = subprocess.run(
+                [
+                    str(pwsh),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-File",
+                    str(driver),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            self.assertEqual(continuation.read_text(encoding="utf-8"), "continued")
+            module_path = capture.read_text(encoding="utf-8").strip()
+            self.assertNotIn(str(hostile_module_root), module_path)
+            self.assertIn(
+                str(system_root / "System32/WindowsPowerShell/v1.0/Modules").lower(),
+                module_path.lower(),
+            )
 
     def test_package_download_has_a_finite_timeout(self) -> None:
         payload = b"package"

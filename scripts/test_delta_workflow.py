@@ -8,6 +8,7 @@ from typing import Sequence
 
 from scripts.delta_workflow import (
     DeltaWorkflowError,
+    finalize_delta_mailbox,
     start_delta_worktree,
     verify_replay_tree,
 )
@@ -53,7 +54,10 @@ class DeltaFixture:
 
         (self.control / "value.txt").write_bytes(b"first\n")
         run_git(self.control, ["add", "value.txt"])
-        run_git(self.control, ["commit", "-m", "feat: first"])
+        run_git(
+            self.control,
+            ["commit", "-m", "feat: first", "-m", "Own the first value."],
+        )
         first = run_git(self.control, ["rev-parse", "HEAD"])
         first_patch = run_git(
             self.control,
@@ -146,6 +150,74 @@ class DeltaWorkflowTests(unittest.TestCase):
                 run_git(worktree, ["rev-list", "--count", f"{fixture.base}..HEAD"]),
                 "2",
             )
+
+    def test_finalize_updates_only_owner_and_reproduces_tested_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+            worktree = worktrees / "finalize"
+            start_delta_worktree("finalize", worktree, fixture.control)
+
+            (worktree / "value.txt").write_bytes(b"final\n")
+            run_git(worktree, ["add", "value.txt"])
+            run_git(worktree, ["commit", "-m", "fix: finalize value"])
+            source_head = run_git(worktree, ["rev-parse", "HEAD"])
+            source_tree = run_git(worktree, ["rev-parse", "HEAD^{tree}"])
+            delta_root = fixture.control / "patches" / "delta"
+            later_mailbox = delta_root / "0002-second.patch"
+            later_bytes = later_mailbox.read_bytes()
+
+            result = finalize_delta_mailbox(
+                worktree,
+                "0001-first.patch",
+                source_tree,
+                fixture.control,
+            )
+
+            self.assertEqual(result.source_head, source_head)
+            self.assertEqual(result.source_tree, source_tree)
+            self.assertEqual(result.replay_tree, source_tree)
+            self.assertEqual(run_git(worktree, ["rev-parse", "HEAD"]), source_head)
+            self.assertEqual(later_mailbox.read_bytes(), later_bytes)
+            self.assertIn(
+                "Subject: [PATCH 1/2] feat: first",
+                (delta_root / "0001-first.patch").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "Own the first value.",
+                (delta_root / "0001-first.patch").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                verify_replay_tree(source_tree, fixture.control).tree,
+                source_tree,
+            )
+
+    def test_finalize_rejects_a_tree_not_at_source_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+            worktree = worktrees / "mismatch"
+            start_delta_worktree("mismatch", worktree, fixture.control)
+
+            (worktree / "value.txt").write_bytes(b"final\n")
+            run_git(worktree, ["add", "value.txt"])
+            run_git(worktree, ["commit", "-m", "fix: finalize value"])
+            mailbox = fixture.control / "patches" / "delta" / "0001-first.patch"
+            original = mailbox.read_bytes()
+
+            with self.assertRaisesRegex(
+                DeltaWorkflowError, "changed after its tested tree was recorded"
+            ):
+                finalize_delta_mailbox(
+                    worktree,
+                    "0001-first.patch",
+                    fixture.source_tree,
+                    fixture.control,
+                )
+
+            self.assertEqual(mailbox.read_bytes(), original)
 
 
 if __name__ == "__main__":

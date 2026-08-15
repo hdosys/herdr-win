@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast local iteration and tree-exact verification for the maintained delta."""
+"""Materialize, explicitly finalize, and verify the maintained delta."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Sequence
 
@@ -42,6 +45,22 @@ class WorktreeResult:
     mailbox_count: int
 
 
+@dataclass(frozen=True)
+class FinalizeResult:
+    mailbox: str
+    source_head: str
+    source_tree: str
+    replay_tree: str
+
+
+@dataclass(frozen=True)
+class MailboxMetadata:
+    author_name: str
+    author_email: str
+    author_date: str
+    commit_message: str
+
+
 def _git_environment(overrides: dict[str, str] | None = None) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(
@@ -62,6 +81,7 @@ def _run_git(
     cwd: Path | None = None,
     environment: dict[str, str] | None = None,
     check: bool = True,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git", "-c", "core.longpaths=true", *arguments]
     try:
@@ -69,6 +89,7 @@ def _run_git(
             command,
             cwd=cwd or project_root,
             env=_git_environment(environment),
+            input=input_text,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -129,6 +150,41 @@ def _read_series(project_root: Path) -> tuple[str, ...]:
     return tuple(mailboxes)
 
 
+def _tree_after_patches(
+    project_root: Path,
+    initial_tree: str,
+    patch_paths: Sequence[Path],
+    *,
+    reverse: bool = False,
+) -> str:
+    with tempfile.TemporaryDirectory(prefix="herdr-delta-index-") as temp_dir:
+        index_path = Path(temp_dir) / "index"
+        index_environment = {"GIT_INDEX_FILE": str(index_path)}
+        _run_git(
+            project_root,
+            ["read-tree", initial_tree],
+            environment=index_environment,
+        )
+        for patch_path in patch_paths:
+            arguments = [
+                "apply",
+                "--cached",
+                "--3way",
+                "--whitespace=nowarn",
+            ]
+            if reverse:
+                arguments.append("--reverse")
+            arguments.append(str(patch_path))
+            _run_git(project_root, arguments, environment=index_environment)
+        tree = _run_git(
+            project_root, ["write-tree"], environment=index_environment
+        ).stdout.strip()
+
+    if BASE_RE.fullmatch(tree) is None:
+        raise DeltaWorkflowError(f"git write-tree returned invalid tree ID {tree!r}")
+    return tree
+
+
 def replay_delta_tree(project_root: Path = PROJECT_ROOT) -> ReplayResult:
     """Apply the checked-in queue to a temporary index and return its tree ID."""
 
@@ -136,31 +192,21 @@ def replay_delta_tree(project_root: Path = PROJECT_ROOT) -> ReplayResult:
     base = _read_base(project_root)
     mailboxes = _read_series(project_root)
     delta_root = project_root / "patches" / "delta"
-
-    with tempfile.TemporaryDirectory(prefix="herdr-delta-index-") as temp_dir:
-        index_path = Path(temp_dir) / "index"
-        index_environment = {"GIT_INDEX_FILE": str(index_path)}
-        _run_git(project_root, ["read-tree", base], environment=index_environment)
-        for mailbox in mailboxes:
-            _run_git(
-                project_root,
-                [
-                    "apply",
-                    "--cached",
-                    "--3way",
-                    "--whitespace=nowarn",
-                    str(delta_root / mailbox),
-                ],
-                environment=index_environment,
-            )
-        tree = _run_git(
-            project_root, ["write-tree"], environment=index_environment
-        ).stdout.strip()
-
-    if BASE_RE.fullmatch(tree) is None:
-        raise DeltaWorkflowError(f"git write-tree returned invalid tree ID {tree!r}")
+    tree = _tree_after_patches(
+        project_root,
+        base,
+        [delta_root / mailbox for mailbox in mailboxes],
+    )
     _run_git(project_root, ["diff", "--check", base, tree])
     return ReplayResult(base=base, mailboxes=mailboxes, tree=tree)
+
+
+def _require_tree_object(project_root: Path, tree: str, label: str) -> None:
+    if BASE_RE.fullmatch(tree) is None:
+        raise DeltaWorkflowError(f"{label} must be one full lowercase Git tree ID")
+    object_type = _run_git(project_root, ["cat-file", "-t", tree]).stdout.strip()
+    if object_type != "tree":
+        raise DeltaWorkflowError(f"{label} identifies a {object_type}, not a tree")
 
 
 def verify_replay_tree(
@@ -171,17 +217,7 @@ def verify_replay_tree(
 
     project_root = project_root.resolve()
     if expected_tree is not None:
-        if BASE_RE.fullmatch(expected_tree) is None:
-            raise DeltaWorkflowError(
-                "--expected-tree must be one full lowercase Git tree ID"
-            )
-        object_type = _run_git(
-            project_root, ["cat-file", "-t", expected_tree]
-        ).stdout.strip()
-        if object_type != "tree":
-            raise DeltaWorkflowError(
-                f"--expected-tree identifies a {object_type}, not a tree"
-            )
+        _require_tree_object(project_root, expected_tree, "--expected-tree")
 
     result = replay_delta_tree(project_root)
     if expected_tree is not None and result.tree != expected_tree:
@@ -211,9 +247,365 @@ def _require_clean_delta(project_root: Path) -> None:
     ).stdout.strip()
     if status:
         raise DeltaWorkflowError(
-            "cannot start from modified delta inputs; finalize or preserve them first:\n"
+            "delta inputs must be clean before this operation:\n"
             f"{status}"
         )
+
+
+def _require_control_master(project_root: Path) -> None:
+    current_branch = _run_git(
+        project_root, ["symbolic-ref", "--short", "HEAD"]
+    ).stdout.strip()
+    if current_branch != "master":
+        raise DeltaWorkflowError(
+            f"control checkout must be on master, found {current_branch!r}"
+        )
+
+
+def _normalized_git_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _require_source_worktree(
+    project_root: Path,
+    worktree: Path,
+    expected_tree: str,
+    replay: ReplayResult,
+) -> tuple[str, str]:
+    if not worktree.is_absolute():
+        raise DeltaWorkflowError("--worktree must be an absolute path")
+    worktree = worktree.resolve()
+    if not worktree.is_dir():
+        raise DeltaWorkflowError(f"source worktree does not exist: {worktree}")
+
+    source_root = Path(
+        _run_git(worktree, ["rev-parse", "--show-toplevel"], cwd=worktree)
+        .stdout.strip()
+    ).resolve()
+    if source_root != worktree:
+        raise DeltaWorkflowError(
+            f"--worktree must identify its Git root, found {source_root}"
+        )
+
+    control_common = _run_git(
+        project_root,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ).stdout.strip()
+    source_common = _run_git(
+        worktree,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=worktree,
+    ).stdout.strip()
+    if _normalized_git_path(control_common) != _normalized_git_path(source_common):
+        raise DeltaWorkflowError("source worktree belongs to another Git repository")
+
+    branch = _run_git(
+        worktree, ["symbolic-ref", "--short", "HEAD"], cwd=worktree
+    ).stdout.strip()
+    if not branch.startswith("agent/delta-"):
+        raise DeltaWorkflowError(
+            f"source worktree must use an agent/delta-* branch, found {branch!r}"
+        )
+
+    status = _run_git(
+        worktree,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=worktree,
+    ).stdout.strip()
+    if status:
+        raise DeltaWorkflowError(f"source worktree must be clean:\n{status}")
+
+    for marker in (
+        "rebase-merge",
+        "rebase-apply",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+    ):
+        marker_path = _run_git(
+            worktree,
+            ["rev-parse", "--path-format=absolute", "--git-path", marker],
+            cwd=worktree,
+        ).stdout.strip()
+        if Path(marker_path).exists():
+            raise DeltaWorkflowError(
+                f"source worktree has an in-progress Git operation: {marker}"
+            )
+
+    ancestor = _run_git(
+        worktree,
+        ["merge-base", "--is-ancestor", replay.base, "HEAD"],
+        cwd=worktree,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        raise DeltaWorkflowError("recorded BASE is not an ancestor of source HEAD")
+    merges = _run_git(
+        worktree,
+        ["rev-list", "--merges", f"{replay.base}..HEAD"],
+        cwd=worktree,
+    ).stdout.strip()
+    if merges:
+        raise DeltaWorkflowError("source worktree history must be linear")
+
+    commits = _run_git(
+        worktree,
+        ["rev-list", "--reverse", f"{replay.base}..HEAD"],
+        cwd=worktree,
+    ).stdout.splitlines()
+    if len(commits) <= len(replay.mailboxes):
+        raise DeltaWorkflowError("source worktree has no committed WIP change")
+    queue_head = commits[len(replay.mailboxes) - 1]
+    queue_tree = _run_git(
+        worktree, ["rev-parse", f"{queue_head}^{{tree}}"], cwd=worktree
+    ).stdout.strip()
+    if queue_tree != replay.tree:
+        raise DeltaWorkflowError(
+            "source worktree was not started from the current checked-in queue"
+        )
+
+    source_head = _run_git(worktree, ["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+    source_tree = _run_git(
+        worktree, ["rev-parse", "HEAD^{tree}"], cwd=worktree
+    ).stdout.strip()
+    if source_tree != expected_tree:
+        raise DeltaWorkflowError(
+            "source worktree changed after its tested tree was recorded: "
+            f"expected {expected_tree}, found {source_tree}"
+        )
+    if source_tree == replay.tree:
+        raise DeltaWorkflowError("source worktree has no net tree change to finalize")
+    return source_head, source_tree
+
+
+def _read_mailbox_metadata(
+    path: Path,
+    position: int,
+    mailbox_count: int,
+) -> MailboxMetadata:
+    try:
+        message = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+    except (OSError, UnicodeError) as error:
+        raise DeltaWorkflowError(f"could not parse mailbox {path}: {error}") from error
+
+    subject = str(message.get("Subject", "")).strip()
+    expected_prefix = f"[PATCH {position}/{mailbox_count}] "
+    if not subject.startswith(expected_prefix):
+        raise DeltaWorkflowError(
+            f"{path} subject must start with {expected_prefix!r}, found {subject!r}"
+        )
+    commit_subject = subject[len(expected_prefix) :].strip()
+    author_name, author_email = parseaddr(str(message.get("From", "")))
+    author_date = str(message.get("Date", "")).strip()
+    if not commit_subject or not author_name or not author_email or not author_date:
+        raise DeltaWorkflowError(f"{path} has incomplete commit metadata")
+
+    payload = message.get_payload(decode=True)
+    if not isinstance(payload, bytes):
+        raise DeltaWorkflowError(f"{path} must contain one plain-text patch payload")
+    text = payload.decode("utf-8", errors="strict").replace("\r\n", "\n")
+    lines = text.splitlines()
+    try:
+        separator_index = lines.index("---")
+    except ValueError:
+        raise DeltaWorkflowError(f"{path} is missing the format-patch separator")
+    body = "\n".join(lines[:separator_index]).strip("\n")
+    commit_message = commit_subject
+    if body:
+        commit_message = f"{commit_message}\n\n{body}"
+    return MailboxMetadata(
+        author_name=author_name,
+        author_email=author_email,
+        author_date=author_date,
+        commit_message=f"{commit_message}\n",
+    )
+
+
+def _commit_tree(
+    project_root: Path,
+    tree: str,
+    parent: str,
+    message: str,
+    environment: dict[str, str],
+) -> str:
+    return _run_git(
+        project_root,
+        ["commit-tree", tree, "-p", parent],
+        environment=environment,
+        input_text=message,
+    ).stdout.strip()
+
+
+def _candidate_mailbox(
+    project_root: Path,
+    prefix_tree: str,
+    owner_tree: str,
+    metadata: MailboxMetadata,
+    position: int,
+    mailbox_count: int,
+) -> str:
+    replay_identity = {
+        "GIT_AUTHOR_NAME": "herdr-win replay",
+        "GIT_AUTHOR_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "herdr-win replay",
+        "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+    }
+    prefix_commit = _commit_tree(
+        project_root,
+        prefix_tree,
+        _read_base(project_root),
+        "herdr-win delta prefix\n",
+        replay_identity,
+    )
+    owner_environment = {
+        **replay_identity,
+        "GIT_AUTHOR_NAME": metadata.author_name,
+        "GIT_AUTHOR_EMAIL": metadata.author_email,
+        "GIT_AUTHOR_DATE": metadata.author_date,
+    }
+    owner_commit = _commit_tree(
+        project_root,
+        owner_tree,
+        prefix_commit,
+        metadata.commit_message,
+        owner_environment,
+    )
+    return _run_git(
+        project_root,
+        [
+            "format-patch",
+            "--stdout",
+            "--full-index",
+            "--binary",
+            f"--subject-prefix=PATCH {position}/{mailbox_count}",
+            "-1",
+            owner_commit,
+        ],
+    ).stdout
+
+
+def _atomic_replace(path: Path, content: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def finalize_delta_mailbox(
+    worktree: Path,
+    mailbox: str,
+    expected_tree: str,
+    project_root: Path = PROJECT_ROOT,
+) -> FinalizeResult:
+    """Fold one tested WIP tree into one mailbox and prove exact queue replay."""
+
+    project_root = project_root.resolve()
+    _require_control_master(project_root)
+    _require_clean_delta(project_root)
+    _require_tree_object(project_root, expected_tree, "--expected-tree")
+
+    replay = replay_delta_tree(project_root)
+    if mailbox not in replay.mailboxes:
+        raise DeltaWorkflowError(f"--mailbox is not listed in series: {mailbox}")
+    source_head, source_tree = _require_source_worktree(
+        project_root,
+        worktree,
+        expected_tree,
+        replay,
+    )
+
+    delta_root = project_root / "patches" / "delta"
+    position = replay.mailboxes.index(mailbox) + 1
+    mailbox_path = delta_root / mailbox
+    original_mailbox = mailbox_path.read_bytes()
+    metadata = _read_mailbox_metadata(
+        mailbox_path,
+        position,
+        len(replay.mailboxes),
+    )
+
+    prefix_paths = [
+        delta_root / entry for entry in replay.mailboxes[: position - 1]
+    ]
+    later_paths = [
+        delta_root / entry for entry in reversed(replay.mailboxes[position:])
+    ]
+    prefix_tree = _tree_after_patches(project_root, replay.base, prefix_paths)
+    owner_tree = _tree_after_patches(
+        project_root,
+        expected_tree,
+        later_paths,
+        reverse=True,
+    )
+    unchanged = _run_git(
+        project_root,
+        ["diff", "--quiet", prefix_tree, owner_tree],
+        check=False,
+    )
+    if unchanged.returncode == 0:
+        raise DeltaWorkflowError(f"finalized mailbox would be empty: {mailbox}")
+    if unchanged.returncode not in (0, 1):
+        raise DeltaWorkflowError("could not compare finalized mailbox trees")
+
+    candidate = _candidate_mailbox(
+        project_root,
+        prefix_tree,
+        owner_tree,
+        metadata,
+        position,
+        len(replay.mailboxes),
+    ).encode("utf-8")
+
+    with tempfile.TemporaryDirectory(prefix="herdr-delta-finalize-") as temp_dir:
+        candidate_path = Path(temp_dir) / mailbox
+        candidate_path.write_bytes(candidate)
+        candidate_paths = [
+            candidate_path if entry == mailbox else delta_root / entry
+            for entry in replay.mailboxes
+        ]
+        candidate_tree = _tree_after_patches(
+            project_root,
+            replay.base,
+            candidate_paths,
+        )
+    if candidate_tree != expected_tree:
+        difference = _run_git(
+            project_root,
+            ["diff", "--stat", expected_tree, candidate_tree],
+            check=False,
+        ).stdout.strip()
+        detail = f"\n{difference}" if difference else ""
+        raise DeltaWorkflowError(
+            "finalized queue does not reproduce the tested source tree: "
+            f"expected {expected_tree}, found {candidate_tree}{detail}"
+        )
+    _run_git(project_root, ["diff", "--check", replay.base, candidate_tree])
+
+    if mailbox_path.read_bytes() != original_mailbox:
+        raise DeltaWorkflowError(f"mailbox changed concurrently: {mailbox}")
+    _atomic_replace(mailbox_path, candidate)
+    try:
+        verified = verify_replay_tree(expected_tree, project_root)
+    except DeltaWorkflowError as error:
+        _atomic_replace(mailbox_path, original_mailbox)
+        raise DeltaWorkflowError(
+            f"restored {mailbox} after final on-disk verification failed: {error}"
+        ) from error
+
+    return FinalizeResult(
+        mailbox=mailbox,
+        source_head=source_head,
+        source_tree=source_tree,
+        replay_tree=verified.tree,
+    )
 
 
 def start_delta_worktree(
@@ -244,13 +636,7 @@ def start_delta_worktree(
             f"worktree parent directory does not exist: {path.parent}"
         )
 
-    current_branch = _run_git(
-        project_root, ["symbolic-ref", "--short", "HEAD"]
-    ).stdout.strip()
-    if current_branch != "master":
-        raise DeltaWorkflowError(
-            f"control checkout must be on master, found {current_branch!r}"
-        )
+    _require_control_master(project_root)
     _require_clean_delta(project_root)
 
     base = _read_base(project_root)
@@ -305,7 +691,7 @@ def start_delta_worktree(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Materialize and verify the maintained herdr-win delta."
+        description="Materialize, explicitly finalize, and verify the herdr-win delta."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -327,6 +713,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--expected-tree",
         help="exact tested Git tree ID that the checked-in queue must reproduce",
     )
+
+    finalize = commands.add_parser(
+        "finalize",
+        help="fold one explicitly finalized WIP tree into its owning mailbox",
+    )
+    finalize.add_argument(
+        "--worktree",
+        required=True,
+        type=Path,
+        help="absolute path to the clean replayed WIP worktree",
+    )
+    finalize.add_argument(
+        "--mailbox",
+        required=True,
+        help="exact owning mailbox name from patches/delta/series",
+    )
+    finalize.add_argument(
+        "--expected-tree",
+        required=True,
+        help="exact tested Git tree ID that final replay must reproduce",
+    )
     return parser
 
 
@@ -342,6 +749,19 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"head: {result.head}")
             print(f"tree: {result.tree}")
             print(f"mailboxes: {result.mailbox_count}")
+            return 0
+
+        if options.command == "finalize":
+            result = finalize_delta_mailbox(
+                options.worktree,
+                options.mailbox,
+                options.expected_tree,
+            )
+            print(f"mailbox: {result.mailbox}")
+            print(f"source-head: {result.source_head}")
+            print(f"source-tree: {result.source_tree}")
+            print(f"replay-tree: {result.replay_tree}")
+            print("mailbox-updated: yes")
             return 0
 
         result = verify_replay_tree(options.expected_tree)

@@ -20,18 +20,6 @@ configuration repository.
 
 ## Proposals
 
-- **Status: proposed. Automate the remaining mailbox finalization mechanics.**
-  Evidence: earlier milestones repeated manual `format-patch` and worktree cleanup,
-  hit Windows path-length and linked-worktree trust failures, and lost time to
-  unusable workspace-local Cargo intermediates. The accepted fast path now owns
-  one replayed task tree and exact tree verification, but logical folding, bounded
-  Cargo target selection, artifact publication, and proven-safe cleanup remain
-  manual. Proposed change: after real use confirms those steps still dominate,
-  extend `scripts/delta_workflow.py` with one bounded finalization operation.
-  Expected benefit: remove the remaining repeated mechanics without adding another
-  source authority. Owner: `scripts/delta_workflow.py`, its focused tests, and
-  `CONTRIBUTING.md`.
-
 - **Status: proposed. Add a repository-owned local Windows input acceptance probe.**
   Evidence: a task-local probe hardcoded the development state directory and used
   a PATH-dependent sentinel that detached servers did not inherit, producing false
@@ -42,12 +30,3 @@ configuration repository.
   benefit: faster local-versus-remote attribution and reliable keyboard regression
   evidence. Owner: a focused script and tests under `scripts/`, documented in
   `CONTRIBUTING.md`.
-
-- **Status: proposed. Isolate Windows PowerShell 5.1 packaging modules.**
-  Evidence: the ConPTY packager failed to load `Microsoft.PowerShell.Security`
-  when an inherited PowerShell 7 module path introduced duplicate type data;
-  restricting the child to native Windows PowerShell module roots made the same
-  package succeed. Proposed change: make the repository packaging entrypoint own
-  and test its Windows PowerShell 5.1 module environment. Expected benefit:
-  deterministic signature and archive validation across mixed PowerShell installs.
-  Owner: `scripts/package_windows_conpty.ps1` and its focused tests.

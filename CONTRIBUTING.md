@@ -178,12 +178,14 @@ Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtim
 and launcher identity, then delegates to the materialized source's existing NSIS
 packager. The setup is written to the one short replaceable path
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
-reports its new hash. A tiny daytime packaging-only request must report that
-installable artifact within two minutes of the user request. Request-to-artifact
-is the primary user-wait metric; build time, candidate completion, remote backup,
-and promotion are separate timings. Report the installer immediately so user and
-agent testing can continue in parallel. Missing or corrupt inputs are a clear
-preparation blocker, not authority to unpack an old installer or repeatedly
+reports its new hash. A tiny, clearly bounded daytime packaging-only request uses
+a soft goal of roughly two minutes from the user request to that installable
+artifact. Request-to-artifact is the primary user-wait metric; build time,
+candidate completion, remote backup, and promotion are separate timings. The goal
+is never a deadline or reason to stop discovery, diagnosis, or a running build;
+complex work has no two-minute expectation. Report the installer immediately so
+user and agent testing can continue in parallel. Missing or corrupt inputs are a
+clear preparation blocker, not authority to unpack an old installer or repeatedly
 rebuild unchanged payloads.
 
 ### Refreshing from official upstream

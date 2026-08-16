@@ -1,11 +1,11 @@
-From e9859baf6686a0b76bad4aef6f71c7b30316c1db Mon Sep 17 00:00:00 2001
+From 44fb9b480bdadc87ea3f60c76f1f1b73b2732fdd Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
 
 Transport bounded host color and appearance events, keep software and native cursors visible with host and child-selected colors, and follow host appearance for otherwise unconfigured themes.
 ---
- docs/next/CHANGELOG.md                        |   1 +
+ docs/next/CHANGELOG.md                        |   4 +
  docs/next/api/herdr-api.schema.json           |   2 +-
  .../src/content/docs/configuration.mdx        |   2 +-
  .../src/content/docs/ja/configuration.mdx     |   2 +-
@@ -24,24 +24,34 @@ Transport bounded host color and appearance events, keep software and native cur
  src/platform/windows.rs                       |  36 ++
  src/protocol/render_ansi.rs                   | 320 +++++++++++++++++-
  src/protocol/wire.rs                          |  67 +++-
- src/raw_input.rs                              | 108 +++++-
+ src/raw_input.rs                              | 120 ++++++-
  src/server/client_transport.rs                |   4 +-
  src/server/headless.rs                        |  16 +-
  src/server/render_stream.rs                   |   3 +
  src/terminal_modes.rs                         |  15 +-
- src/terminal_theme.rs                         |  33 +-
+ src/terminal_theme.rs                         |  50 ++-
  src/ui/tab_surface.rs                         |   6 +-
  tests/cli/sessions.rs                         |   6 +-
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 30 files changed, 1276 insertions(+), 141 deletions(-)
+ 30 files changed, 1285 insertions(+), 164 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index da9c9b710258580c0f193f1c95d4065884accc17..218ef58f1d4628f0e0e087981a081b2d35485102 100644
+index da9c9b710258580c0f193f1c95d4065884accc17..9e920e0187d45f3826bafa3417d3172ecefb6447 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
-@@ -99,6 +99,7 @@
+@@ -2,6 +2,9 @@
+ 
+ ## Unreleased
+ 
++### Changed
++- Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
++
+ ## [0.8.0] - 2026-08-03
+ 
+ ### Added
+@@ -99,6 +102,7 @@
  
  ### Changed
  - Agent commands now accept only a unique live agent name or the pane ID currently hosting that agent. Names are cleared when the occupant exits, is released, or is replaced. The old top-level `wait` commands were replaced by `agent wait` and `pane wait-output`, and `agent send` was replaced by `agent send-keys`.
@@ -2205,7 +2215,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
          let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
  
 diff --git a/src/raw_input.rs b/src/raw_input.rs
-index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896bce98caa 100644
+index 5bd57719162d2698f90f676dedfa4cfe65a94c56..0444bee6753eb2ec010ea5b109cea0b0069ab69c 100644
 --- a/src/raw_input.rs
 +++ b/src/raw_input.rs
 @@ -189,6 +189,11 @@ impl RawInputFramer {
@@ -2230,7 +2240,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
  }
  
 -const HOST_COLOR_QUERY_REPLIES: u16 = 258;
-+const HOST_COLOR_QUERY_REPLIES: u16 = 259;
++const HOST_COLOR_QUERY_REPLIES: u16 = 3;
  #[cfg(any(unix, test))]
  const HOST_CELL_SIZE_QUERY_REPLIES: u16 = 1;
  const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
@@ -2310,7 +2320,19 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
      fn drain_available_chunks(&mut self) -> Vec<Vec<u8>> {
          let mut chunks = Vec::new();
  
-@@ -527,6 +572,7 @@ impl RawInputByteFramer {
+@@ -513,10 +558,7 @@ impl RawInputByteFramer {
+             let Some((event, consumed)) = extract_one_event(&self.buffer) else {
+                 break;
+             };
+-            if matches!(
+-                event,
+-                RawInputEvent::HostDefaultColor { .. } | RawInputEvent::HostPaletteColors { .. }
+-            ) {
++            if matches!(event, RawInputEvent::HostDefaultColor { .. }) {
+                 self.host_color_replies_awaited = self.host_color_replies_awaited.saturating_sub(1);
+             } else if matches!(event, RawInputEvent::HostCellSizeReport { .. }) {
+                 self.host_cell_size_replies_awaited =
+@@ -527,6 +569,7 @@ impl RawInputByteFramer {
                  self.host_color_query_sent();
              }
              self.held_pending_host_reply_esc = false;
@@ -2318,7 +2340,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
              chunks.push(self.buffer[..consumed].to_vec());
              self.buffer.drain(..consumed);
          }
-@@ -578,7 +624,6 @@ pub(crate) fn events_require_host_surface_redraw(
+@@ -578,7 +621,6 @@ pub(crate) fn events_require_host_surface_redraw(
              .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
  }
  
@@ -2326,7 +2348,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
  pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
      events
          .iter()
-@@ -891,7 +936,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
+@@ -891,7 +933,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
          Some(ControlString::Incomplete {
              family: ControlStringFamily::Osc
          })
@@ -2338,7 +2360,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
  }
  
  fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
-@@ -1454,6 +1502,25 @@ mod tests {
+@@ -1454,6 +1499,25 @@ mod tests {
          );
      }
  
@@ -2364,7 +2386,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
      #[test]
      fn parses_legacy_up_arrow() {
          let (RawInputEvent::Key(key), consumed) = extract_one_event(b"\x1b[A").unwrap() else {
-@@ -2811,11 +2878,41 @@ mod tests {
+@@ -2811,11 +2875,41 @@ mod tests {
              }
          ));
  
@@ -2406,15 +2428,24 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..f9c7735aaa84377e1df9be6978186896
      #[test]
      fn flushes_lone_escape_when_not_awaiting_host_color_reply() {
          let mut framer = RawInputByteFramer::default();
-@@ -2847,9 +2944,10 @@ mod tests {
-         for index in 0..=u8::MAX {
-             let _ = write!(replies, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
-         }
-+        replies.push_str("\x1b]12;rgb:aaaa/bbbb/cccc\x1b\\");
+@@ -2838,18 +2932,12 @@ mod tests {
+ 
+     #[test]
+     fn stops_holding_lone_escape_after_host_color_reply_completes() {
+-        use std::fmt::Write as _;
+-
+         let mut framer = RawInputByteFramer::default();
+         framer.host_color_query_sent();
+-        let mut replies =
+-            String::from("\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\");
+-        for index in 0..=u8::MAX {
+-            let _ = write!(replies, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
+-        }
++        let replies = "\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\\x1b]12;rgb:aaaa/bbbb/cccc\x1b\\";
  
          let chunks = framer.push(replies.as_bytes());
 -        assert_eq!(chunks.len(), 258);
-+        assert_eq!(chunks.len(), 259);
++        assert_eq!(chunks.len(), 3);
  
          // Window closed: a later lone Escape flushes immediately.
          assert!(framer.push(b"\x1b").is_empty());
@@ -2564,7 +2595,7 @@ index 8f0276e00d272e1e7694ca40b85b8ab6f6b21699..43888ee82643aa8edd29d06e93375d70
                  sequence.contains(&format!("\x1b[?{mode}l")),
                  "missing mouse mode {mode}"
 diff --git a/src/terminal_theme.rs b/src/terminal_theme.rs
-index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e36cc5f688 100644
+index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622ac03dffd4 100644
 --- a/src/terminal_theme.rs
 +++ b/src/terminal_theme.rs
 @@ -1,11 +1,11 @@
@@ -2606,7 +2637,24 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e3
          }
          self
      }
-@@ -96,6 +98,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
+@@ -77,14 +79,8 @@ impl TerminalTheme {
+     }
+ }
+ 
+-pub fn host_terminal_theme_query_sequence() -> String {
+-    use std::fmt::Write as _;
+-
+-    let mut sequence = String::from(HOST_COLOR_QUERY_SEQUENCE);
+-    for index in 0..=u8::MAX {
+-        let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
+-    }
+-    sequence
++pub fn host_terminal_theme_query_sequence() -> &'static str {
++    HOST_COLOR_QUERY_SEQUENCE
+ }
+ 
+ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind, RgbColor)> {
+@@ -96,6 +92,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
      let kind = match command {
          "10" => DefaultColorKind::Foreground,
          "11" => DefaultColorKind::Background,
@@ -2614,7 +2662,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e3
          _ => return None,
      };
      Some((kind, parse_rgb_color(value)?))
-@@ -114,6 +117,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
+@@ -114,6 +111,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
      let command = match kind {
          DefaultColorKind::Foreground => 10,
          DefaultColorKind::Background => 11,
@@ -2622,7 +2670,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e3
      };
      format!(
          "\x1b]{command};rgb:{:02x}/{:02x}/{:02x}\x1b\\",
-@@ -125,6 +129,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str
+@@ -125,6 +123,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str
      match kind {
          DefaultColorKind::Foreground => "\x1b]110\x1b\\",
          DefaultColorKind::Background => "\x1b]111\x1b\\",
@@ -2630,10 +2678,26 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e3
      }
  }
  
-@@ -223,6 +228,22 @@ mod tests {
-         assert_eq!(query.matches("\x1b]4;").count(), 256);
+@@ -203,7 +202,7 @@ mod tests {
      }
  
+     #[test]
+-    fn parses_palette_responses_and_builds_full_query() {
++    fn parses_palette_responses_without_querying_host_palette() {
+         assert_eq!(
+             parse_palette_color_response("\x1b]4;255;rgb:1111/2222/3333\x1b\\"),
+             Some((
+@@ -218,9 +217,24 @@ mod tests {
+ 
+         let query = host_terminal_theme_query_sequence();
+         assert!(query.starts_with(HOST_COLOR_QUERY_SEQUENCE));
+-        assert!(query.contains("\x1b]4;0;?\x1b\\"));
+-        assert!(query.ends_with("\x1b]4;255;?\x1b\\"));
+-        assert_eq!(query.matches("\x1b]4;").count(), 256);
++        assert_eq!(query.matches("\x1b]").count(), 3);
++        assert!(!query.contains("\x1b]4;"));
++    }
++
 +    #[test]
 +    fn parses_cursor_color_response() {
 +        let parsed = parse_default_color_response("\x1b]12;rgb:1212/3434/5656\x1b\\");
@@ -2648,12 +2712,10 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..e6aa71d4bed882e0c9e40530563dc6e3
 +                },
 +            ))
 +        );
-+    }
-+
+     }
+ 
      #[test]
-     fn default_color_reset_sequences_use_xterm_osc_numbers() {
-         assert_eq!(
-@@ -233,6 +254,10 @@ mod tests {
+@@ -233,6 +247,10 @@ mod tests {
              osc_reset_default_color_sequence(DefaultColorKind::Background),
              "\x1b]111\x1b\\"
          );

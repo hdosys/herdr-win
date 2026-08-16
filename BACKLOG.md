@@ -1,7 +1,7 @@
 # BACKLOG.md
 
-Open, planned, blocked, or deferred herdr-win product work only. User-visible
-product rules belong in `PRODUCT.md`; stable technical design belongs in
+Current-user-selected future herdr-win product outcomes only. User-visible product
+rules belong in `PRODUCT.md`; stable technical design belongs in
 `ARCHITECTURE.md`; workflow/tooling/test/skill proposals belong in
 `AGENT_IMPROVEMENTS.md`.
 
@@ -9,9 +9,9 @@ product rules belong in `PRODUCT.md`; stable technical design belongs in
 
 - Keep items actionable and current.
 - Remove completed or obsolete items instead of preserving history.
-- Include expected verification when known.
-- Do not use this file for task logs, accepted product rules, architecture, or
-  agent process notes.
+- Do not use this file for untriaged findings, verification assignments, evidence,
+  test reminders, task logs, accepted product rules, architecture, or agent
+  process notes.
 
 ## Items
 
@@ -30,5 +30,3 @@ product rules belong in `PRODUCT.md`; stable technical design belongs in
   restoring an older version.
 - Owner: mailbox `patches/delta/0003-windows-remote-attach.patch`, with its
   `PRODUCT.md`, `ARCHITECTURE.md`, and public README projections updated together.
-  Verify focused Windows payload staging, active-lease rejection, clean failure
-  states, and final server identity.

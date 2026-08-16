@@ -17,16 +17,13 @@ configuration.
 - `CONTRIBUTING.md` owns change classification, mailbox maintenance, replay,
   verification, documentation projection, commit, and upstream-engagement
   procedure.
-- `BACKLOG.md` owns open, planned, blocked, or deferred product work.
+- `BACKLOG.md` owns only current-user-selected future product outcomes.
 - `AGENT_IMPROVEMENTS.md` owns evidence-backed herdr-win-specific workflow,
   tooling, test, and skill improvement proposals.
-- `.agent/sessions/<session-id>/` owns ignored task-local `TASK.md`, `STATE.md`,
-  and `LOG.md` state for long work.
 
 After system and current-user instructions, local precedence is this file,
-`PRODUCT.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, active session state, then
-`BACKLOG.md`. Improvement proposals are not active rules until accepted into an
-owning file.
+`PRODUCT.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, then `BACKLOG.md`.
+Improvement proposals are not active rules until accepted into an owning file.
 
 Route each durable decision to exactly one owner above. Cross-project OpenCode
 behavior belongs in the global configuration repository. Do not invent another
@@ -81,16 +78,12 @@ active memory owner.
 - Treat this directory as the root and `master` as the control branch; stop for
   direction on another branch.
 - Preserve recovery stashes and unrelated shared-worktree changes.
-- Never commit `.agent/`, generated replay/build evidence, logs, binaries,
-  credentials, private data, or temporary worktrees.
+- Never commit generated replay/build evidence, logs, binaries, credentials,
+  private data, or temporary worktrees.
 - Final local ZIP, setup, and checksum artifacts always go under the workspace's
   ignored `target/<target-triple>/release/` directory. Temporary directories are
   intermediates only; never report an external temporary path as the primary
   user-testable artifact.
-- Long or resumable work uses exactly one `.agent/sessions/<session-id>/` unless
-  `OPENCODE_SESSION_DIR` or `AGENT_SESSION_DIR` selects another owner. Never create
-  repository-root `TASK.md`, `STATE.md`, or `LOG.md`, and never write another
-  session's directory.
 
 ## Product and implementation constraints
 

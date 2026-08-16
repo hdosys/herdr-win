@@ -28,8 +28,11 @@ Before editing, classify the change:
   mailbox when applicable, and the mirrored public README projection.
 - **Stable technical design:** update `ARCHITECTURE.md` and the owning code/tests
   or mailbox together.
-- **Open product work or process improvements:** use `BACKLOG.md` or
-  `AGENT_IMPROVEMENTS.md` respectively; do not leave them in task logs.
+- **Selected future product work:** use `BACKLOG.md` only after the current user
+  chooses the outcome for later implementation. It never owns findings,
+  verification assignments, evidence, or test reminders.
+- **Repository-specific process improvements:** use `AGENT_IMPROVEMENTS.md` while
+  proposed, then move accepted procedure to this file or the owning automation.
 
 Open an issue only when a substantial change still needs product or architecture
 scope alignment before implementation. A bounded change whose scope is already
@@ -175,10 +178,13 @@ Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtim
 and launcher identity, then delegates to the materialized source's existing NSIS
 packager. The setup is written to the one short replaceable path
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
-reports its new hash. A known packaging-only edit must reach that artifact within
-two minutes of the user request; candidate commit, remote backup, and promotion are
-separate timings. Missing or corrupt inputs are a clear preparation blocker, not
-authority to unpack an old installer or repeatedly rebuild unchanged payloads.
+reports its new hash. A tiny daytime packaging-only request must report that
+installable artifact within two minutes of the user request. Request-to-artifact
+is the primary user-wait metric; build time, candidate completion, remote backup,
+and promotion are separate timings. Report the installer immediately so user and
+agent testing can continue in parallel. Missing or corrupt inputs are a clear
+preparation blocker, not authority to unpack an old installer or repeatedly
+rebuild unchanged payloads.
 
 ### Refreshing from official upstream
 

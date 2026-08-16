@@ -1,12 +1,12 @@
 # herdr-win
 
-**A native Windows distribution of [Herdr](https://github.com/herdrdev/herdr), maintained as a small, reviewable patch queue, not a permanent fork.**
+**First-class Windows client and server support for [Herdr](https://github.com/herdrdev/herdr), delivered as matching Windows, Linux, and macOS binaries from a small, reviewable patch queue.**
 
 [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Candidate build](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)
 
-`herdr-win` is an unofficial, upstream-first delivery lane for Herdr on Windows. It keeps the normal `herdr` command and workflow, adds Windows behavior not yet available in an upstream stable release, and publishes tested snapshots from an exact reviewed Herdr release plus the ordered maintained patch queue.
+`herdr-win` is an unofficial, upstream-first distribution focused on feature parity for Windows. It keeps the normal `herdr` command and workflow, adds Windows behavior not yet available in an upstream stable release, and builds every tested snapshot for Windows, Linux, and macOS from the same exact reviewed source and ordered patch queue. Windows can run both the interactive client and an SSH-reachable Herdr server, while users on any supported platform can run a matching client or remote endpoint when developing across a Windows workstation or VM.
 
-[Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install](#install) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
+[Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
 
 > [!NOTE]
 > Upstream Herdr owns the general CLI, configuration, integrations, and product documentation. This repository owns only its Windows-focused delta and distribution. Reproduce general issues with upstream Herdr before reporting them here.
@@ -16,7 +16,8 @@
 The reviewed upstream release provides Herdr's core. herdr-win supplies the remaining Windows behavior needed to use that core as a dependable daily tool:
 
 - **A terminal that feels native:** Windows appearance, cursor and input behavior remain correct through ConPTY instead of degrading at the platform boundary.
-- **Remote Windows sessions without binary drift:** supported clients can attach to or provision Windows SSH hosts with an exact runtime, protocol check, and named-session lifecycle.
+- **Windows as a Herdr server:** Windows, Linux, and macOS clients can attach to or provision a Windows workstation or VM over SSH with an exact runtime, protocol check, and named-session lifecycle.
+- **One release across mixed environments:** matching Windows, Linux, and macOS assets let Herdr provision supported remote endpoints from the same protocol-compatible build instead of relying on manual binary copying or independently released versions.
 - **Updates that respect running work:** per-user setup uses verified immutable runtimes, lets active sessions finish, and activates one coherent replacement afterward.
 - **Agent status that reflects reality:** OpenCode retries stay active instead of surfacing premature failures, while terminal errors remain visible.
 
@@ -65,9 +66,11 @@ flowchart LR
 
 An upstream refresh is deliberate: select the latest stable release, replay the complete queue, remove behavior upstream now owns, regenerate changed mailboxes, and verify a fresh replay. `BASE` never follows upstream `master` automatically.
 
-## Install
+## Install and cross-platform use
 
 Windows x86_64 is the managed distribution target. Each release also carries matching Linux and macOS binaries for remote endpoints that must speak the same wire protocol.
+
+This supports mixed development environments directly: run the managed client and server on Windows, or use a matching Linux or macOS client to control a Herdr server on a Windows workstation or VM. The companion binaries can also run as remote endpoints when a Windows client connects in the other direction.
 
 Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates remote configuration, stops the selected server with approval, stages and validates the complete digest-verified Windows portable payload, atomically replaces the stable runtime, removes the transient previous payload, then starts and verifies the new server. Local Windows development builds use the same complete portable layout; Herdr packages the adjacent runtime and rejects an executable without its ConPTY bundle. It never runs setup or changes remote `PATH`; ordinary non-interactive attach leaves the host unchanged. The host's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`) so the interactive bridge remains byte-exact. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
 
@@ -119,7 +122,7 @@ The release also includes `herdr-win_v<version>_windows_amd64.zip`. Extract the 
 > [!WARNING]
 > The Herdr executable and setup are currently unsigned, so Windows may show a SmartScreen warning. Download release artifacts only from this repository.
 
-### Matching Linux and macOS binaries
+### Linux and macOS clients and endpoints
 
 Each release includes raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. They are compatibility companions for remote hosts, not managed installers.
 

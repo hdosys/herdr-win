@@ -24,9 +24,14 @@ tests remain the detailed implementation truth.
   provenance is available, and omits the build clause otherwise. Integrations can
   require the stable `herdr-win ` prefix without changing the executable, command,
   state, or protocol identity.
-- herdr-win snapshots currently target Windows x86_64. General CLI, TUI,
-  configuration, integration, and issue behavior remains documented and owned
-  upstream unless a maintained Windows delta explicitly changes it.
+- Windows x86_64 is the managed distribution target. Every herdr-win snapshot also
+  carries matching Linux and macOS binaries for amd64 and arm64 so supported clients
+  and remote endpoints can share the same fork wire protocol in mixed-platform
+  development environments. Existing remote provisioning uses those matching assets
+  instead of requiring manual binary copying or independently released builds.
+  Windows can run both the interactive client and an SSH-reachable Herdr server.
+  General CLI, TUI, configuration, integration, and issue behavior remains documented
+  and owned upstream unless a maintained Windows delta explicitly changes it.
 - The maintained user-visible Windows delta covers terminal fidelity, remote
   attach/image transport, managed Windows distribution, and truthful OpenCode
   retry/error lifecycle reporting.

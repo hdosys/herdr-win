@@ -42,3 +42,15 @@ configuration repository.
   cached bundle was revalidated in 1.098 seconds and produced the next atomically
   replaced setup in 23.840 seconds. Owner: the script, its focused tests, and the
   Candidate procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Add one identity-aware source-candidate artifact command.**
+  Evidence: a 14-line net source reduction spent 380 seconds on a cold focused
+  Windows test build, 540 seconds on a separate release build, and another 315
+  seconds relinking after local build identity was supplied; validated installer
+  packaging then took 23 seconds. Proposed change: derive the deterministic local
+  build identity from the frozen candidate before compiling, reuse one Sandbox-local
+  Cargo target and release profile for the focused test and binaries, then invoke
+  the existing validated installer bundle path. Expected benefit: remove one full
+  compile profile and the identity rebuild from the first installable source
+  candidate. Owner: one bounded command under `scripts/` and the candidate procedure
+  in `CONTRIBUTING.md`.

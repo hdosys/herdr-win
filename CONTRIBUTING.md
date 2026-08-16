@@ -147,9 +147,25 @@ mailbox churn are not substitutes for source review plus exact tree identity.
 ### Fast local Windows installer candidates
 
 The control checkout owns one thin local entrypoint that reuses the materialized
-source packager. It adds no installer implementation. Prepare a persistent ignored
-input bundle only when the runtime, launcher, helper, or staged ConPTY payload
-changes:
+source packager. It adds no installer implementation. For every source change, use
+one command that derives local identity before compilation, gives Cargo every
+logical processor available to the current process, builds only the runtime,
+launcher, and installer helper, and finishes at the real installer:
+
+```powershell
+python scripts/local_windows_installer.py candidate `
+  --source-worktree <materialized-source-worktree>
+```
+
+Its intermediates use one Sandbox-local Cargo target by default. An exact existing
+cache may be selected with `--cargo-target-dir <absolute-path>`. The command passes
+the detected logical processor count through Cargo `--jobs`, so an inherited
+single-job setting cannot serialize the build. Success always reports the replaced
+installer at
+`target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`.
+
+Prepare a persistent ignored input bundle directly only when supplying already
+built runtime, launcher, helper, or staged ConPTY payloads:
 
 ```powershell
 python scripts/local_windows_installer.py prepare `

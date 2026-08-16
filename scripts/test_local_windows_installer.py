@@ -11,6 +11,8 @@ from scripts.local_windows_installer import (
     LocalInstallerError,
     OUTPUT_PATH,
     _bundle_manifest,
+    _candidate_build_id,
+    _cargo_build_arguments,
     _hashes,
     parse_identity,
 )
@@ -68,6 +70,29 @@ class LocalWindowsInstallerTests(unittest.TestCase):
 
     def test_default_output_is_one_short_replaceable_candidate_path(self) -> None:
         self.assertEqual(OUTPUT_PATH.name, "herdr-win_local_candidate_setup.exe")
+
+    def test_candidate_identity_tracks_the_exact_source_snapshot(self) -> None:
+        base = "a" * 40
+        source = "b" * 40
+        clean = _candidate_build_id(base, source, "", [])
+
+        self.assertRegex(clean, r"^a{12}\.[0-9a-f]{12}$")
+        self.assertNotEqual(clean, _candidate_build_id(base, source, "diff", []))
+        self.assertNotEqual(
+            clean,
+            _candidate_build_id(base, source, "", [("src/new.rs", b"content")]),
+        )
+
+    def test_candidate_build_uses_all_selected_jobs_and_only_required_bins(self) -> None:
+        arguments = _cargo_build_arguments(Path("C:/cargo-target"), 16)
+
+        self.assertEqual(arguments[arguments.index("--jobs") + 1], "16")
+        bins = [
+            arguments[index + 1]
+            for index, value in enumerate(arguments)
+            if value == "--bin"
+        ]
+        self.assertEqual(bins, ["herdr", "herdr-launcher", "herdr-installer-helper"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and reuse one validated local Windows installer input bundle."""
+"""Build and reuse one validated local Windows installer candidate."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -24,7 +25,12 @@ TARGET_ROOT = PROJECT_ROOT / "target" / "x86_64-pc-windows-msvc"
 INPUT_ROOT = TARGET_ROOT / "installer-inputs"
 OUTPUT_PATH = TARGET_ROOT / "release" / "herdr-win_local_candidate_setup.exe"
 NSIS_CACHE = TARGET_ROOT / "tools" / "nsis-3.12"
+WINDOWS_TARGET = "x86_64-pc-windows-msvc"
+DEFAULT_CARGO_TARGET = (
+    Path(tempfile.gettempdir()) / "opencode" / "herdr-win-cargo-target"
+)
 BUILD_ID_RE = re.compile(r"^[0-9a-f]{12}\.[0-9a-f]{12}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 LOCAL_VERSION_RE = re.compile(
     r"^herdr-win local \(Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
@@ -49,9 +55,15 @@ def _run(
     cwd: Path | None = None,
     timeout: int,
     clean_runtime_environment: bool = False,
+    environment_overrides: dict[str, str] | None = None,
+    removed_environment: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["GIT_TERMINAL_PROMPT"] = "0"
+    for name in removed_environment:
+        environment.pop(name, None)
+    if environment_overrides:
+        environment.update(environment_overrides)
     if clean_runtime_environment:
         environment.pop("HERDR_REMOTE_SIDECAR_V1", None)
     try:
@@ -139,6 +151,139 @@ def parse_identity(version: str, launcher_build_id: str) -> InstallerIdentity:
     if match.group("build") != launcher_build_id:
         raise LocalInstallerError("runtime and launcher report different local build identities")
     return InstallerIdentity(launcher_build_id, match.group("base"))
+
+
+def _candidate_build_id(
+    base_commit: str,
+    source_commit: str,
+    tracked_diff: str,
+    untracked_files: Sequence[tuple[str, bytes]],
+) -> str:
+    if (
+        COMMIT_RE.fullmatch(base_commit) is None
+        or COMMIT_RE.fullmatch(source_commit) is None
+    ):
+        raise LocalInstallerError("candidate identity requires full lowercase commit IDs")
+    digest = hashlib.sha256()
+    digest.update(f"source-commit\0{source_commit}\0tracked-diff\0".encode())
+    digest.update(tracked_diff.encode("utf-8"))
+    for name, payload in sorted(untracked_files):
+        digest.update(f"\0untracked\0{name}\0{len(payload)}\0".encode())
+        digest.update(payload)
+    return f"{base_commit[:12]}.{digest.hexdigest()[:12]}"
+
+
+def _source_build_identity(source: Path) -> tuple[str, str]:
+    base_path = _safe_path(
+        PROJECT_ROOT / "patches" / "delta" / "BASE",
+        "delta BASE",
+        directory=False,
+    )
+    base_commit = base_path.read_text(encoding="utf-8").strip()
+    source_commit = _git(source, ["rev-parse", "HEAD"])
+    tracked_diff = _run(
+        "git",
+        [
+            "-c",
+            "core.longpaths=true",
+            "-C",
+            str(source),
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "HEAD",
+        ],
+        timeout=10,
+    ).stdout
+    untracked_output = _run(
+        "git",
+        [
+            "-c",
+            "core.longpaths=true",
+            "-C",
+            str(source),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        timeout=10,
+    ).stdout
+    untracked_files: list[tuple[str, bytes]] = []
+    for relative in filter(None, untracked_output.split("\0")):
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise LocalInstallerError(
+                f"untracked source path escapes the worktree: {relative}"
+            )
+        source_file = _safe_path(
+            source / path, f"untracked source {relative}", directory=False
+        )
+        untracked_files.append((path.as_posix(), source_file.read_bytes()))
+    return (
+        _candidate_build_id(base_commit, source_commit, tracked_diff, untracked_files),
+        base_commit,
+    )
+
+
+def _cargo_build_arguments(cargo_target: Path, jobs: int) -> list[str]:
+    if jobs < 1:
+        raise LocalInstallerError("Cargo requires at least one build job")
+    return [
+        "build",
+        "--release",
+        "--locked",
+        "--target",
+        WINDOWS_TARGET,
+        "--target-dir",
+        str(cargo_target),
+        "--jobs",
+        str(jobs),
+        "--bin",
+        "herdr",
+        "--bin",
+        "herdr-launcher",
+        "--bin",
+        "herdr-installer-helper",
+    ]
+
+
+def _available_cpu_count() -> int:
+    process_cpu_count = getattr(os, "process_cpu_count", os.cpu_count)
+    return process_cpu_count() or 1
+
+
+def _directory(path: Path, label: str) -> Path:
+    if not path.is_absolute():
+        raise LocalInstallerError(f"{label} must be an absolute path")
+    path.mkdir(parents=True, exist_ok=True)
+    return _safe_path(path, label, directory=True)
+
+
+def _conpty_package_path(source: Path) -> Path:
+    metadata = _safe_path(
+        source / "packaging" / "windows" / "conpty.json",
+        "source ConPTY metadata",
+        directory=False,
+    )
+    try:
+        package = json.loads(metadata.read_text(encoding="utf-8"))["package"]
+        package_id = str(package["id"])
+        version = str(package["version"])
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise LocalInstallerError(
+            f"could not read source ConPTY package identity: {error}"
+        ) from error
+    if re.fullmatch(r"[A-Za-z0-9.]+", package_id) is None or re.fullmatch(
+        r"[0-9]+(?:\.[0-9]+)+", version
+    ) is None:
+        raise LocalInstallerError("source ConPTY package identity is invalid")
+    return (
+        PROJECT_ROOT
+        / "target"
+        / "package-cache"
+        / f"{package_id}.{version}.nupkg"
+    )
 
 
 def _identity(stage: Path, launcher: Path) -> InstallerIdentity:
@@ -332,6 +477,86 @@ def build(options: argparse.Namespace) -> None:
     print(f"elapsed_seconds={time.monotonic() - started:.3f}")
 
 
+def candidate(options: argparse.Namespace) -> None:
+    total_started = time.monotonic()
+    source = _source_root(options.source_worktree)
+    cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
+    build_id, base_commit = _source_build_identity(source)
+    jobs = _available_cpu_count()
+    print(f"build_id={build_id}")
+    print(f"cargo_jobs={jobs}")
+    print(f"cargo_target={cargo_target}")
+
+    cargo_started = time.monotonic()
+    cargo_result = _run(
+        "cargo",
+        _cargo_build_arguments(cargo_target, jobs),
+        cwd=source,
+        timeout=1200,
+        environment_overrides={
+            "HERDR_BUILD_ID": build_id,
+            "HERDR_BUILD_COMMIT": base_commit,
+        },
+        removed_environment=("HERDR_RELEASE_VERSION",),
+    )
+    if cargo_result.stdout:
+        print(cargo_result.stdout, end="" if cargo_result.stdout.endswith("\n") else "\n")
+    if cargo_result.stderr:
+        print(
+            cargo_result.stderr,
+            file=sys.stderr,
+            end="" if cargo_result.stderr.endswith("\n") else "\n",
+        )
+    print(f"cargo_elapsed_seconds={time.monotonic() - cargo_started:.3f}")
+
+    release = cargo_target / WINDOWS_TARGET / "release"
+    runtime = _safe_path(release / "herdr.exe", "candidate runtime", directory=False)
+    launcher = _safe_path(
+        release / "herdr-launcher.exe", "candidate launcher", directory=False
+    )
+    helper = _safe_path(
+        release / "herdr-installer-helper.exe",
+        "candidate installer helper",
+        directory=False,
+    )
+    temporary_parent = _directory(TARGET_ROOT / "tmp", "candidate temporary root")
+    with tempfile.TemporaryDirectory(
+        prefix=f"candidate-{build_id}-", dir=temporary_parent
+    ) as temporary:
+        stage = Path(temporary) / "stage"
+        _run(
+            sys.executable,
+            [
+                str(source / "scripts" / "package_windows_conpty.py"),
+                "stage",
+                "--package",
+                str(_conpty_package_path(source)),
+                "--herdr-exe",
+                str(runtime),
+                "--output-dir",
+                str(stage),
+            ],
+            cwd=source,
+            timeout=180,
+        )
+        prepare(
+            argparse.Namespace(
+                source_worktree=source,
+                stage_dir=stage,
+                launcher_exe=launcher,
+                installer_helper_exe=helper,
+            )
+        )
+
+    build(
+        argparse.Namespace(
+            source_worktree=source,
+            input_bundle=INPUT_ROOT / build_id,
+        )
+    )
+    print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -343,13 +568,20 @@ def _parser() -> argparse.ArgumentParser:
     build_command = commands.add_parser("build")
     build_command.add_argument("--source-worktree", required=True, type=Path)
     build_command.add_argument("--input-bundle", required=True, type=Path)
+    candidate_command = commands.add_parser("candidate")
+    candidate_command.add_argument("--source-worktree", required=True, type=Path)
+    candidate_command.add_argument(
+        "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
+    )
     return parser
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     options = _parser().parse_args(arguments)
     try:
-        (prepare if options.command == "prepare" else build)(options)
+        {"prepare": prepare, "build": build, "candidate": candidate}[
+            options.command
+        ](options)
         return 0
     except LocalInstallerError as error:
         print(f"error: {error}", file=sys.stderr)

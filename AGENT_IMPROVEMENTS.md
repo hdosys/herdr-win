@@ -43,14 +43,11 @@ configuration repository.
   replaced setup in 23.840 seconds. Owner: the script, its focused tests, and the
   Candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Add one identity-aware source-candidate artifact command.**
-  Evidence: a 14-line net source reduction spent 380 seconds on a cold focused
-  Windows test build, 540 seconds on a separate release build, and another 315
-  seconds relinking after local build identity was supplied; validated installer
-  packaging then took 23 seconds. Proposed change: derive the deterministic local
-  build identity from the frozen candidate before compiling, reuse one Sandbox-local
-  Cargo target and release profile for the focused test and binaries, then invoke
-  the existing validated installer bundle path. Expected benefit: remove one full
-  compile profile and the identity rebuild from the first installable source
-  candidate. Owner: one bounded command under `scripts/` and the candidate procedure
-  in `CONTRIBUTING.md`.
+- **Status: done. Use one all-core source-candidate installer command.**
+  `scripts/local_windows_installer.py candidate` now derives local identity before
+  compilation, overrides inherited single-job limits with every logical processor
+  available to the current process, builds only the three packaged binaries, and
+  always finishes at the validated installer. Evidence: the same incremental Herdr
+  rebuild fell from more than 20 minutes to 99.284 seconds, followed by a 22.122
+  second installer build and 125.719 seconds total. Owner: the script, its focused
+  tests, and the candidate procedure in `CONTRIBUTING.md`.

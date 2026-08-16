@@ -13,14 +13,14 @@
 
 ## Why it exists
 
-Herdr already runs on Windows, but a good Windows release needs more than a binary that compiles. Terminal fidelity, remote attachment, safe packaging, updates, and native verification all need clear ownership.
+The reviewed upstream release provides Herdr's core. herdr-win supplies the remaining Windows behavior needed to use that core as a dependable daily tool:
 
-This repository provides that focused delivery path:
+- **A terminal that feels native:** Windows appearance, cursor and input behavior remain correct through ConPTY instead of degrading at the platform boundary.
+- **Remote Windows sessions without binary drift:** supported clients can attach to or provision Windows SSH hosts with an exact runtime, protocol check, and named-session lifecycle.
+- **Updates that respect running work:** per-user setup uses verified immutable runtimes, lets active sessions finish, and activates one coherent replacement afterward.
+- **Agent status that reflects reality:** OpenCode retries stay active instead of surfacing premature failures, while terminal errors remain visible.
 
-- **Useful Windows behavior now:** fixes can ship without turning the fork into a separate product.
-- **A visible delta:** every retained change belongs to one reviewable mailbox instead of disappearing into branch history.
-- **An upstream route:** code that lands upstream is removed from the queue rather than maintained twice.
-- **Reproducible snapshots:** source, patch order, build identity, artifacts, and SHA-256 digests stay connected.
+The patch queue is how those outcomes stay maintainable, not the reason users should care. Every retained behavior is tied to an exact upstream stable commit and one responsibility-owned mailbox. Candidates are replayed, tested at their native boundaries, packaged as real artifacts, and promoted without rebuilding. When equivalent behavior ships upstream, it is deleted here. That keeps releases reproducible, the engineering reviewable, and the fork small enough to upstream rather than becoming a second Herdr product.
 
 ## What differs from upstream
 
@@ -29,11 +29,11 @@ The table is intentionally capability-level. The patch files contain the exact i
 | Area | Status | What this repository contributes |
 | --- | --- | --- |
 | Native ConPTY foundation | ✅ **Upstreamed in Herdr v0.6.9** | Herdr v0.8.0 added the modern app-local ConPTY packaging that herdr-win now reuses instead of carrying a duplicate foundation. |
-| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Windows appearance, color and cursor fidelity, rendering, and VTI input behavior. |
-| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Upstream master now includes Windows client attach to Linux/macOS and the image bridge. herdr-win adds x86_64 and ARM64 Windows-host detection from every client, exact identity checks, one stable digest-verified per-user remote runtime, unattended provision with staged config validation and stop-swap-restart activation, shared named-session lifecycle, and additional named-pipe/backpressure coverage until the next stable refresh minimizes the mailbox. |
-| Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Verified Windows packages, per-user setup, portable archives, package-manager update ownership, and safe runtime handoff. |
-| OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Retry-aware status correlation so active retries stay quiet and terminal failures remain visible. |
-| Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Cross-platform `curl` transfers ignore user configuration and permit only bounded TLS 1.2+ HTTPS requests and redirects. |
+| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Keeps Windows appearance, cursor, rendering, and VTI input behavior consistent in local and attached sessions. |
+| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds Windows x86_64/ARM64 host detection, exact runtime provisioning, named-session lifecycle, and byte-exact image transport. Upstream now owns Windows client attach to Linux/macOS; the remaining Windows-host delta stays here until the next stable refresh. |
+| Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, and process-safe uninstall from one verified candidate. |
+| OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps active retries active and exposes only actionable terminal failures. |
+| Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
 
 Upstream PR #2329 merged after v0.8.0 and has not shipped in a stable release yet. Mailbox `0003` therefore remains in the current queue; at the next stable refresh, it can shrink to Windows-host attach and the additional bridge hardening. The original implementation builds on [nsxdavid's `feat/windows-remote-attach` work](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
 

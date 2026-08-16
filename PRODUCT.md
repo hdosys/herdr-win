@@ -15,7 +15,9 @@ tests remain the detailed implementation truth.
 - Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
-  `herdr` and stay compatible with upstream.
+  `herdr`. The fork does not create a second protocol namespace, but a maintained
+  wire change may require matching herdr-win binaries instead of independently
+  released upstream builds.
 - A published `herdr --version` reports `herdr-win <CalVer> (Herdr
   <upstream-version>)`. A separately built local binary instead reports
   `herdr-win local (Herdr <upstream-version>, build <build-id>)` when build

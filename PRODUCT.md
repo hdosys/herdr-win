@@ -9,9 +9,11 @@ tests remain the detailed implementation truth.
 
 ## Product Shape and Identity
 
-- herdr-win is an unofficial, upstream-first Windows distribution of Herdr, not a
-  separate product line. It exists to advance Herdr's Windows support through a
-  small patch set designed to remain reviewable and suitable for upstream.
+- herdr-win is an unofficial, upstream-first cross-platform distribution focused
+  on Windows feature parity, not a separate product line. Its historical name
+  reflects where the remaining delta began, not a Windows-only runtime. It advances
+  Herdr's Windows support through a small patch set designed to remain reviewable
+  and suitable for upstream.
 - Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain

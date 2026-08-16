@@ -1,24 +1,27 @@
 # herdr-win
 
-**First-class Windows client and server support for [Herdr](https://github.com/herdrdev/herdr), delivered as matching Windows, Linux, and macOS binaries from a small, reviewable patch queue.**
+**Develop on Windows from Linux, macOS, or Windows with a cross-platform [Herdr](https://github.com/herdrdev/herdr) distribution that makes Windows a first-class client and server.**
 
 [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Candidate build](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)
 
-`herdr-win` is an unofficial, upstream-first distribution focused on feature parity for Windows. It keeps the normal `herdr` command and workflow, adds Windows behavior not yet available in an upstream stable release, and builds every tested snapshot for Windows, Linux, and macOS from the same exact reviewed source and ordered patch queue. Windows can run both the interactive client and an SSH-reachable Herdr server, while users on any supported platform can run a matching client or remote endpoint when developing across a Windows workstation or VM.
+Despite its historical name, `herdr-win` is not Windows-only. It is an unofficial, upstream-first cross-platform distribution focused on Windows feature parity. Its defining use case is running a full Herdr server on a Windows workstation or VM while controlling it from the normal Herdr client on Linux, macOS, or Windows.
+
+Every release candidate builds matching Windows, Linux, and macOS binaries from one exact reviewed Herdr release and the same ordered patch queue. That keeps clients, servers, and provisioned remote runtimes on one compatible protocol while preserving the normal `herdr` command and workflow.
 
 [Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
 
 > [!NOTE]
-> Upstream Herdr owns the general CLI, configuration, integrations, and product documentation. This repository owns only its Windows-focused delta and distribution. Reproduce general issues with upstream Herdr before reporting them here.
+> This README describes the maintained queue on `master`; use a tagged release's changelog as the exact contract for currently downloadable binaries. Upstream Herdr owns the general CLI, configuration, integrations, and product documentation. This repository owns its Windows-focused delta and cross-platform release. Reproduce general issues with upstream Herdr before reporting them here.
 
 ## Why it exists
 
-The reviewed upstream release provides Herdr's core. herdr-win supplies the remaining Windows behavior needed to use that core as a dependable daily tool:
+The reviewed upstream release provides Herdr's cross-platform core. herdr-win supplies the remaining Windows behavior needed for mixed-platform development without treating Windows as a client-only or second-class target:
 
-- **A terminal that feels native:** Windows appearance, cursor and input behavior remain correct through ConPTY instead of degrading at the platform boundary.
+- **A terminal that feels native:** without explicit theme configuration, Herdr follows the host's light or dark appearance while preserving cursor colors and Windows input through ConPTY.
 - **Windows as a Herdr server:** Windows, Linux, and macOS clients can attach to or provision a Windows workstation or VM over SSH with an exact runtime, protocol check, and named-session lifecycle.
 - **One release across mixed environments:** matching Windows, Linux, and macOS assets let Herdr provision supported remote endpoints from the same protocol-compatible build instead of relying on manual binary copying or independently released versions.
-- **Updates that respect running work:** per-user setup uses verified immutable runtimes, lets active sessions finish, and activates one coherent replacement afterward.
+- **Images cross the remote boundary:** from a Windows remote client, clipboard images and supported image-file drops are staged on the remote host and their usable remote path is pasted into the pane.
+- **Updates that respect running work:** per-user setup uses verified immutable runtimes, lets active sessions finish, and activates one coherent replacement afterward without a permanent background service.
 - **Agent status that reflects reality:** OpenCode retries stay active instead of surfacing premature failures, while terminal errors remain visible.
 
 The patch queue is how those outcomes stay maintainable, not the reason users should care. Every retained behavior is tied to an exact upstream stable commit and one responsibility-owned mailbox. Candidates are replayed, tested at their native boundaries, packaged as real artifacts, and promoted without rebuilding. When equivalent behavior ships upstream, it is deleted here. That keeps releases reproducible, the engineering reviewable, and the fork small enough to upstream rather than becoming a second Herdr product.
@@ -30,8 +33,8 @@ The table is intentionally capability-level. The patch files contain the exact i
 | Area | Status | What this repository contributes |
 | --- | --- | --- |
 | Native ConPTY foundation | ✅ **Upstreamed in Herdr v0.6.9** | Herdr v0.8.0 added the modern app-local ConPTY packaging that herdr-win now reuses instead of carrying a duplicate foundation. |
-| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Keeps Windows appearance, cursor, rendering, and VTI input behavior consistent in local and attached sessions. |
-| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds Windows x86_64/ARM64 host detection, exact runtime provisioning, named-session lifecycle, and byte-exact image transport. Upstream now owns Windows client attach to Linux/macOS; the remaining Windows-host delta stays here until the next stable refresh. |
+| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance by default and preserves cursor, rendering, and VTI input behavior in local and attached Windows sessions. |
+| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds Windows x86_64/ARM64 host detection, exact runtime provisioning, named-session lifecycle, and an image bridge that turns Windows clipboard or file images into usable remote paths. Upstream now owns Windows client attach to Linux/macOS; the remaining Windows-host delta stays here until the next stable refresh. |
 | Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, and process-safe uninstall from one verified candidate. |
 | OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps active retries active and exposes only actionable terminal failures. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
@@ -88,12 +91,14 @@ Provision starts a missing server, reloads configuration when the running binary
   <img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">
 </p>
 
-Download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from [Releases](https://github.com/hdosys/herdr-win/releases) and run it. Setup installs for the current user without administrator access, adds `herdr` to the user `PATH`, and registers an uninstaller. Open a new terminal and run:
+Download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from [Releases](https://github.com/hdosys/herdr-win/releases) and run it. Setup installs for the current user without administrator access and registers an uninstaller. It adds its managed `bin` directory to the user `PATH` only when no effective equivalent already exists, and never rewrites or claims an equivalent user-owned entry. Open a new terminal and run:
 
 ```powershell
 herdr --version
 herdr
 ```
+
+Setup also installs Herdr's canonical agent skill at `%USERPROFILE%\.agents\skills\herdr\SKILL.md` and, when Claude Code is detected, in its configured skills directory. Installer-known copies update automatically; customized copies are preserved and reported.
 
 Published builds report `herdr-win <CalVer> (Herdr <upstream-version>)`. Local test builds include their build ID when available, as in `herdr-win local (Herdr <upstream-version>, build <build-id>)`, and omit that clause otherwise. Integrations can use the stable `herdr-win ` prefix to identify this distribution and its Windows-specific features.
 

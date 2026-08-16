@@ -42,6 +42,15 @@ behavior; code and tests remain the detailed implementation truth.
 
 - Mailbox 0001 owns Windows terminal appearance, color/cursor transport, rendering,
   and Windows VTI input behavior.
+- Mailbox 0001 synchronizes only the host terminal's default foreground,
+  background, and cursor through OSC 10/11/12. Indexed pane colors use Herdr's
+  built-in palette; truecolor remains direct. Herdr never automatically queries
+  the 256 OSC 4 palette entries because terminal replies and user input share one
+  uncorrelated byte stream. A burst of delayed or fragmented replies can therefore
+  reach pane input, while an idle timeout cannot prove reply ownership
+  (`herdrdev/herdr#2786`). Restoring host indexed-palette discovery requires a
+  deterministic transport or framing boundary. Longer waits, retries, tail
+  reconstruction, suppression, and other timing heuristics are not accepted paths.
 - Mailbox 0003 owns shared remote orchestration, Windows SSH/named-pipe attach,
   startup geometry gating, and bounded clipboard/drop image transport. Every
   client probes a Windows SSH host through explicit PowerShell, accepts only

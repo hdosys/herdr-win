@@ -62,7 +62,7 @@ flowchart LR
     B --> P1
     P6 --> R["Fresh replay"]
     R --> G["Native + cross-platform gates"]
-    G --> A["Setup · ZIP · digests"]
+    G --> A["Windows setup + ZIP · Linux/macOS binaries · digests"]
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only application order. Each patch is a full-index, binary-safe mailbox with one logical responsibility.
@@ -71,9 +71,9 @@ An upstream refresh is deliberate: select the latest stable release, replay the 
 
 ## Install and cross-platform use
 
-Windows x86_64 is the managed distribution target. Each release also carries matching Linux and macOS binaries for remote endpoints that must speak the same wire protocol.
+Each release is one cross-platform snapshot for Windows x86_64, Linux amd64/arm64, and macOS amd64/arm64. Windows additionally ships the managed per-user setup and portable ZIP; every matching binary can run as a client or remote endpoint on the same wire protocol.
 
-This supports mixed development environments directly: run the managed client and server on Windows, or use a matching Linux or macOS client to control a Herdr server on a Windows workstation or VM. The companion binaries can also run as remote endpoints when a Windows client connects in the other direction.
+This supports mixed development environments directly: run the managed client and server on Windows, or use a matching Linux or macOS client to control a Herdr server on a Windows workstation or VM. The Linux and macOS builds can also run as remote endpoints when a Windows client connects in the other direction.
 
 Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates remote configuration, stops the selected server with approval, stages and validates the complete digest-verified Windows portable payload, atomically replaces the stable runtime, removes the transient previous payload, then starts and verifies the new server. Local Windows development builds use the same complete portable layout; Herdr packages the adjacent runtime and rejects an executable without its ConPTY bundle. It never runs setup or changes remote `PATH`; ordinary non-interactive attach leaves the host unchanged. The host's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`) so the interactive bridge remains byte-exact. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
 
@@ -129,7 +129,7 @@ The release also includes `herdr-win_v<version>_windows_amd64.zip`. Extract the 
 
 ### Linux and macOS clients and endpoints
 
-Each release includes raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. They are compatibility companions for remote hosts, not managed installers.
+Each release includes raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. They are supported unbundled clients and remote endpoints built from the same retained candidate; unlike Windows, they are not managed installers.
 
 Use matching binaries from the same herdr-win release on every endpoint. Independently released official builds are not guaranteed to use the same wire protocol.
 

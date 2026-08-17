@@ -26,12 +26,14 @@ tests remain the detailed implementation truth.
   provenance is available, and omits the build clause otherwise. Integrations can
   require the stable `herdr-win ` prefix without changing the executable, command,
   state, or protocol identity.
-- Windows x86_64 is the managed distribution target. Every herdr-win snapshot also
-  carries matching Linux and macOS binaries for amd64 and arm64 so supported clients
-  and remote endpoints can share the same fork wire protocol in mixed-platform
-  development environments. Existing remote provisioning uses those matching assets
-  instead of requiring manual binary copying or independently released builds.
-  Windows can run both the interactive client and an SSH-reachable Herdr server.
+- Every herdr-win snapshot is a cross-platform release for Windows x86_64, Linux
+  amd64/arm64, and macOS amd64/arm64. Windows additionally ships the managed
+  per-user setup and portable archive; Linux and macOS ship raw executables from
+  the same retained candidate. Supported clients and remote endpoints therefore
+  share the same fork wire protocol in mixed-platform development environments.
+  Existing remote provisioning uses those matching assets instead of requiring
+  manual binary copying or independently released builds. Windows can run both the
+  interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
   and owned upstream unless a maintained Windows delta explicitly changes it.
 - The maintained user-visible Windows delta covers terminal fidelity, remote
@@ -207,9 +209,11 @@ tests remain the detailed implementation truth.
   candidate build of the selected upstream source plus the maintained queue.
   Promotion never rebuilds or repackages them. The portable ZIP, managed installer,
   and manifest digest identify the same source.
-- Each snapshot also includes raw Linux and macOS executables for amd64 and arm64,
-  built from that same candidate for remote endpoints that require the matching wire
-  protocol. Windows x86_64 remains the managed distribution target.
+- Each snapshot includes the managed Windows x86_64 setup and portable ZIP plus raw
+  Linux and macOS executables for amd64 and arm64, all built from the same retained
+  candidate. Every asset is a supported client or remote endpoint on the matching
+  wire protocol; only Windows currently has the managed installer and update
+  lifecycle.
 - Each release has a manually selected herdr-win CalVer `YYYY.MM.DD.N` and is based
   on the exact latest upstream stable release selected during the most recent
   explicit refresh. Updater-facing tags and assets retain

@@ -204,6 +204,24 @@ user and agent testing can continue in parallel. Missing or corrupt inputs are a
 clear preparation blocker, not authority to unpack an old installer or repeatedly
 rebuild unchanged payloads.
 
+After reporting the local installer and before dispatching a remote release build,
+run the complete installer fault matrix against that same validated bundle:
+
+```powershell
+python scripts/local_windows_installer.py release-precheck `
+  --source-worktree <materialized-source-worktree> `
+  --input-bundle <reported-input-bundle>
+```
+
+This is the exact local owner for installer recovery, hard-termination, managed
+skill, and pending-update acceptance. It runs through Windows PowerShell 5.1,
+uses a short ignored output directory, and removes its generated fault installers
+after completion. The pending-update fixture deliberately constructs Windows CRLF
+checkout input before writing canonical package bytes, and holds its synthetic
+runtime lease until an explicit signal releases it. Never replace either boundary
+with a fixed-duration sleep. Passing evidence remains reusable while the source
+worktree, bundle bytes, and relevant environment remain unchanged.
+
 ### Refreshing from official upstream
 
 Do not fetch, merge, rebase, or advance the queue to newer

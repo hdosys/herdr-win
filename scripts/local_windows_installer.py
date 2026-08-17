@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TARGET_ROOT = PROJECT_ROOT / "target" / "x86_64-pc-windows-msvc"
 INPUT_ROOT = TARGET_ROOT / "installer-inputs"
 OUTPUT_PATH = TARGET_ROOT / "release" / "herdr-win_local_candidate_setup.exe"
+FAULT_OUTPUT_ROOT = PROJECT_ROOT / "target" / "installer-faults"
 NSIS_CACHE = TARGET_ROOT / "tools" / "nsis-3.12"
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 DEFAULT_CARGO_TARGET = (
@@ -137,6 +138,7 @@ def _source_root(path: Path) -> Path:
     for relative in (
         "scripts/package_windows_conpty.py",
         "scripts/package_windows_installer.ps1",
+        "scripts/windows_installer_fault_test.ps1",
     ):
         _safe_path(source / relative, f"source {relative}", directory=False)
     return source
@@ -258,6 +260,15 @@ def _directory(path: Path, label: str) -> Path:
         raise LocalInstallerError(f"{label} must be an absolute path")
     path.mkdir(parents=True, exist_ok=True)
     return _safe_path(path, label, directory=True)
+
+
+def _windows_powershell() -> Path:
+    return _safe_path(
+        Path(os.environ["SystemRoot"])
+        / "System32/WindowsPowerShell/v1.0/powershell.exe",
+        "Windows PowerShell 5.1",
+        directory=False,
+    )
 
 
 def _conpty_package_path(source: Path) -> Path:
@@ -433,12 +444,7 @@ def build(options: argparse.Namespace) -> None:
     bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
     identity = validate_bundle(source, bundle)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    powershell = _safe_path(
-        Path(os.environ["SystemRoot"])
-        / "System32/WindowsPowerShell/v1.0/powershell.exe",
-        "Windows PowerShell 5.1",
-        directory=False,
-    )
+    powershell = _windows_powershell()
     started = time.monotonic()
     result = _run(
         powershell,
@@ -470,6 +476,52 @@ def build(options: argparse.Namespace) -> None:
         cwd=source,
         timeout=300,
     )
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(
+            result.stderr,
+            file=sys.stderr,
+            end="" if result.stderr.endswith("\n") else "\n",
+        )
+    print(f"elapsed_seconds={time.monotonic() - started:.3f}")
+
+
+def release_precheck(options: argparse.Namespace) -> None:
+    source = _source_root(options.source_worktree)
+    bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
+    identity = validate_bundle(source, bundle)
+    output_root = _directory(FAULT_OUTPUT_ROOT, "installer fault output root")
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="run-", dir=output_root) as temporary:
+        result = _run(
+            _windows_powershell(),
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(source / "scripts/windows_installer_fault_test.ps1"),
+                "-StageDir",
+                str(bundle / "stage"),
+                "-LauncherExe",
+                str(bundle / "herdr-launcher.exe"),
+                "-InstallerHelperExe",
+                str(bundle / "herdr-installer-helper.exe"),
+                "-BuildId",
+                identity.build_id,
+                "-ReleaseVersion",
+                "local",
+                "-BaseVersion",
+                identity.base_version,
+                "-OutputDir",
+                temporary,
+            ],
+            cwd=source,
+            timeout=1800,
+        )
     if result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
     if result.stderr:
@@ -568,6 +620,9 @@ def _parser() -> argparse.ArgumentParser:
     build_command = commands.add_parser("build")
     build_command.add_argument("--source-worktree", required=True, type=Path)
     build_command.add_argument("--input-bundle", required=True, type=Path)
+    precheck_command = commands.add_parser("release-precheck")
+    precheck_command.add_argument("--source-worktree", required=True, type=Path)
+    precheck_command.add_argument("--input-bundle", required=True, type=Path)
     candidate_command = commands.add_parser("candidate")
     candidate_command.add_argument("--source-worktree", required=True, type=Path)
     candidate_command.add_argument(
@@ -579,9 +634,12 @@ def _parser() -> argparse.ArgumentParser:
 def main(arguments: Sequence[str] | None = None) -> int:
     options = _parser().parse_args(arguments)
     try:
-        {"prepare": prepare, "build": build, "candidate": candidate}[
-            options.command
-        ](options)
+        {
+            "prepare": prepare,
+            "build": build,
+            "release-precheck": release_precheck,
+            "candidate": candidate,
+        }[options.command](options)
         return 0
     except LocalInstallerError as error:
         print(f"error: {error}", file=sys.stderr)

@@ -1,10 +1,9 @@
-From 9d7d38fe0e2099ca1d9ccc255b41c898d25f69bb Mon Sep 17 00:00:00 2001
+From 30fb0c61795e0a254321780f8310c6b4cde48fdb Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
 
 ---
- .gitattributes                                |    2 +
  Cargo.toml                                    |   13 +
  README.zh-CN.md                               |    2 +-
  build.rs                                      |   60 +-
@@ -39,7 +38,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  610 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1272 ++++++++
+ scripts/windows_installer_fault_test.ps1      | 1291 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -82,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 78 files changed, 12972 insertions(+), 1651 deletions(-)
+ 77 files changed, 12989 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -109,14 +108,6 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  create mode 100644 src/platform/windows/managed_install.rs
  delete mode 100644 website/install.ps1
 
-diff --git a/.gitattributes b/.gitattributes
-index 64835a8d7de291038ec6add5fd4ce129ee59d486..614b4c5a89bcf22ade9cadb180c39dfbccc767dd 100644
---- a/.gitattributes
-+++ b/.gitattributes
-@@ -1 +1,3 @@
- packaging/windows/licenses/* binary
-+packaging/windows/managed-skill-hashes.txt text eol=lf
-+skills/herdr/SKILL.md text eol=lf
 diff --git a/Cargo.toml b/Cargo.toml
 index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe09aa63094 100644
 --- a/Cargo.toml
@@ -55264,10 +55255,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a002820c1
+index 0000000000000000000000000000000000000000..952f0b99963d1cf0ba3e8501053508e5b4e1c890
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1272 @@
+@@ -0,0 +1,1291 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -55603,6 +55594,28 @@ index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a
 +    }
 +}
 +
++function Copy-TestCanonicalText {
++    param(
++        [Parameter(Mandatory = $true)][string]$Source,
++        [Parameter(Mandatory = $true)][string]$Destination
++    )
++
++    $text = (New-Object Text.UTF8Encoding($false, $true)).GetString([IO.File]::ReadAllBytes($Source))
++    $normalized = $text.Replace("`r`n", "`n")
++    if ($normalized.Contains("`r") -or
++        -not $normalized.EndsWith("`n", [StringComparison]::Ordinal)) {
++        throw "Canonical test text must use valid line endings and end with a newline: $Source"
++    }
++
++    # Exercise the Windows checkout variant locally before writing package bytes.
++    $checkoutVariant = $normalized.Replace("`n", "`r`n")
++    $canonical = $checkoutVariant.Replace("`r`n", "`n")
++    [IO.File]::WriteAllBytes(
++        $Destination,
++        (New-Object Text.UTF8Encoding($false)).GetBytes($canonical)
++    )
++}
++
 +function New-TestHelperPackage {
 +    param(
 +        [Parameter(Mandatory = $true)][string]$Root,
@@ -55618,12 +55631,9 @@ index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a
 +    New-Item -ItemType Directory -Path (Join-Path $Root "skill") | Out-Null
 +    [IO.File]::Copy($AppLauncher, (Join-Path $Root "app-launcher.exe"), $false)
 +    [IO.File]::Copy($InstallerHelperExe, (Join-Path $Root "installer-helper.exe"), $false)
-+    [IO.File]::Copy($skillSource, (Join-Path $Root "skill\SKILL.md"), $false)
-+    [IO.File]::Copy(
-+        (Join-Path $projectRoot "packaging\windows\managed-skill-hashes.txt"),
-+        (Join-Path $Root "skill\managed-skill-hashes.txt"),
-+        $false
-+    )
++    Copy-TestCanonicalText -Source $skillSource -Destination (Join-Path $Root "skill\SKILL.md")
++    $skillHashManifest = Join-Path $projectRoot "packaging\windows\managed-skill-hashes.txt"
++    Copy-TestCanonicalText -Source $skillHashManifest -Destination (Join-Path $Root "skill\managed-skill-hashes.txt")
 +    [IO.File]::Copy($Uninstaller, (Join-Path $Root "uninstall.exe"), $false)
 +}
 +

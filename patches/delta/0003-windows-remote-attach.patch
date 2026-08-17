@@ -1,4 +1,4 @@
-From f683a4b70ea4fb1e86709b8b46941ce520385f88 Mon Sep 17 00:00:00 2001
+From af1c66f119ddc3f94af5bc247ae1b530eddb7681 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -53,7 +53,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/remote.rs                                 |  174 +-
  src/remote/attach.rs                          | 5675 +++++++++++++++++
  src/remote/unix.rs                            | 3091 +--------
- src/remote/windows.rs                         |  765 +++
+ src/remote/windows.rs                         |  767 +++
  src/remote/windows_attach_probe.ps1           |   90 +
  src/remote/windows_bootstrap.ps1              |  194 +
  src/remote/windows_package_local_payload.ps1  |   37 +
@@ -64,7 +64,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 60 files changed, 9715 insertions(+), 3486 deletions(-)
+ 60 files changed, 9717 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -12613,10 +12613,10 @@ index 6fe927c1cc0f99c4f2fbfd99bf9b758f4acfd15e..b776871efa79e4e73c2ab385c3372bfe
 -}
 diff --git a/src/remote/windows.rs b/src/remote/windows.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..06a17e9e158df7a2c3bf6609fee7e95ac0a25cc4
+index 0000000000000000000000000000000000000000..ea971d0950b42c96250863b7a944bad68f9acf40
 --- /dev/null
 +++ b/src/remote/windows.rs
-@@ -0,0 +1,765 @@
+@@ -0,0 +1,767 @@
 +//! Windows remote-host side of the SSH stdio bridge.
 +
 +#[cfg(windows)]
@@ -13055,7 +13055,9 @@ index 0000000000000000000000000000000000000000..06a17e9e158df7a2c3bf6609fee7e95a
 +        },
 +        server_arguments,
 +    );
-+    encoded_powershell_command(&format!("{variables}{WINDOWS_ATTACH_PROBE_SCRIPT}"))
++    // Keep the encoded command and its Windows length budget checkout-independent.
++    let script = format!("{variables}{WINDOWS_ATTACH_PROBE_SCRIPT}").replace("\r\n", "\n");
++    encoded_powershell_command(&script)
 +}
 +
 +pub(super) fn powershell_script_command(script: &str) -> String {

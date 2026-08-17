@@ -1,4 +1,4 @@
-From 44fb9b480bdadc87ea3f60c76f1f1b73b2732fdd Mon Sep 17 00:00:00 2001
+From d31d1982b70109c6f12e460a2d81c473a9cd1e0d Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
@@ -24,7 +24,7 @@ Transport bounded host color and appearance events, keep software and native cur
  src/platform/windows.rs                       |  36 ++
  src/protocol/render_ansi.rs                   | 320 +++++++++++++++++-
  src/protocol/wire.rs                          |  67 +++-
- src/raw_input.rs                              | 120 ++++++-
+ src/raw_input.rs                              | 119 ++++++-
  src/server/client_transport.rs                |   4 +-
  src/server/headless.rs                        |  16 +-
  src/server/render_stream.rs                   |   3 +
@@ -35,7 +35,7 @@ Transport bounded host color and appearance events, keep software and native cur
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 30 files changed, 1285 insertions(+), 164 deletions(-)
+ 30 files changed, 1284 insertions(+), 164 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index da9c9b710258580c0f193f1c95d4065884accc17..9e920e0187d45f3826bafa3417d3172ecefb6447 100644
@@ -2215,7 +2215,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
          let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
  
 diff --git a/src/raw_input.rs b/src/raw_input.rs
-index 5bd57719162d2698f90f676dedfa4cfe65a94c56..0444bee6753eb2ec010ea5b109cea0b0069ab69c 100644
+index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28de246c455 100644
 --- a/src/raw_input.rs
 +++ b/src/raw_input.rs
 @@ -189,6 +189,11 @@ impl RawInputFramer {
@@ -2386,12 +2386,10 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..0444bee6753eb2ec010ea5b109cea0b0
      #[test]
      fn parses_legacy_up_arrow() {
          let (RawInputEvent::Key(key), consumed) = extract_one_event(b"\x1b[A").unwrap() else {
-@@ -2811,11 +2875,41 @@ mod tests {
-             }
-         ));
+@@ -2813,9 +2877,38 @@ mod tests {
  
-+        assert!(framer.push(b"\x1b").is_empty());
-+        assert!(framer.flush_timeout().is_empty());
+         assert!(framer.push(b"\x1b").is_empty());
+         assert!(framer.flush_timeout().is_empty());
 +        let chunks = framer.push(b"]12;#654321\x07");
 +        assert_eq!(chunks.len(), 1);
 +        let (event, _) = extract_one_event(&chunks[0]).unwrap();
@@ -2407,8 +2405,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..0444bee6753eb2ec010ea5b109cea0b0
 +            }
 +        ));
 +
-         assert!(framer.push(b"\x1b").is_empty());
-         assert!(framer.flush_timeout().is_empty());
++        assert!(framer.push(b"\x1b").is_empty());
          assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
      }
  
@@ -2428,7 +2425,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..0444bee6753eb2ec010ea5b109cea0b0
      #[test]
      fn flushes_lone_escape_when_not_awaiting_host_color_reply() {
          let mut framer = RawInputByteFramer::default();
-@@ -2838,18 +2932,12 @@ mod tests {
+@@ -2838,18 +2931,12 @@ mod tests {
  
      #[test]
      fn stops_holding_lone_escape_after_host_color_reply_completes() {

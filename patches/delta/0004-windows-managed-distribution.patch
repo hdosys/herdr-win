@@ -1,4 +1,4 @@
-From 71ed53a5a413f2dfda9d5a1d1d6e86afcb4312e2 Mon Sep 17 00:00:00 2001
+From 819117d8418c86b0f1ead7ff03b89ea147c0e817 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -38,7 +38,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  610 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1258 ++++++++
+ scripts/windows_installer_fault_test.ps1      | 1272 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -81,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 77 files changed, 12956 insertions(+), 1651 deletions(-)
+ 77 files changed, 12970 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -55255,10 +55255,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336f5f73b80
+index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a002820c1
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1258 @@
+@@ -0,0 +1,1272 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -55672,11 +55672,25 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +    )
 +}
 +
-+function Wait-TestUninstallerIdle {
++function Wait-TestInstallerIdle {
 +    param([int]$TimeoutMilliseconds = 30000)
 +
-+    Wait-TestCondition -TimeoutMilliseconds $TimeoutMilliseconds -Description "uninstaller process tree" -Condition {
-+        @(Get-Process -Name "uninstall" -ErrorAction SilentlyContinue).Count -eq 0
++    Wait-TestCondition -TimeoutMilliseconds $TimeoutMilliseconds -Description "installer lifecycle" -Condition {
++        $mutex = New-Object System.Threading.Mutex($false, "Local\HerdrWinInstallerLifecycle")
++        try {
++            try {
++                $acquired = $mutex.WaitOne(0)
++            } catch [System.Threading.AbandonedMutexException] {
++                $acquired = $true
++            }
++            if (-not $acquired) {
++                return $false
++            }
++            $mutex.ReleaseMutex()
++            return $true
++        } finally {
++            $mutex.Dispose()
++        }
 +    }
 +}
 +
@@ -55829,7 +55843,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +                (Test-Path -LiteralPath $arpKey) -and
 +                (Test-TestUserPathRetryOwned)
 +        }
-+        Wait-TestUninstallerIdle
++        Wait-TestInstallerIdle
 +        if (Test-Path -LiteralPath $skillPath) {
 +            throw "Injected uninstall $fault retained universal SKILL.md."
 +        }
@@ -56016,7 +56030,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +    Wait-TestCondition -Description "hard-termination cleanup fault" -Condition {
 +        Test-Path -LiteralPath $hardTerminationMarker -PathType Leaf
 +    }
-+    Wait-TestUninstallerIdle
++    Wait-TestInstallerIdle
 +    if (-not (Test-Path -LiteralPath $hardUninstaller -PathType Leaf) -or
 +        (Test-Path -LiteralPath (Join-Path $installRoot "state\uninstall.pending")) -or
 +        (Test-Path -LiteralPath (Join-Path $installRoot "state\installer-helper.exe")) -or
@@ -56126,7 +56140,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +        if ($prefixUninstallExit -ne 30) {
 +            throw "Unknown-option uninstall returned $prefixUninstallExit instead of 30."
 +        }
-+        Wait-TestUninstallerIdle
++        Wait-TestInstallerIdle
 +        if ((Test-Path -LiteralPath $installRoot) -eq $false -or
 +            (Test-Path -LiteralPath $arpKey) -eq $false -or
 +            (Test-Path -LiteralPath $settingsRoot) -eq $false -or
@@ -56144,7 +56158,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +                -not (Test-Path -LiteralPath $arpKey) -and
 +                $managedServer.HasExited
 +        }
-+        Wait-TestUninstallerIdle
++        Wait-TestInstallerIdle
 +        if (-not (Test-Path -LiteralPath $settingsRoot) -or -not (Test-Path -LiteralPath $skillPath) -or -not (Test-Path -LiteralPath $claudeSkillPath)) {
 +            throw "Ordinary uninstall did not preserve customized user data."
 +        }
@@ -56177,7 +56191,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +            -not (Test-Path -LiteralPath $arpKey) -and
 +            -not (Test-Path -LiteralPath $settingsRoot)
 +    }
-+    Wait-TestUninstallerIdle
++    Wait-TestInstallerIdle
 +    if (Test-Path -LiteralPath $skillPath) {
 +        throw "Sibling-preserving uninstall retained universal SKILL.md."
 +    }
@@ -56230,7 +56244,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +        Wait-TestCondition -Description "locked-state uninstall" -Condition {
 +            -not (Test-Path -LiteralPath $installRoot) -and -not (Test-Path -LiteralPath $arpKey)
 +        }
-+        Wait-TestUninstallerIdle
++        Wait-TestInstallerIdle
 +        if ($lockedStateProcess.HasExited) {
 +            throw "Locked-state process did not remain active through uninstall."
 +        }
@@ -56274,7 +56288,7 @@ index 0000000000000000000000000000000000000000..6359f06c8a2445b43d10d905c7581336
 +        Wait-TestCondition -Description "reparse-state uninstall" -Condition {
 +            -not (Test-Path -LiteralPath $installRoot) -and -not (Test-Path -LiteralPath $arpKey)
 +        }
-+        Wait-TestUninstallerIdle
++        Wait-TestInstallerIdle
 +        if ([IO.File]::ReadAllText((Join-Path $settingsRoot "settings.toml")) -cne "preserve-reparse-residual" -or
 +            [IO.File]::ReadAllText((Join-Path $reparseStateTarget "outside.txt")) -cne "preserve-external") {
 +            throw "Reparse-state uninstall changed preserved settings or junction-target content."
@@ -65254,7 +65268,7 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index ce4db70ea3e7500b0aacced3cdc5a201a96113ba..50b8dfeb9504ab4d13e2dd34741cd6a1c970bd71 100644
+index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7dfb2462ac 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -26,8 +26,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;

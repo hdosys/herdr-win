@@ -1,4 +1,4 @@
-From 9429111896cedc1147e86934da1b3ba3e4bf862b Mon Sep 17 00:00:00 2001
+From ad9acc62e2b0278e77d2b6a8a16d73740e77bf75 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -20,6 +20,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  .../src/content/docs/zh-cn/configuration.mdx  |    4 +-
  .../content/docs/zh-cn/persistence-remote.mdx |   20 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   15 +-
+ .../windows_conpty_enhanced_input_probe.ps1   |   36 +
  scripts/windows_smoke_conpty_path.ps1         |   33 +
  src/api/client.rs                             |    2 +
  src/api/schema/response.rs                    |    2 +
@@ -65,7 +66,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 61 files changed, 9750 insertions(+), 3486 deletions(-)
+ 62 files changed, 9786 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -566,6 +567,74 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..07385b174940b7d611fcbf3888720a98
  
  Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
  
+diff --git a/scripts/windows_conpty_enhanced_input_probe.ps1 b/scripts/windows_conpty_enhanced_input_probe.ps1
+index 1e4525210380fe3ba53ebb59f42c734ef39f6d62..e48763b2dc23d97402baaac5b3e5c7f8a274a1ae 100644
+--- a/scripts/windows_conpty_enhanced_input_probe.ps1
++++ b/scripts/windows_conpty_enhanced_input_probe.ps1
+@@ -27,6 +27,29 @@ function Read-Pane {
+     return $output -join "`n"
+ }
+ 
++function Wait-PaneReady {
++    param(
++        [string] $PaneId,
++        [int] $TimeoutSeconds = 10
++    )
++    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
++    do {
++        $savedErrorActionPreference = $ErrorActionPreference
++        try {
++            $ErrorActionPreference = "Continue"
++            $output = & $script:Exe pane read $PaneId --source recent-unwrapped --lines 1 --format text 2>&1
++            $exitCode = $LASTEXITCODE
++        } finally {
++            $ErrorActionPreference = $savedErrorActionPreference
++        }
++        if ($exitCode -eq 0) {
++            return
++        }
++        Start-Sleep -Milliseconds 100
++    } while ((Get-Date) -lt $deadline)
++    throw "deferred shell did not become ready: $($output -join "`n")"
++}
++
+ function Wait-PaneText {
+     param(
+         [string] $PaneId,
+@@ -55,6 +78,10 @@ function New-ProbePane {
+         throw "workspace create did not return a root pane id: $($created -join "`n")"
+     }
+ 
++    if ($null -eq $script:Client) {
++        $script:Client = Start-Process -FilePath $script:Exe -PassThru -WindowStyle Hidden
++    }
++    Wait-PaneReady -PaneId $paneId
+     $command = "& '$script:ProbeExe' $Mode"
+     Invoke-Checked $script:Exe @("pane", "run", $paneId, $command)
+     $ready = "PROBE_READY_$($Mode.ToUpperInvariant())"
+@@ -168,6 +195,7 @@ $oldSession = $env:HERDR_SESSION
+ $oldSocket = $env:HERDR_SOCKET_PATH
+ $oldClientSocket = $env:HERDR_CLIENT_SOCKET_PATH
+ $server = $null
++$script:Client = $null
+ $report = [ordered]@{}
+ $failed = $false
+ $initialConsoleHostIds = @(Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+@@ -484,6 +512,14 @@ fn main() {
+             & taskkill.exe /PID $server.Id /T /F 2>&1 | Out-Null
+         }
+     }
++    if ($null -ne $script:Client) {
++        Wait-Process -Id $script:Client.Id -Timeout 5 -ErrorAction SilentlyContinue
++        $script:Client.Refresh()
++        if (-not $script:Client.HasExited) {
++            & taskkill.exe /PID $script:Client.Id /T /F 2>&1 | Out-Null
++            Wait-Process -Id $script:Client.Id -Timeout 5 -ErrorAction SilentlyContinue
++        }
++    }
+     if ($null -ne $expectedConsoleHost) {
+         $hostExitDeadline = (Get-Date).AddSeconds(5)
+         do {
 diff --git a/scripts/windows_smoke_conpty_path.ps1 b/scripts/windows_smoke_conpty_path.ps1
 index bec93b66f489ecb10b022aac6a3776427269ce17..b10b7d8363dcdd250bcf4c3ffb94cdabc9bd023e 100644
 --- a/scripts/windows_smoke_conpty_path.ps1

@@ -1,4 +1,4 @@
-From af1c66f119ddc3f94af5bc247ae1b530eddb7681 Mon Sep 17 00:00:00 2001
+From 9429111896cedc1147e86934da1b3ba3e4bf862b Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 13:48:42 +0200
 Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
@@ -20,6 +20,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  .../src/content/docs/zh-cn/configuration.mdx  |    4 +-
  .../content/docs/zh-cn/persistence-remote.mdx |   20 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   15 +-
+ scripts/windows_smoke_conpty_path.ps1         |   33 +
  src/api/client.rs                             |    2 +
  src/api/schema/response.rs                    |    2 +
  src/api/schema/tests.rs                       |    1 +
@@ -64,7 +65,7 @@ Subject: [PATCH 2/5] feat(windows): unify remote attach and image transport
  src/server/headless.rs                        |  605 +-
  src/ui.rs                                     |   69 +-
  src/update.rs                                 |    8 +
- 60 files changed, 9717 insertions(+), 3486 deletions(-)
+ 61 files changed, 9750 insertions(+), 3486 deletions(-)
  create mode 100644 src/platform/unix_common.rs
  create mode 100644 src/platform/windows/clipboard_image.rs
  create mode 100644 src/remote/attach.rs
@@ -565,6 +566,64 @@ index 781a6f969416873de8ca131f6fdb35600fe7615a..07385b174940b7d611fcbf3888720a98
  
  Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
  
+diff --git a/scripts/windows_smoke_conpty_path.ps1 b/scripts/windows_smoke_conpty_path.ps1
+index bec93b66f489ecb10b022aac6a3776427269ce17..b10b7d8363dcdd250bcf4c3ffb94cdabc9bd023e 100644
+--- a/scripts/windows_smoke_conpty_path.ps1
++++ b/scripts/windows_smoke_conpty_path.ps1
+@@ -66,6 +66,7 @@ $env:HERDR_SESSION = $Session
+ Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
+ 
+ $server = $null
++$client = $null
+ try {
+     Invoke-Checked $exe @("--version")
+     & $exe --default-config | Out-Null
+@@ -102,6 +103,30 @@ try {
+     if ([string]::IsNullOrWhiteSpace($paneId)) {
+         throw "workspace create did not return a root pane id: $($created -join "`n")"
+     }
++
++    $client = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
++    $paneReady = $false
++    $deadline = (Get-Date).AddSeconds(10)
++    do {
++        Start-Sleep -Milliseconds 100
++        $client.Refresh()
++        if ($client.HasExited) {
++            throw "app client exited before the deferred shell became ready with code $($client.ExitCode)"
++        }
++        $savedErrorActionPreference = $ErrorActionPreference
++        try {
++            $ErrorActionPreference = "Continue"
++            $paneRead = & $exe pane read $paneId --source recent-unwrapped --lines 1 --format text 2>&1
++            $paneReadExitCode = $LASTEXITCODE
++        } finally {
++            $ErrorActionPreference = $savedErrorActionPreference
++        }
++        $paneReady = $paneReadExitCode -eq 0
++    } while (-not $paneReady -and (Get-Date) -lt $deadline)
++    if (-not $paneReady) {
++        throw "deferred shell did not become ready: $($paneRead -join "`n")"
++    }
++
+     $marker = "HERDR_CONPTY_SMOKE_OK"
+     Invoke-Checked $exe @("pane", "run", $paneId, "echo $marker")
+ 
+@@ -141,6 +166,14 @@ try {
+             & taskkill.exe /PID $server.Id /T /F 2>&1 | Out-Null
+         }
+     }
++    if ($null -ne $client) {
++        Wait-Process -Id $client.Id -Timeout 5 -ErrorAction SilentlyContinue
++        $client.Refresh()
++        if (-not $client.HasExited) {
++            & taskkill.exe /PID $client.Id /T /F 2>&1 | Out-Null
++            Wait-Process -Id $client.Id -Timeout 5 -ErrorAction SilentlyContinue
++        }
++    }
+     $global:LASTEXITCODE = 0
+     $env:PATH = $oldPath
+     if ($null -eq $oldSession) {
 diff --git a/src/api/client.rs b/src/api/client.rs
 index 326ebc7db4d913192a7eb202630d07b647f7699d..cc6051c5e770c5a05be4916959d80b00e0a40f36 100644
 --- a/src/api/client.rs

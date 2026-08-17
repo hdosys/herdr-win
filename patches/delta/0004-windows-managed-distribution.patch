@@ -1,4 +1,4 @@
-From 819117d8418c86b0f1ead7ff03b89ea147c0e817 Mon Sep 17 00:00:00 2001
+From 7948a95787e361713c0d7f7605201baf399b2d69 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -38,7 +38,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  610 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1272 ++++++++
+ scripts/windows_installer_fault_test.ps1      | 1302 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -81,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 77 files changed, 12970 insertions(+), 1651 deletions(-)
+ 77 files changed, 13000 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -55255,10 +55255,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a002820c1
+index 0000000000000000000000000000000000000000..1e8d516bc1f7dfb263497e2b183c6ef2fecc4c20
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1272 @@
+@@ -0,0 +1,1302 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -55529,9 +55529,29 @@ index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a
 +    param(
 +        [Parameter(Mandatory = $true)][string]$FilePath,
 +        [string[]]$Arguments = @(),
-+        [int]$TimeoutMilliseconds = 120000
++        [int]$TimeoutMilliseconds = 120000,
++        [switch]$CaptureError
 +    )
 +
++    $stderrPath = $null
++    if ($CaptureError) {
++        $captureId = [Guid]::NewGuid().ToString("N")
++        $stderrPath = Join-Path $env:TEMP "herdr-test-process-$captureId.stderr"
++        $escapedFilePath = $FilePath.Replace("'", "''")
++        $escapedStderrPath = $stderrPath.Replace("'", "''")
++        $argumentLiterals = @($Arguments | ForEach-Object {
++            "'" + ([string]$_).Replace("'", "''") + "'"
++        })
++        $command = "& '$escapedFilePath' @(" + ($argumentLiterals -join ", ") + ") 2> '$escapedStderrPath'; exit `$LASTEXITCODE"
++        $Arguments = @(
++            "-NoLogo",
++            "-NoProfile",
++            "-NonInteractive",
++            "-EncodedCommand",
++            [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
++        )
++        $FilePath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
++    }
 +    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru
 +    try {
 +        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
@@ -55553,9 +55573,19 @@ index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a
 +            }
 +            throw "$FilePath exceeded its $TimeoutMilliseconds ms process deadline."
 +        }
-+        return $process.ExitCode
++        $exitCode = $process.ExitCode
++        if ($CaptureError -and $exitCode -ne 0 -and (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
++            $text = [IO.File]::ReadAllText($stderrPath).Trim()
++            if (-not [string]::IsNullOrEmpty($text)) {
++                Write-Host $text
++            }
++        }
++        return $exitCode
 +    } finally {
 +        $process.Dispose()
++        if ($null -ne $stderrPath -and (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
++            Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
++        }
 +    }
 +}
 +
@@ -56323,7 +56353,7 @@ index 0000000000000000000000000000000000000000..0eeafbd55e30242a2c7933a9aec4c70a
 +    New-TestIdentityLauncher -Path $newLauncher -Identity $newBuildId
 +    New-TestHelperPackage -Root $oldPackage -AppLauncher $LauncherExe -Uninstaller $modifiedInstaller
 +    New-TestHelperPackage -Root $newPackage -AppLauncher $newLauncher -Uninstaller $modifiedInstaller
-+    $oldInstallExit = Start-TestProcess -FilePath $InstallerHelperExe -Arguments @(
++    $oldInstallExit = Start-TestProcess -FilePath $InstallerHelperExe -CaptureError -Arguments @(
 +        "install",
 +        "--install-root", $installRoot,
 +        "--user-profile-root", $AgentUserProfileRoot,

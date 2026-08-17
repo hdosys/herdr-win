@@ -1,4 +1,4 @@
-From 30fb0c61795e0a254321780f8310c6b4cde48fdb Mon Sep 17 00:00:00 2001
+From 6e76087ec4a5b1798ec15bcfd7be160ae5ddc1cd Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
@@ -38,7 +38,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  610 ++++
  .../windows_install_conpty_package_test.ps1   |  207 +-
- scripts/windows_installer_fault_test.ps1      | 1291 ++++++++
+ scripts/windows_installer_fault_test.ps1      | 1317 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
  src/app/input/navigate.rs                     |    2 +-
@@ -81,7 +81,7 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  website/src/content/docs/windows-beta.mdx     |   12 +-
  website/src/content/docs/zh-cn/install.mdx    |    8 +-
  .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 77 files changed, 12989 insertions(+), 1651 deletions(-)
+ 77 files changed, 13015 insertions(+), 1651 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -55255,10 +55255,10 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..952f0b99963d1cf0ba3e8501053508e5b4e1c890
+index 0000000000000000000000000000000000000000..bf701a2c473976f532885510d9dd10d0114f7e7c
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
-@@ -0,0 +1,1291 @@
+@@ -0,0 +1,1317 @@
 +[CmdletBinding()]
 +param(
 +    [Parameter(Mandatory = $true)][string]$StageDir,
@@ -55645,16 +55645,40 @@ index 0000000000000000000000000000000000000000..952f0b99963d1cf0ba3e8501053508e5
 +
 +    $escapedLease = $LeasePath.Replace("'", "''")
 +    $escapedReady = $ReadyPath.Replace("'", "''")
++    $releaseName = "Local\HerdrWinTestLeaseRelease-$([Guid]::NewGuid().ToString('N'))"
++    $escapedReleaseName = $releaseName.Replace("'", "''")
++    $release = [Threading.EventWaitHandle]::new(
++        $false,
++        [Threading.EventResetMode]::ManualReset,
++        $releaseName
++    )
 +    $command = @"
 +`$ErrorActionPreference = 'Stop'
++`$release = [Threading.EventWaitHandle]::OpenExisting('$escapedReleaseName')
 +`$lease = [IO.File]::Open('$escapedLease', [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
 +[IO.File]::WriteAllText('$escapedReady', 'ready')
-+try { Start-Sleep -Seconds 4 } finally { `$lease.Dispose() }
++try {
++    if (-not `$release.WaitOne(300000)) {
++        throw 'Timed out waiting to release the pending-update test lease.'
++    }
++} finally {
++    `$lease.Dispose()
++    `$release.Dispose()
++}
 +"@
 +    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-+    return Start-Process -FilePath powershell.exe -ArgumentList @(
-+        "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", $encoded
-+    ) -PassThru -WindowStyle Hidden
++    try {
++        $process = Start-Process -FilePath powershell.exe -ArgumentList @(
++            "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", $encoded
++        ) -PassThru -WindowStyle Hidden
++        return [PSCustomObject]@{
++            Process = $process
++            Release = $release
++        }
++    } catch {
++        $release.Dispose()
++        throw
++    }
 +}
 +
 +function Get-TestFileSha256 {
@@ -56402,11 +56426,13 @@ index 0000000000000000000000000000000000000000..952f0b99963d1cf0ba3e8501053508e5
 +            throw "Native helper did not preserve active and pending pointer ownership while the old lease was live."
 +        }
 +    } finally {
-+        if (-not $leaseHolder.WaitForExit(15000)) {
-+            $leaseHolder.Kill()
-+            [void]$leaseHolder.WaitForExit(5000)
++        [void]$leaseHolder.Release.Set()
++        if (-not $leaseHolder.Process.WaitForExit(15000)) {
++            $leaseHolder.Process.Kill()
++            [void]$leaseHolder.Process.WaitForExit(5000)
 +        }
-+        $leaseHolder.Dispose()
++        $leaseHolder.Process.Dispose()
++        $leaseHolder.Release.Dispose()
 +    }
 +    $launcherExit = Start-TestProcess -FilePath (Join-Path $installRoot "bin\herdr.exe") -Arguments @("--version")
 +    if ($launcherExit -ne 0) {

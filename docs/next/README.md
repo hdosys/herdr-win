@@ -8,7 +8,13 @@ Despite its historical name, `herdr-win` is not Windows-only. It is an unofficia
 
 Every release candidate builds matching Windows, Linux, and macOS binaries from one exact reviewed Herdr release and the same ordered patch queue. That keeps clients, servers, and provisioned remote runtimes on one compatible protocol while preserving the normal `herdr` command and workflow.
 
-[Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
+[Demo](#see-it-in-action) · [Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
+
+## See it in action
+
+https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
+
+Detach from a Windows-hosted Herdr session, reconnect from another terminal, and continue the same OpenCode session without RDP.
 
 > [!NOTE]
 > This README describes the maintained queue on `master`; use a tagged release's changelog as the exact contract for currently downloadable binaries. Upstream Herdr owns the general CLI, configuration, integrations, and product documentation. This repository owns its Windows-focused delta and cross-platform release. Reproduce general issues with upstream Herdr before reporting them here.
@@ -45,15 +51,14 @@ Upstream PR #2329 merged after v0.8.0 and has not shipped in a stable release ye
 
 herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a disposable native Windows development environment for coding agents. It provides the clean Windows toolchains and realistic native boundary used to build and test this fork; it is a sister project, not a runtime dependency.
 
-https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
-
-Detach and reconnect to the same OpenCode session through Herdr's managed Windows Sandbox connection, without switching to an RDP workflow.
-
 ## How the patch queue works
 
 ```mermaid
-flowchart TB
-    U["Upstream Herdr<br/>v0.8.0"] --> B["BASE<br/>346411fa21af"]
+flowchart LR
+    subgraph S["Source"]
+        direction TB
+        U["Upstream Herdr<br/>v0.8.0"] --> B["BASE<br/>346411fa21af"]
+    end
 
     subgraph Q["patches/delta/series"]
         direction TB
@@ -63,10 +68,14 @@ flowchart TB
         P5 --> P6["0006<br/>Hardened downloads"]
     end
 
+    subgraph V["Validated distribution"]
+        direction TB
+        R["Fresh replay"] --> G["Native + cross-platform<br/>gates"]
+        G --> A["Windows setup + ZIP<br/>Linux/macOS binaries + digests"]
+    end
+
     B --> P1
-    P6 --> R["Fresh replay"]
-    R --> G["Native + cross-platform gates"]
-    G --> A["Windows setup + ZIP · Linux/macOS binaries · digests"]
+    P6 --> R
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only application order. Each patch is a full-index, binary-safe mailbox with one logical responsibility.

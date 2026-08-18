@@ -52,11 +52,11 @@ Detach and reconnect to the same OpenCode session through Herdr's managed Window
 ## How the patch queue works
 
 ```mermaid
-flowchart LR
+flowchart TB
     U["Upstream Herdr<br/>v0.8.0"] --> B["BASE<br/>346411fa21af"]
 
     subgraph Q["patches/delta/series"]
-        direction LR
+        direction TB
         P1["0001<br/>Terminal fidelity"] --> P3["0003<br/>Remote attach"]
         P3 --> P4["0004<br/>Windows distribution"]
         P4 --> P5["0005<br/>OpenCode lifecycle"]

@@ -45,6 +45,10 @@ Upstream PR #2329 merged after v0.8.0 and has not shipped in a stable release ye
 
 herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a disposable native Windows development environment for coding agents. It provides the clean Windows toolchains and realistic native boundary used to build and test this fork; it is a sister project, not a runtime dependency.
 
+https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
+
+Detach and reconnect to the same OpenCode session through Herdr's managed Windows Sandbox connection, without switching to an RDP workflow.
+
 ## How the patch queue works
 
 ```mermaid

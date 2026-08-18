@@ -20,6 +20,14 @@ configuration repository.
 
 ## Proposals
 
+- **Status: proposed. Render-check changed README Mermaid diagrams before commit.**
+  Evidence: a fully horizontal patch flow was unreadably small at README width,
+  while changing every level to vertical produced a multi-screen diagram. A
+  three-column render preview measured 622 by 484 pixels and exposed the balanced
+  composition before push. Add one exact-block render and aspect-ratio review to
+  the existing README mirror check when Mermaid source changes. Expected benefit:
+  prevent visually unusable diagram iterations without adding a broad visual gate.
+
 - **Status: proposed. Add a repository-owned local Windows input acceptance probe.**
   Evidence: a task-local probe hardcoded the development state directory and used
   a PATH-dependent sentinel that detached servers did not inherit, producing false

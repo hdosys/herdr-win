@@ -51,54 +51,47 @@ behavior; code and tests remain the detailed implementation truth.
   (`herdrdev/herdr#2786`). Restoring host indexed-palette discovery requires a
   deterministic transport or framing boundary. Longer waits, retries, tail
   reconstruction, suppression, and other timing heuristics are not accepted paths.
-- Mailbox 0003 owns shared remote orchestration, Windows SSH/named-pipe attach,
-  startup geometry gating, and bounded clipboard/drop image transport. Every
-  client probes a Windows SSH host through explicit PowerShell, accepts only
-  x86_64 or ARM64, and reuses the shared exact-version, protocol, named-session
-  status, stop, and restart policy. It prefers `herdr.exe` from the SSH user's
-  `PATH`, then one stable user-owned remote runtime at
-  `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. Published bootstrap transfers the
-  complete digest-bearing portable ZIP with OpenSSH. After validating remote
-  configuration and obtaining approval, it stops the selected server, validates the
-  payload's digest, layout, version, and protocol in transient staging, swaps that
-  staging directory into the stable path, deletes the transient rollback and
-  recognized legacy payloads, then starts and verifies the new server. An active
-  lease blocks replacement instead of retaining another current runtime. Build ID
-  remains exact manifest and status metadata, never a remote directory name.
-  Because Windows OpenSSH control-socket reuse remains disabled, attach and
-  provisioning combine platform, matching-binary, and named-session server
-  inspection in one pure PowerShell SSH command. A client selects PowerShell 7
-  when available and otherwise falls back to Windows PowerShell only before any
-  mutation; command status and a quiet native executable check make that choice
-  independent of localized shell text. Provisioning reuses the probe result,
-  retains separate mutation and activation checks, and batches config/status plus
-  start/final-identity validation at their existing fail-closed boundaries. That
-  finite probe also reads OpenSSH's `DefaultShell`. The interactive bridge then
-  invokes the selected Herdr binary
-  directly through `cmd.exe` or PowerShell 7 instead of nesting Windows PowerShell,
-  which buffers native stdout and may serialize diagnostics into the protocol.
-  Windows PowerShell 5.1 and unknown default shells fail before bridge creation. A
-  matching API status is not attachment readiness until the binary client-protocol
-  socket accepts a handshake.
+- Mailbox 0003 owns only the remaining Windows SSH target boundary. Upstream Herdr
+  owns shared remote orchestration, Windows clients attaching to Unix hosts, the
+  named-pipe/SSH byte bridge, and bounded clipboard/file image transport. Every
+  supported client probes a Windows SSH host through explicit PowerShell, accepts
+  only x86_64 or ARM64, and reuses upstream exact-version, protocol, named-session,
+  status, stop, and restart owners. It prefers `herdr.exe` from the SSH user's
+  `PATH`, then one stable user-owned payload at
+  `%USERPROFILE%\.herdr\remote\herdr.exe`.
+- Published provisioning transfers the complete digest-bearing portable ZIP with
+  OpenSSH. Herdr validates remote configuration plus payload digest and layout in
+  transient staging before stopping a server. Activation then requires the one
+  exclusive runtime lease, removes the old stable payload, promotes staging, and
+  verifies the exact binary, version, and protocol after start. There is no remote
+  rollback, legacy discovery, migration, compatibility layout, extra `bin` level,
+  launcher, installer helper, Active/Pending pointer, or persistent version set.
+  Build ID remains exact manifest and status metadata, never a directory name.
+- The finite probe reads OpenSSH's `DefaultShell`. The byte bridge invokes Herdr
+  directly through `cmd.exe` or PowerShell 7; Windows PowerShell 5.1 and unknown
+  shells fail before bridge creation because buffered native stdout would corrupt
+  the protocol. Windows OpenSSH control-socket reuse remains disabled. A matching
+  API status is not attachment readiness until the binary client-protocol socket
+  accepts a handshake.
   A non-package-managed local Windows x86_64 build may run on Windows ARM64 through
   x64 emulation, but it is a valid provisioning source only when its executable is
   adjacent to the exact portable license, ConPTY bundle, ownership marker, and
   notices. Herdr projects those required files into a temporary validated ZIP,
   compares the executable SHA-256 when probing the stable remote runtime, and
   rejects an incomplete local layout instead of silently selecting system ConPTY.
-- Mailbox 0003 also owns `--remote <target> --provision`, with `--yes` required
+- Mailbox 0003 owns `--remote <target> --provision`, with `--yes` required
   for unattended mutation and optional `--json` results. Provision validates
   remote config before activation. No server means start; the same running binary
   means config reload; a different or unknown running binary means session save,
   bounded stop, and exact-binary restart. Pong and `status server` expose the
-  resolved server executable for that decision. Persistent Windows server launch
-  always crosses the existing WMI process boundary so no invoking terminal,
-  OpenSSH channel, or job is retained. One lease prevents replacement while any
-  remote process still uses the stable payload; there is no remote launcher,
-  installer helper, Active/Pending pointer, or persistent version set. The bridge
-  propagates the directly invoked Herdr child exit code. This path never runs the
-  managed installer, changes remote `PATH`, adds compatibility layouts, or enables
-  Windows live handoff or OpenSSH control-socket reuse.
+  resolved server executable for that decision. Persistent server launch resolves
+  exactly one active WTS desktop session owned by the SSH user, launches through a
+  transient Task Scheduler COM registration, verifies the resulting process
+  session, and removes task/bootstrap state. It has no WMI, Explorer heuristic,
+  session-0 fallback, persistent task, or Sandbox bridge. The bridge propagates the
+  directly invoked Herdr child exit code. This path never runs the managed
+  installer, changes remote `PATH`, adds compatibility layouts, or enables Windows
+  live handoff or OpenSSH control-socket reuse.
 - Mailbox 0004 owns deterministic ConPTY packaging, managed Windows distribution,
   fork update sources, and installer lifecycle.
 - Mailbox 0005 owns OpenCode retry/error lifecycle correlation. It must preserve

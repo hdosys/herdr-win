@@ -8,7 +8,7 @@ The queue intentionally contains a few coarse, logical feature patches rather
 than one monolith or a patch for every development commit:
 
 1. Windows terminal appearance.
-2. Windows remote attach and image transport.
+2. Windows SSH target support and remote provisioning.
 3. Windows managed distribution, installer lifecycle, and checked-in fork update handling.
 4. OpenCode retry lifecycle correlation.
 5. Hardened cross-platform runtime `curl` transfers.

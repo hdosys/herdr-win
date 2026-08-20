@@ -1,22 +1,22 @@
-From 6e76087ec4a5b1798ec15bcfd7be160ae5ddc1cd Mon Sep 17 00:00:00 2001
+From 197b589c4847e504a5c9a8fa22008cd0deca453c Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
-Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
+Subject: [PATCH 3/5] feat(windows): manage fork distribution
 
 ---
- Cargo.toml                                    |   13 +
+ Cargo.toml                                    |   12 +
  README.zh-CN.md                               |    2 +-
  build.rs                                      |   60 +-
  docs/next/README.zh-CN.md                     |    2 +-
  .../src/content/docs/cli-reference.mdx        |    5 +-
- .../next/website/src/content/docs/install.mdx |   30 +-
+ .../next/website/src/content/docs/install.mdx |   34 +-
  .../src/content/docs/ja/cli-reference.mdx     |    5 +-
  .../website/src/content/docs/ja/install.mdx   |   26 +-
- .../src/content/docs/ja/windows-beta.mdx      |   12 +-
- .../website/src/content/docs/windows-beta.mdx |   12 +-
+ .../src/content/docs/ja/windows-beta.mdx      |   18 +-
+ .../website/src/content/docs/windows-beta.mdx |   18 +-
  .../src/content/docs/zh-cn/cli-reference.mdx  |    5 +-
  .../src/content/docs/zh-cn/install.mdx        |   26 +-
- .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
+ .../src/content/docs/zh-cn/windows-beta.mdx   |   18 +-
  .../website/src/data/config-reference.json    |   12 +-
  justfile                                      |    6 +-
  packaging/windows/installer/artwork/README.md |   28 +
@@ -28,16 +28,16 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  .../installer-welcome-finish-source.png       |  Bin 0 -> 1698169 bytes
  packaging/windows/installer/project.nsi       |  598 ++++
  .../windows/installer/validate-build.ps1      |  207 ++
- packaging/windows/managed-skill-hashes.txt    |    3 +
- scripts/package_windows_conpty.py             |   39 +-
+ packaging/windows/managed-skill-hashes.txt    |    4 +
+ scripts/package_windows_conpty.py             |   17 +-
  scripts/package_windows_installer.ps1         |  690 ++++
  scripts/preview.py                            |  167 +-
- scripts/test_package_windows_conpty.py        |   36 +-
- scripts/test_preview.py                       |  282 +-
+ scripts/test_package_windows_conpty.py        |   30 +-
+ scripts/test_preview.py                       |  281 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
  scripts/test_windows_installer.py             |  610 ++++
- .../windows_install_conpty_package_test.ps1   |  207 +-
+ .../windows_install_conpty_package_test.ps1   |  464 +--
  scripts/windows_installer_fault_test.ps1      | 1317 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
  src/app/api/plugins/runtime.rs                |    2 +-
@@ -45,16 +45,17 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  src/bin/herdr-installer-helper.rs             |   41 +
  src/bin/herdr-launcher.rs                     |   36 +
  src/build_info.rs                             |   93 +-
- src/cli.rs                                    |  198 --
+ src/cli.rs                                    |  172 -
  src/cli/spec.rs                               |   15 -
  src/cli/status.rs                             |   37 +-
  src/config.rs                                 |    2 +-
- src/config/model.rs                           |   49 -
+ src/config/model.rs                           |   65 -
  src/distribution.rs                           |   42 +
  src/main.rs                                   |   73 +-
  src/managed_install.rs                        |  322 ++
- src/platform/mod.rs                           |   25 +
- src/platform/windows.rs                       |  152 +-
+ src/platform/mod.rs                           |   30 +-
+ src/platform/unix_common.rs                   |    4 -
+ src/platform/windows.rs                       |   52 +
  src/platform/windows/installer_helper.rs      |  215 ++
  .../windows/installer_helper_files.rs         | 1014 ++++++
  .../windows/installer_helper_lifecycle.rs     | 2773 +++++++++++++++++
@@ -64,24 +65,18 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  src/platform/windows/managed_install.rs       |  689 ++++
  src/product_announcements.rs                  |    4 +-
  src/release_notes.rs                          |   59 +-
- src/remote/attach.rs                          |   23 +-
+ src/remote/attach.rs                          |   14 +-
  src/server/autodetect.rs                      |    6 +-
  src/server/handoff.rs                         |    2 +-
  src/session.rs                                |   57 +
- src/update.rs                                 | 1059 +++++--
+ src/update.rs                                 | 1097 +++++--
  tests/api_ping.rs                             |   11 +-
  tests/cli/sessions.rs                         |   32 +-
  website/agent-guide.md                        |    7 +-
  website/index.html                            |    2 +-
- website/install.ps1                           |  688 ----
+ website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- website/src/content/docs/install.mdx          |   32 +-
- website/src/content/docs/ja/install.mdx       |    8 +-
- website/src/content/docs/ja/windows-beta.mdx  |   12 +-
- website/src/content/docs/windows-beta.mdx     |   12 +-
- website/src/content/docs/zh-cn/install.mdx    |    8 +-
- .../src/content/docs/zh-cn/windows-beta.mdx   |   12 +-
- 77 files changed, 13015 insertions(+), 1651 deletions(-)
+ 72 files changed, 12863 insertions(+), 2024 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -109,18 +104,18 @@ Subject: [PATCH 3/5] fix(windows): install the cross-agent Herdr skill
  delete mode 100644 website/install.ps1
 
 diff --git a/Cargo.toml b/Cargo.toml
-index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe09aa63094 100644
+index 8c13a0b19bf03cbb8691fcc016f89958f46c667b..564969077aa9a20b573b5c022c4c981639704b80 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -3,6 +3,7 @@ name = "herdr"
- version = "0.8.0"
+ version = "0.8.2"
  edition = "2021"
  build = "build.rs"
 +default-run = "herdr"
  description = "terminal workspace manager for AI coding agents"
  license = "Apache-2.0"
  repository = "https://github.com/herdrdev/herdr"
-@@ -19,6 +20,14 @@ include = [
+@@ -20,6 +21,14 @@ include = [
      "Cargo.toml",
  ]
  
@@ -135,11 +130,13 @@ index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe0
  [dependencies]
  base64 = "0.22.1"
  bincode = { version = "2", features = ["serde"] }
-@@ -55,15 +64,19 @@ windows-sys = { version = "0.61.2", features = [
+@@ -56,17 +65,20 @@ widestring = "1.2"
+ windows-sys = { version = "0.61.2", features = [
      "Wdk_System_Threading",
      "Win32_Foundation",
-     "Win32_Globalization",
-+    "Win32_Storage_FileSystem",
++    "Win32_Globalization",
+     "Win32_Security",
+     "Win32_Storage_FileSystem",
      "Win32_System_DataExchange",
      "Win32_System_Diagnostics_Debug",
      "Win32_System_Diagnostics_ToolHelp",
@@ -151,15 +148,14 @@ index 91627ca457ae6a1a782c6c91588d03573ac6cb60..9786b8fd4da04c79b98f9aea044debe0
      "Win32_System_Ole",
      "Win32_System_Pipes",
 +    "Win32_System_Registry",
-+    "Win32_Security",
+     "Win32_System_RemoteDesktop",
      "Win32_System_Threading",
      "Win32_UI_Input_Ime",
-     "Win32_UI_Input_KeyboardAndMouse",
 diff --git a/README.zh-CN.md b/README.zh-CN.md
-index 5bc95c68bf94f30c94b9d1017ba193fdaafeb2d3..a173d4bc1a12824e09635f2beca1d69e06bbb8f0 100644
+index 083db6de437a523e72fddbdabcc5c7f6156122b3..b3ce316fa922c223a140fc97352441e85660ddc9 100644
 --- a/README.zh-CN.md
 +++ b/README.zh-CN.md
-@@ -43,7 +43,7 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
+@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
  curl -fsSL https://herdr.dev/install.sh | sh
  ```
  
@@ -169,7 +165,7 @@ index 5bc95c68bf94f30c94b9d1017ba193fdaafeb2d3..a173d4bc1a12824e09635f2beca1d69e
  然后在工作所在的目录启动它：
  
 diff --git a/build.rs b/build.rs
-index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517ea7444cf 100644
+index b7a6a00549f9cc795da91ed00fe61db406013df1..c0dca7384c2335a777619e58a3bab44d73ed4241 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -29,6 +29,43 @@ fn env_bool(name: &str) -> Option<bool> {
@@ -216,7 +212,7 @@ index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517
  fn main() {
      println!("cargo:rerun-if-changed=build.rs");
      println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
-@@ -41,11 +78,32 @@ fn main() {
+@@ -41,14 +78,35 @@ fn main() {
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
      println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
@@ -225,6 +221,9 @@ index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517
      println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
 +    println!("cargo:rerun-if-env-changed=HERDR_RELEASE_VERSION");
      println!("cargo:rerun-if-env-changed=ZIG");
+     println!(
+         "cargo:warning=external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work."
+     );
  
 +    if let Ok(release_version) = env::var("HERDR_RELEASE_VERSION") {
 +        assert!(
@@ -251,20 +250,20 @@ index 66ed262012bbc648b98adf9e5489a8c85dda6353..d7a1ae4cb07d5461d6bf715407f49517
      let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
      let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
 diff --git a/docs/next/README.zh-CN.md b/docs/next/README.zh-CN.md
-index 5bc95c68bf94f30c94b9d1017ba193fdaafeb2d3..a173d4bc1a12824e09635f2beca1d69e06bbb8f0 100644
+index a762bc8657bb69587394723c811da8a172c9a65f..2d7483ba6091206c0ad31d4861f68ca65470e4a1 100644
 --- a/docs/next/README.zh-CN.md
 +++ b/docs/next/README.zh-CN.md
-@@ -43,7 +43,7 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
+@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
  curl -fsSL https://herdr.dev/install.sh | sh
  ```
  
--或者 `brew install herdr` · `mise use -g herdr` · Windows 测试版：`powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"` · [二进制文件](https://github.com/herdrdev/herdr/releases)
-+或者 `brew install herdr` · `mise use -g herdr` · Windows 测试版：[Herdr Win 安装程序](https://github.com/hdosys/herdr-win/releases) · [二进制文件](https://github.com/herdrdev/herdr/releases)
+-或者 `brew install herdr` · `mise use -g herdr` · Windows：`powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"` · [二进制文件](https://github.com/herdrdev/herdr/releases)
++或者 `brew install herdr` · `mise use -g herdr` · Windows：[Herdr Win 安装程序](https://github.com/hdosys/herdr-win/releases) · [二进制文件](https://github.com/herdrdev/herdr/releases)
  
  然后在工作所在的目录启动它：
  
 diff --git a/docs/next/website/src/content/docs/cli-reference.mdx b/docs/next/website/src/content/docs/cli-reference.mdx
-index fe2f2409fbec56e8b54a2073a825557e4210bfac..7f7ca8c71282fc933091dc67663ed064f31e68dc 100644
+index 36b33d3e632ebe5a803293acbf5ba5e12114698a..2b3aae0735a8db3a96a34b036492b430f6dbda59 100644
 --- a/docs/next/website/src/content/docs/cli-reference.mdx
 +++ b/docs/next/website/src/content/docs/cli-reference.mdx
 @@ -18,12 +18,9 @@ herdr --remote workbox --remote-keybindings server
@@ -277,70 +276,71 @@ index fe2f2409fbec56e8b54a2073a825557e4210bfac..7f7ca8c71282fc933091dc67663ed064
  herdr completion zsh          # generate a zsh completion script
 -herdr channel show            # print stable or preview
 -herdr channel set preview     # opt into preview builds
--herdr channel set stable      # return Linux/macOS direct installs to stable
+-herdr channel set stable      # return a direct install to stable
  herdr --version               # print version
  ```
  
 diff --git a/docs/next/website/src/content/docs/install.mdx b/docs/next/website/src/content/docs/install.mdx
-index 54e5a694211c3cbbbd46c188f0d7bb3e9edbf3e6..e0c27478e7b3ca1d0ceffee123f22cfac9063312 100644
+index c69cdd7adce6c26d6f96c329228127f142afd273..9cbe251977a528f28b28bd5e68aa2cdea7d755df 100644
 --- a/docs/next/website/src/content/docs/install.mdx
 +++ b/docs/next/website/src/content/docs/install.mdx
 @@ -13,13 +13,7 @@ On Linux or macOS, run:
  curl -fsSL https://herdr.dev/install.sh | sh
  ```
  
--On Windows preview beta, install the preview channel:
+-On Windows, run:
 -
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--The installer downloads the right release binary for your platform and places it on your PATH. Herdr defaults to preview on Windows without changing your config. The installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
+-The installer downloads the release binary for your platform and places it on your PATH. New direct installs use the stable update channel. Existing Windows preview installs stay on preview until you switch them with `herdr channel set stable`. The Windows installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
 +On Windows, download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases) and run it. Setup installs for the current user without administrator access, adds `herdr` to the user `PATH`, and registers **Herdr Win** in Installed Apps. It keeps one stable launcher at `%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` and immutable runtime directories for safe updates while sessions are active.
  
  ## Install with Homebrew
  
-@@ -92,11 +86,11 @@ mv herdr-linux-x86_64 ~/.local/bin/herdr
+@@ -93,7 +87,13 @@ mv herdr-linux-x86_64 ~/.local/bin/herdr
  
- ### Windows beta downloads
+ ### Windows archive
  
--Windows binaries are published only on preview releases while native Windows support is in beta. Use the preview installer above for normal testing, or download the Windows asset from a preview GitHub prerelease:
+-Stable releases and preview prereleases both include `herdr-windows-x86_64.zip`. The archive contains `herdr.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `herdr.exe`.
 +Use the herdr-win setup above for normal testing, or download the matching portable ZIP from the same herdr-win release:
- 
- | System | Asset |
- | --- | --- |
--| Windows x86_64 beta | `herdr-windows-x86_64.zip` |
++
++| System | Asset |
++| --- | --- |
 +| Windows x86_64 beta | `herdr-win_v<version>_windows_amd64.zip` |
++
++The archive contains `herdr.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `herdr.exe`.
  
- The archive contains `herdr.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `herdr.exe`.
+ ## Verify
  
-@@ -120,23 +114,7 @@ herdr update
+@@ -115,23 +115,7 @@ herdr update
  
- `herdr update` is for installs managed by Herdr's own installer. Homebrew, mise, and Nix installs are updated through those package managers instead.
+ Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
  
--On Linux and macOS, Herdr uses the stable update channel by default. To opt into preview builds from `master`, set the channel:
+-Direct installs on Linux, macOS, and Windows use the stable update channel by default. To opt into preview builds from `master`, set the channel:
 -
 -```bash
 -herdr channel set preview
 -```
 -
--Switch Linux and macOS direct installs back to stable the same way:
+-Switch a direct install back to stable the same way:
 -
 -```bash
 -herdr channel set stable
 -```
 -
--For direct installs, changing channels also checks that channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
+-For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
 -
--Preview builds are manually published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
+-Preview builds are regularly published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
 -
--Windows beta builds are preview-only for now. `herdr channel set stable` is rejected on Windows until stable Windows releases are available.
+-Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `herdr channel set stable`, run `herdr update` once on preview, then retry the channel switch.
 +The installed distribution owns its update feed. Official Herdr direct installs use official Herdr releases. A herdr-win build uses only the fork's CalVer release feed and cannot be redirected to official Herdr or another channel through config. Homebrew, mise, Nix, and WinGet installs update through their package manager.
  
- By default, `herdr update` installs the new binary and leaves compatible running sessions alone. If an update changes Herdr's client/server protocol, Herdr asks whether to stop the old server after installing. Stop the old server to use the new version. Stopping exits pane processes. For the default session, run `herdr server stop`, then run `herdr` again. For a named session, run `herdr session stop <name>`, then run `herdr session attach <name>` again.
+ By default, `herdr update` installs the new binary and leaves compatible running sessions alone. If an update changes Herdr's client/server protocol, Herdr asks whether to stop the old server after installing. Stop the old server to use the new version. Stopping the server exits its pane processes. For the default session, run `herdr server stop`, then run `herdr` again. For a named session, run `herdr session stop <name>`, then run `herdr session attach <name>` again.
  
 diff --git a/docs/next/website/src/content/docs/ja/cli-reference.mdx b/docs/next/website/src/content/docs/ja/cli-reference.mdx
-index dab0648268c15df0df9457d6c2985b7acc99f45c..673abb0db1f99a34caa6c97a92b7158ae7452f49 100644
+index 22fd37982f0e233b69523f648fff262249b105fd..29a884760041f0ff58ac00d27cd48e7ae20bf7fd 100644
 --- a/docs/next/website/src/content/docs/ja/cli-reference.mdx
 +++ b/docs/next/website/src/content/docs/ja/cli-reference.mdx
 @@ -18,12 +18,9 @@ herdr --remote workbox --remote-keybindings server
@@ -353,40 +353,40 @@ index dab0648268c15df0df9457d6c2985b7acc99f45c..673abb0db1f99a34caa6c97a92b7158a
  herdr completion zsh          # zsh 補完スクリプトを生成
 -herdr channel show            # stable または preview を表示
 -herdr channel set preview     # プレビュービルドにオプトイン
--herdr channel set stable      # Linux/macOS の直接インストールを安定版に戻す
+-herdr channel set stable      # 直接インストールを安定版に戻す
  herdr --version               # バージョンを表示
  ```
  
 diff --git a/docs/next/website/src/content/docs/ja/install.mdx b/docs/next/website/src/content/docs/ja/install.mdx
-index b894c1328f9459255c82a0fff256fddbd0795a76..585a938af266210d6bdcc6b289be792743b40ee1 100644
+index 3fe29f40bd89b044d263c242d04e86a9d41c7e14..6d70aff315018dadb28ff963349e0a8d9c7c7481 100644
 --- a/docs/next/website/src/content/docs/ja/install.mdx
 +++ b/docs/next/website/src/content/docs/ja/install.mdx
 @@ -13,13 +13,7 @@ Linux または macOS では次を実行します:
  curl -fsSL https://herdr.dev/install.sh | sh
  ```
  
--Windows プレビューベータでは、プレビューチャンネルをインストールします:
+-Windows では次を実行します:
 -
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
+-インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
 +Windows では、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードして実行します。セットアップは管理者権限なしで現在のユーザー向けにインストールし、`herdr` をユーザーの `PATH` に追加して、インストールされているアプリに **Herdr Win** を登録します。安全な更新のため、`%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` に 1 つの安定したランチャーを置き、セッションが実行中の間は不変のランタイムディレクトリを使用します。
  
  ## Homebrew でインストール
  
-@@ -120,23 +114,7 @@ herdr update
+@@ -115,23 +109,7 @@ herdr update
  
  `herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
  
--Linux と macOS では、Herdr はデフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
+-Linux、macOS、Windows の直接インストールは、デフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
 -
 -```bash
 -herdr channel set preview
 -```
 -
--Linux と macOS の直接インストールを安定版に戻すのも同じ方法です:
+-直接インストールを安定版に戻すのも同じ方法です:
 -
 -```bash
 -herdr channel set stable
@@ -394,77 +394,123 @@ index b894c1328f9459255c82a0fff256fddbd0795a76..585a938af266210d6bdcc6b289be7927
 -
 -直接インストールの場合、チャンネルの変更はそのチャンネルをチェックして最新バイナリをインストールします。そのアップデートが失敗した場合は、`herdr update` を実行して設定済みチャンネルから再試行してください。
 -
--プレビュービルドは、現在の開発ブランチから手動で公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
+-プレビュービルドは、現在の開発ブランチから定期的に公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
 -
--Windows ベータビルドは今のところプレビュー限定です。安定版の Windows リリースが提供されるまで、Windows では `herdr channel set stable` は拒否されます。
+-Windows の通常利用には安定版を推奨します。プレビューでは修正をより早く受け取れますが、リグレッションの可能性があるため、そのトレードオフを望む場合に限りオプトインしてください。既存の Windows プレビューインストールは、明示的に切り替えるまでプレビューに残ります。古いプレビュービルドで `herdr channel set stable` が拒否される場合は、プレビューのまま一度 `herdr update` を実行してから、チャンネル切り替えを再試行してください。
 +インストール済みのディストリビューションが更新フィードを所有します。公式 Herdr の直接インストールは公式リリースを使用します。herdr-win ビルドはフォークの CalVer リリースフィードのみを使用し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。Homebrew、mise、Nix、WinGet のインストールは、それぞれのパッケージマネージャーで更新します。
  
  デフォルトでは、`herdr update` は新しいバイナリをインストールし、互換性のある実行中セッションには手を付けません。アップデートが Herdr のクライアント/サーバープロトコルを変更する場合、Herdr はインストール後に古いサーバーを停止するか尋ねます。新しいバージョンを使うには古いサーバーを停止してください。停止するとペインのプロセスは終了します。デフォルトセッションでは `herdr server stop` を実行してから再度 `herdr` を実行します。名前付きセッションでは `herdr session stop <name>` を実行してから再度 `herdr session attach <name>` を実行します。
  
 diff --git a/docs/next/website/src/content/docs/ja/windows-beta.mdx b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-index 33378c517b1107c2631e91abb38ceb87372fb137..f8f9085d0aff77886fd5deb152d9faa3e95336fe 100644
+index 89baaa43faba66a65d2b5cd1bd87ca840757d153..a440c43a713ecc24d9bbc92cba0ca1c533fba548 100644
 --- a/docs/next/website/src/content/docs/ja/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/ja/windows-beta.mdx
-@@ -9,15 +9,9 @@ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モ
+@@ -7,15 +7,9 @@ description: ネイティブ Windows 対応、サポートされるワークフ
  
- ベータの目的は実際の使用から学ぶことです: インストールの成功率、ペインの信頼性、エージェントのワークフロー、バグの量、不足している機能、そして Windows ユーザーが Herdr から十分な価値を得られているかどうか。そのフィードバックに基づき、Windows 対応は安定版に昇格するか、成熟するまでプレビュー限定のままか、メンテナンスコストに見合わなければ縮小される可能性があります。
+ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モデルではなく、ConPTY と Windows のプロセス/ランタイム挙動を使います。主要なワークフローの多くはサポートされていますが、一部の機能は Linux/macOS と異なるか、プラットフォームに依存します。残っている差を埋める間、Windows 固有の修正がより多く提供されることがあります。
  
--ネイティブ Windows ベータビルドは PowerShell でインストールします:
-+Windows ネイティブベータビルドは、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードしてインストールします。ユーザー単位の NSIS セットアップは管理者権限を必要とせず、インストールされているアプリに **Herdr Win** を登録し、`%LOCALAPPDATA%\Programs\Herdr\bin` をユーザーの `PATH` に追加します。1 つの安定したランチャーが `%LOCALAPPDATA%\Programs\Herdr\runtime` の不変ランタイムを選択するため、実行中のセッションは新しいランタイムが有効になる前に終了できます。
+-Windows に Herdr をネイティブインストールするには PowerShell を使います:
++Windows ネイティブビルドは、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードしてインストールします。ユーザー単位の NSIS セットアップは管理者権限を必要とせず、インストールされているアプリに **Herdr Win** を登録し、`%LOCALAPPDATA%\Programs\Herdr\bin` をユーザーの `PATH` に追加します。1 つの安定したランチャーが `%LOCALAPPDATA%\Programs\Herdr\runtime` の不変ランタイムを選択するため、実行中のセッションは新しいランタイムが有効になる前に終了できます。
  
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--Windows ベータビルドはプレビューチャンネルでのみ提供されます。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
+-Windows ビルドは安定版とプレビューの両方のアップデートチャンネルで提供されます。新規インストールはデフォルトで安定版を使い、通常の利用には安定版を推奨します。既存のプレビューインストールは、`herdr channel set stable` を実行するまでプレビューに残ります。古いプレビュービルドでこのコマンドが拒否される場合は、プレビューのまま一度 `herdr update` を実行してから再試行してください。プレビューでは `master` からの新しく検証の少ない修正を受け取れますが、リグレッションが起きる可能性があります。そのトレードオフを望む場合に限り、`herdr channel set preview` でオプトインしてください。
 -
--内部ベータテスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。
+-インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
 +インストール済みの Windows ディストリビューションはフォークの CalVer 更新フィードを所有し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。
  
- ## ベータでサポート
+ 内部テスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。カスタムプレビューマニフェストでは `HERDR_CHANNEL=preview` も設定してください。
  
-@@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
+@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
  
- Windows ではコントロールソケットによる接続再利用は使用しません。SSH キープアライブは追加されますが、パスワード認証では複数のセットアップコマンドに対して入力を求められる場合があります。鍵認証または Windows の `ssh-agent` を推奨します。Windows ホストでは `PATH` または `%USERPROFILE%\.herdr\remote\bin\herdr.exe` にあるユーザー所有の安定したリモートランタイムから、完全に一致する `herdr.exe` を使います。必要な場合、対話的なアタッチは設定を検証し、承認後に選択したサーバーを停止し、ダイジェスト検証済みの完全なポータブルペイロードをステージングして検証し、安定したランタイムをアトミックに置き換えてから、サーバーを起動して検証します。別のリモートプロセスが実行中の場合、置き換えはブロックされます。インストーラーの実行やリモート `PATH` の変更は行いません。通常の非対話的アタッチはインストールしません。明示的な `--provision --yes` は対話的な確認なしで同じ有効化パスを使います。Windows リモートホストではライブハンドオフをサポートしません。
+ その他の Windows IME はまだこのオプションに対応していません。[設定](/ja/docs/configuration/#プレフィックス入力ソースの切り替え)を参照してください。
+ 
+-Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Linux/macOS ホストへの `herdr --remote` で別途サポートされます。
++Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Windows 接続先を含む `herdr --remote` で別途サポートされます。
+ 
+ Kitty graphics は実験的機能で、外側のターミナルに依存します。`experimental.kitty_graphics = true` の場合、Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルが Kitty graphics に対応しており、その組み合わせをテストする場合を除いて、このオプションは無効のままにしてください。
+ 
+@@ -112,7 +106,6 @@ Herdr のペインテキストコピーは Windows で動作します。ペイ
+ | 機能 | 状況 |
+ | --- | --- |
+ | ダイレクトターミナルアタッチ (`herdr terminal attach`) | 未サポート |
+-| `herdr --remote` の接続先としての Windows | 未サポート |
+ | ライブサーバーハンドオフ | 未サポート |
+ | Unix ファイルディスクリプタのハンドオフ | 未サポート |
+ | Unix フォアグラウンドプロセスグループ | 未サポート |
+@@ -123,11 +116,12 @@ Windows Terminal からは、Linux や macOS と同じリモートコマンド
+ 
+ ```powershell
+ herdr --remote workbox
++herdr --remote workbox --provision --yes --json
+ ```
+ 
+-接続先ホストは Linux または macOS である必要があります。Herdr はインストール済みの Windows OpenSSH クライアントと SSH 設定を使います。Windows OpenSSH では Herdr の Unix コントロールソケットによる接続再利用を使わないため、セットアップ中の繰り返しプロンプトを避けるには Windows の `ssh-agent` による鍵認証を推奨します。
++対応するすべてのクライアントから x86_64 および ARM64 Windows ホストへ接続できます。Herdr は `PATH` または安定した `%USERPROFILE%\.herdr\remote\herdr.exe` ペイロードから、バージョンとプロトコルが完全に一致するバイナリを使います。明示的なプロビジョニングは、管理対象インストーラーの実行やリモート `PATH` の変更を行わず、完全なポータブル ZIP を転送して検証します。通常の非対話アタッチはインストールしません。Windows OpenSSH のデフォルトシェルは `cmd.exe` または PowerShell 7 である必要があり、サーバーは SSH ユーザーの既存のアクティブなデスクトップセッションで起動するため、SSH 切断後も存続します。Windows PowerShell 5.1、未知のシェル、または曖昧なデスクトップセッションでは fail-closed します。Windows 接続先ではライブハンドオフをサポートしません。
  
 -Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
 +Windows のアップデートは管理対象のセットアップ資産を使います。既存のセッションは現在の不変ランタイムを使い続け、アクティブなリースが終了した後に今後の起動が切り替わります。ライブハンドオフは Unix 専用です。
  
- ## Windows ベータの問題を報告する
+ ## Windows の問題を報告する
  
 diff --git a/docs/next/website/src/content/docs/windows-beta.mdx b/docs/next/website/src/content/docs/windows-beta.mdx
-index f1340530027c6b9c1c10a4e9c1eee838ad1543ff..4c790ebb2fde5b8c85d2994d8f0445a74c393b91 100644
+index c5839639eb0879ae950516d198090e43d95b65e2..f3b219bdf87a632dc44f2a499544b2a851bef21e 100644
 --- a/docs/next/website/src/content/docs/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/windows-beta.mdx
-@@ -9,15 +9,9 @@ Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the
+@@ -7,15 +7,9 @@ Native Windows support is generally available.
  
- The goal of the beta is to learn from real use: install success, pane reliability, agent workflows, bug volume, missing features, and whether Windows users are getting enough value from Herdr. Based on that feedback, Windows support may graduate to stable, stay preview-only while it matures, or be reduced if the maintenance cost is not justified.
+ Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the Unix PTY model Herdr was originally built around. Most core workflows are supported, but some capabilities differ from Linux and macOS or remain platform-dependent. Windows may receive more platform-specific fixes as those remaining gaps close.
  
--Install native Windows beta builds with PowerShell:
-+Install native Windows beta builds by downloading the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases). The per-user NSIS setup requires no administrator access, registers **Herdr Win** in Installed Apps, and puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user `PATH`. One stable launcher selects immutable runtimes under `%LOCALAPPDATA%\Programs\Herdr\runtime` so active sessions can finish before a newer runtime is activated.
+-Install Herdr natively on Windows with PowerShell:
++Install native Windows builds by downloading the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases). The per-user NSIS setup requires no administrator access, registers **Herdr Win** in Installed Apps, and puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user `PATH`. One stable launcher selects immutable runtimes under `%LOCALAPPDATA%\Programs\Herdr\runtime` so active sessions can finish before a newer runtime is activated.
  
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--Windows beta builds ship only through the preview channel. Herdr defaults to preview on Windows without changing your config. The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
+-Windows builds are available through both stable and preview update channels. New installs use stable by default, and stable is recommended for normal use. Existing preview installs stay on preview until you run `herdr channel set stable`. If an older preview build rejects that command, run `herdr update` once on preview and retry. Preview provides newer, less-tested fixes from `master` and may regress; opt in with `herdr channel set preview` only when you want that tradeoff.
 -
--For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest.
+-The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
 +The installed Windows distribution owns its fork CalVer update feed and cannot be redirected to official Herdr or another channel through config.
  
- ## Supported in beta
+ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest. Set `HERDR_CHANNEL=preview` with a custom preview manifest.
  
-@@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
+@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
  
- Herdr does not use its control-socket connection reuse path on Windows. It still adds SSH keepalives, but password authentication may prompt for more than one setup command. Key or Windows `ssh-agent` authentication is recommended. Windows hosts use an exact matching `herdr.exe` from `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates configuration, stops the selected server with approval, stages and validates the complete digest-verified portable payload, atomically replaces the stable runtime, then starts and verifies the server. Another active remote process blocks replacement. It never runs an installer or changes remote `PATH`; ordinary non-interactive attach never installs it. Explicit `--provision --yes` owns the same activation path without an interactive prompt. Windows remote hosts do not support live handoff.
+ Other Windows IMEs are not supported by this option yet. See [Configuration](/docs/configuration/#prefix-input-source-switching).
+ 
+-Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux and macOS hosts.
++Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote`, including Windows target hosts.
+ 
+ Kitty graphics is experimental and depends on the outer terminal. When `experimental.kitty_graphics = true`, Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Leave the option disabled unless the outer terminal supports Kitty graphics and you are testing that combination.
+ 
+@@ -112,7 +106,6 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is
+ | Capability | Status |
+ | --- | --- |
+ | Direct terminal attach (`herdr terminal attach`) | unsupported |
+-| Windows as a `herdr --remote` target host | unsupported |
+ | Live server handoff | unsupported |
+ | Unix file-descriptor handoff | unsupported |
+ | Unix foreground process groups | unsupported |
+@@ -123,11 +116,12 @@ From Windows Terminal, use the same remote command as Linux and macOS:
+ 
+ ```powershell
+ herdr --remote workbox
++herdr --remote workbox --provision --yes --json
+ ```
+ 
+-The target host must run Linux or macOS. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
++Every supported client can attach to x86_64 and ARM64 Windows hosts. Herdr uses an exact version- and protocol-matching binary from `PATH` or the stable `%USERPROFILE%\.herdr\remote\herdr.exe` payload. Explicit provisioning transfers and validates the complete portable ZIP without running the managed installer or changing remote `PATH`; ordinary non-interactive attach never installs. The Windows OpenSSH default shell must be `cmd.exe` or PowerShell 7, and the server starts in the SSH user's existing active desktop session so it survives SSH closure. Windows PowerShell 5.1, an unknown shell, or an ambiguous desktop session fails closed. Windows remote hosts do not support live handoff.
  
 -Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
 +Windows updates run through the managed setup asset. Existing sessions keep their current immutable runtime, and future launches switch after active leases exit. Live handoff is Unix-only.
  
- ## Reporting Windows beta issues
+ ## Reporting Windows issues
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
-index c2342c75cccebdc9c370f88b7fe0249edbdb45f5..818e929e685ecbf9226503f2a27eb781022f5320 100644
+index ec37f52b9ed09bec703fff10853533ef5da20800..5d9ebf7a35298b9ba108d030da6138c3fc0846c2 100644
 --- a/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/cli-reference.mdx
 @@ -18,12 +18,9 @@ herdr --remote workbox --remote-keybindings server
@@ -477,40 +523,40 @@ index c2342c75cccebdc9c370f88b7fe0249edbdb45f5..818e929e685ecbf9226503f2a27eb781
  herdr completion zsh          # 生成 zsh 补全脚本
 -herdr channel show            # 打印 stable 或 preview
 -herdr channel set preview     # 启用预览构建
--herdr channel set stable      # 把 Linux/macOS 直接安装切回稳定版
+-herdr channel set stable      # 把直接安装切回稳定版
  herdr --version               # 打印版本
  ```
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/install.mdx b/docs/next/website/src/content/docs/zh-cn/install.mdx
-index 8305fd7a7cda906ef3555654e0d09e6b9b0e8fe0..941c8ae49a0c8e763375527c7338ab6fcd9b9781 100644
+index 9f8ef5a5afc41d866ef7952dc2f7f2a6ee12595b..a1aba296dacc2e62a6159c06fc841aa81b78e098 100644
 --- a/docs/next/website/src/content/docs/zh-cn/install.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/install.mdx
-@@ -13,13 +13,7 @@ Herdr 为 Linux 和 macOS 提供稳定版二进制文件。Windows 原生支持
+@@ -13,13 +13,7 @@ Herdr 为 Linux、macOS 和 Windows 提供稳定通道二进制文件。Windows
  curl -fsSL https://herdr.dev/install.sh | sh
  ```
  
--在 Windows 预览测试版上,安装预览通道:
+-在 Windows 上运行:
 -
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--安装器会下载适合你平台的发布二进制文件并放到 PATH 上。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
+-安装器会下载适合你平台的发布二进制文件并放到 PATH 上。新的直接安装默认使用稳定更新通道。现有的 Windows 预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。Windows 安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
 +在 Windows 上,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe` 并运行。安装程序无需管理员权限,为当前用户安装,将 `herdr` 添加到用户 `PATH`,并在已安装的应用中注册 **Herdr Win**。为了安全更新,它在 `%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` 保留一个稳定启动器,并在会话运行期间使用不可变运行时目录。
  
  ## 用 Homebrew 安装
  
-@@ -120,23 +114,7 @@ herdr update
+@@ -115,23 +109,7 @@ herdr update
  
  `herdr update` 适用于由 Herdr 自带安装器管理的安装。Homebrew、mise 和 Nix 安装请改用那些包管理器更新。
  
--在 Linux 和 macOS 上,Herdr 默认使用稳定更新通道。要启用来自 `master` 的预览构建,设置通道:
+-Linux、macOS 和 Windows 的直接安装默认使用稳定更新通道。要启用来自 `master` 的预览构建,设置通道:
 -
 -```bash
 -herdr channel set preview
 -```
 -
--用同样的方式把 Linux 和 macOS 的直接安装切回稳定版:
+-用同样的方式把直接安装切回稳定版:
 -
 -```bash
 -herdr channel set stable
@@ -518,57 +564,80 @@ index 8305fd7a7cda906ef3555654e0d09e6b9b0e8fe0..941c8ae49a0c8e763375527c7338ab6f
 -
 -对于直接安装,切换通道时也会检查该通道并安装其最新二进制文件。如果该更新失败,运行 `herdr update` 从配置的通道重试。
 -
--预览构建是从当前开发分支手动发布的 GitHub 预发布。当你想在下一个稳定版之前拿到修复时很有用,但它们可能出现回归。Homebrew、mise 和 Nix 安装不使用预览通道。
+-预览构建是从当前开发分支定期发布的 GitHub 预发布。当你想在下一个稳定版之前拿到修复时很有用,但它们可能出现回归。Homebrew、mise 和 Nix 安装不使用预览通道。
 -
--Windows 测试版构建目前仅限预览通道。在稳定的 Windows 发布可用之前,Windows 上的 `herdr channel set stable` 会被拒绝。
+-Windows 的常规使用建议选择稳定版。预览版能更早获得修复,但可能出现回归,因此只有在接受这一取舍时才应主动启用。现有的 Windows 预览安装会继续留在预览通道,直到你明确切换。如果旧预览构建拒绝 `herdr channel set stable`,请先在预览通道运行一次 `herdr update`,再重试切换通道。
 +已安装的发行版拥有自己的更新源。官方 Herdr 直接安装使用官方 Herdr 发布。herdr-win 构建只使用该分支的 CalVer 发布源,不能通过配置切换到官方 Herdr 或其他通道。Homebrew、mise、Nix 和 WinGet 安装通过各自的包管理器更新。
  
  默认情况下,`herdr update` 安装新二进制文件,并不打扰兼容的运行中会话。如果某次更新改变了 Herdr 的客户端/服务器协议,Herdr 会在安装后询问是否停止旧服务器。要使用新版本,请停止旧服务器。停止会退出窗格进程。对于默认会话,运行 `herdr server stop`,再运行 `herdr`。对于命名会话,运行 `herdr session stop <name>`,再运行 `herdr session attach <name>`。
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-index 07385b174940b7d611fcbf3888720a985f9d2441..5559f96e4f04a75c51a19c2fd1cb7130285cec77 100644
+index 2b25552a54f20c24a5bf7299178440467707ee6a..77613a5772c87a26e563fa986b00892e53a6fc04 100644
 --- a/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/windows-beta.mdx
-@@ -9,15 +9,9 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不
+@@ -7,15 +7,9 @@ Windows 原生支持已正式发布。
  
- 测试版的目标是从真实使用中学习: 安装成功率、窗格可靠性、智能体工作流、bug 数量、缺失的功能,以及 Windows 用户是否从 Herdr 获得了足够的价值。基于这些反馈,Windows 支持可能升级为稳定版,可能在成熟前保持仅预览,也可能在维护成本不合理时被缩减。
+ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不是 Herdr 最初围绕构建的 Unix PTY 模型。大多数核心工作流已受支持,但部分能力与 Linux/macOS 不同或取决于平台。随着这些剩余差距逐步缩小,Windows 可能会收到更多平台专用修复。
  
--用 PowerShell 安装 Windows 原生测试版构建:
-+安装 Windows 原生测试版时,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe`。按用户安装的 NSIS 安装程序无需管理员权限,在已安装的应用中注册 **Herdr Win**,并将 `%LOCALAPPDATA%\Programs\Herdr\bin` 添加到用户 `PATH`。一个稳定启动器会选择 `%LOCALAPPDATA%\Programs\Herdr\runtime` 下的不可变运行时,因此活动会话可以在启用新运行时之前正常结束。
+-使用 PowerShell 在 Windows 上原生安装 Herdr:
++安装 Windows 原生构建时,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe`。按用户安装的 NSIS 安装程序无需管理员权限,在已安装的应用中注册 **Herdr Win**,并将 `%LOCALAPPDATA%\Programs\Herdr\bin` 添加到用户 `PATH`。一个稳定启动器会选择 `%LOCALAPPDATA%\Programs\Herdr\runtime` 下的不可变运行时,因此活动会话可以在启用新运行时之前正常结束。
  
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -```
 -
--Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
+-Windows 构建同时通过稳定版和预览版更新通道提供。新安装默认使用稳定版,常规使用也建议选择稳定版。现有预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。如果旧预览构建拒绝该命令,请先在预览通道运行一次 `herdr update`,再重试。预览版会提供来自 `master` 的更新、测试较少的修复,也可能出现回归;只有在接受这一取舍时,才应通过 `herdr channel set preview` 主动启用。
 -
--对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。
+-安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
 +已安装的 Windows 发行版拥有该分支的 CalVer 更新源,不能通过配置切换到官方 Herdr 或其他通道。
  
- ## 测试版支持
+ 对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。使用自定义预览清单时还应设置 `HERDR_CHANNEL=preview`。
  
-@@ -108,7 +102,7 @@ herdr --remote workbox --provision --yes --json
+@@ -74,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
  
- Herdr 在 Windows 上不使用控制套接字连接复用。它仍会添加 SSH keepalive,但密码认证可能会为多个设置命令重复提示。建议使用密钥或 Windows `ssh-agent` 认证。Windows 主机会使用 `PATH` 或 `%USERPROFILE%\.herdr\remote\bin\herdr.exe` 处用户自有的稳定远程运行时中完全匹配的 `herdr.exe`。需要时，交互式连接会验证配置，在批准后停止选定的服务器，暂存并验证完整且经过摘要验证的便携负载，以原子方式替换稳定运行时，然后启动并验证服务器。若另一个远程进程仍在运行，替换会被阻止。它不会运行安装器或修改远程 `PATH`；普通非交互式连接不会安装。显式 `--provision --yes` 会在没有交互式提示的情况下使用相同的激活路径。Windows 远程主机不支持实时交接。
+ 此选项暂不支持其他 Windows 输入法。参见[配置](/zh-cn/docs/configuration/#前缀输入源切换)。
+ 
+-Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过连接 Linux/macOS 主机的 `herdr --remote` 单独受支持。
++Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过 `herdr --remote` 单独受支持,包括 Windows 目标主机。
+ 
+ Kitty graphics 是实验性功能,并取决于外层终端。设置 `experimental.kitty_graphics = true` 后,Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证,但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。除非外层终端支持 Kitty graphics 且你正在测试该组合,否则请保持此选项禁用。
+ 
+@@ -112,7 +106,6 @@ Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即
+ | 能力 | 状态 |
+ | --- | --- |
+ | 直接终端附加 (`herdr terminal attach`) | 不支持 |
+-| Windows 作为 `herdr --remote` 的目标主机 | 不支持 |
+ | 实时服务器交接 | 不支持 |
+ | Unix 文件描述符交接 | 不支持 |
+ | Unix 前台进程组 | 不支持 |
+@@ -123,11 +116,12 @@ Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即
+ 
+ ```powershell
+ herdr --remote workbox
++herdr --remote workbox --provision --yes --json
+ ```
+ 
+-目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
++所有受支持的客户端都可以连接 x86_64 和 ARM64 Windows 主机。Herdr 使用 `PATH` 或稳定的 `%USERPROFILE%\.herdr\remote\herdr.exe` 负载中版本与协议完全匹配的二进制。显式配置会传输并验证完整的便携 ZIP,不会运行受管理安装程序或更改远程 `PATH`;普通非交互式连接永远不会安装。Windows OpenSSH 的默认 shell 必须是 `cmd.exe` 或 PowerShell 7,服务器会在 SSH 用户现有的活动桌面会话中启动,因此 SSH 断开后仍可继续运行。Windows PowerShell 5.1、未知 shell 或不明确的桌面会话都会 fail-closed。Windows 目标主机不支持实时交接。
  
 -Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
 +Windows 更新使用受管理的安装程序资产。现有会话继续使用当前的不可变运行时,活动租约结束后,后续启动会切换到新运行时。实时交接仅限 Unix。
  
- ## 报告 Windows 测试版问题
+ ## 报告 Windows 问题
  
 diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
-index 1646a095a31af5fe46c95414fe0f65d716349d54..88188e9bbd2661d98609e0a8e3f61561400990aa 100644
+index 44ac9b00bd28fe8c324c1126678f566b292fab6a..60cc83c35a009e9c2d2e36ba7896da262e401660 100644
 --- a/docs/next/website/src/data/config-reference.json
 +++ b/docs/next/website/src/data/config-reference.json
-@@ -177,21 +177,11 @@
+@@ -213,21 +213,11 @@
        "id": "update",
        "title": "Updates",
        "keys": [
 -        {
 -          "key": "update.channel",
 -          "type": "enum",
--          "default": "\"stable\" (\"preview\" on Windows)",
--          "description": "Update channel used by background version checks and herdr update. Homebrew, mise, and Nix installs ignore the preview channel.",
+-          "default": "\"stable\" (\"preview\" for Windows preview builds)",
+-          "description": "Update channel used by background version checks and herdr update. Stable Windows builds default to stable; existing Windows preview installs stay on preview until explicitly switched. Homebrew, mise, and Nix installs ignore the preview channel.",
 -          "values": [
 -            "stable",
 -            "preview"
@@ -584,19 +653,19 @@ index 1646a095a31af5fe46c95414fe0f65d716349d54..88188e9bbd2661d98609e0a8e3f61561
          {
            "key": "update.manifest_check",
 diff --git a/justfile b/justfile
-index e5f9e1b21702c141d1d90e77e30d39e720a1b2fa..a2a6e2bd4e07cccb8b339813126784dbe71fa51f 100644
+index 396b85d33fe683841fc3be0a736128669fabb441..85e0a59603da663bb52c3d2543735cddddeb3936 100644
 --- a/justfile
 +++ b/justfile
 @@ -3,7 +3,7 @@
  # Run tests
  test:
      cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
--    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
-+    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_installer
+-    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
++    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_installer
+     just ui-hot-path-architecture-test
      just integration-assets-test
      just plugin-marketplace-test
- 
-@@ -33,12 +33,12 @@ ci filter='all()': lint
+@@ -39,12 +39,12 @@ ci filter='all()': lint
  [unix]
  windows-lint:
      rustup target add x86_64-pc-windows-msvc
@@ -606,8 +675,8 @@ index e5f9e1b21702c141d1d90e77e30d39e720a1b2fa..a2a6e2bd4e07cccb8b339813126784db
  # Check formatting + run unit tests + Windows target lint + maintenance script tests
  [unix]
  check: ci windows-lint
--    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
-+    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_installer
+-    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
++    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_installer
      @echo "docs reminder: if this changes user-facing behavior, make sure the relevant release docs are updated or called out before release."
  
  [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
@@ -52885,84 +52954,27 @@ index 0000000000000000000000000000000000000000..24524d31822b05f00671ee0a7494e4b5
 +[Console]::Out.WriteLine('Herdr Win installer build inputs validated successfully.')
 diff --git a/packaging/windows/managed-skill-hashes.txt b/packaging/windows/managed-skill-hashes.txt
 new file mode 100644
-index 0000000000000000000000000000000000000000..2ab1a2278d6b249d176a75308ffa8c01081726d7
+index 0000000000000000000000000000000000000000..a72403568db429e62f71bbbef57af9a5ecc01d4e
 --- /dev/null
 +++ b/packaging/windows/managed-skill-hashes.txt
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,4 @@
 +herdr-managed-skill-hashes-v1
 +0786182f02ebf92708e09d82d79e4614d1a9c30bfc337643cc2af1d0fb9db29f
++237ad2ab2d8123e2bb37956d3a41eed141f2d22a7c36e415b7876c0397679099
 +2752439d23fcc16235e1292599e7f7b31635166d6b01221d7bf759da5d571072
 diff --git a/scripts/package_windows_conpty.py b/scripts/package_windows_conpty.py
-index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c9933aeb6ec1 100644
+index fa21f501666e8979d9e4a609e9a78fe9feaaf9f4..370dd3fbb5adf9eee5cc39405eb4c9933aeb6ec1 100644
 --- a/scripts/package_windows_conpty.py
 +++ b/scripts/package_windows_conpty.py
-@@ -16,7 +16,10 @@ from typing import Any
- PROJECT_ROOT = Path(__file__).resolve().parent.parent
- DEFAULT_METADATA = PROJECT_ROOT / "packaging" / "windows" / "conpty.json"
- MARKER_PATH = PurePosixPath("conpty/herdr-conpty.json")
-+PRODUCT_LICENSE_SOURCE = PROJECT_ROOT / "LICENSE"
-+PRODUCT_LICENSE_PATH = PurePosixPath("LICENSE.txt")
+@@ -19,6 +19,7 @@ MARKER_PATH = PurePosixPath("conpty/herdr-conpty.json")
+ PRODUCT_LICENSE_SOURCE = PROJECT_ROOT / "LICENSE"
+ PRODUCT_LICENSE_PATH = PurePosixPath("LICENSE.txt")
  DOWNLOAD_TIMEOUT_SECONDS = 60
 +ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
  
  
  def sha256_bytes(data: bytes) -> str:
-@@ -31,6 +34,20 @@ def sha256_file(path: Path) -> str:
-     return digest.hexdigest()
- 
- 
-+def read_product_license() -> bytes:
-+    data = PRODUCT_LICENSE_SOURCE.read_bytes()
-+    normalized = data.replace(b"\r\n", b"\n")
-+    header = normalized[:256]
-+    if (
-+        b"Apache License\n" not in header
-+        or b"Version 2.0, January 2004\n" not in header
-+        or b"AGPL" in normalized.upper()
-+        or b"AFFERO" in normalized.upper()
-+    ):
-+        raise ValueError("product LICENSE must be the Apache License 2.0")
-+    return data
-+
-+
- def load_metadata(path: Path) -> dict[str, Any]:
-     data = json.loads(path.read_text(encoding="utf-8"))
-     if data.get("schema_version") != 1:
-@@ -113,6 +130,7 @@ def stage_bundle(
-         raise ValueError(f"output directory already exists: {output_dir}")
-     if not herdr_exe.is_file():
-         raise ValueError(f"Herdr executable does not exist: {herdr_exe}")
-+    product_license = read_product_license()
- 
-     acquire_package(metadata["package"], package_path)
-     bundle = metadata["bundles"][architecture]
-@@ -125,6 +143,7 @@ def stage_bundle(
-         staging = Path(temporary) / "bundle"
-         staging.mkdir()
-         shutil.copy2(herdr_exe, staging / "herdr.exe")
-+        (staging / PRODUCT_LICENSE_PATH).write_bytes(product_license)
- 
-         for item in bundle["files"]:
-             try:
-@@ -166,7 +185,7 @@ def stage_bundle(
- 
- 
- def expected_stage_files(metadata: dict[str, Any], architecture: str) -> set[str]:
--    files = {"herdr.exe", MARKER_PATH.as_posix()}
-+    files = {"herdr.exe", MARKER_PATH.as_posix(), PRODUCT_LICENSE_PATH.as_posix()}
-     files.update(item["destination"] for item in metadata["bundles"][architecture]["files"])
-     files.update(item["destination"] for item in metadata["notices"])
-     return files
-@@ -186,6 +205,8 @@ def validate_stage(metadata_path: Path, architecture: str, stage_dir: Path) -> N
-         )
-     if (stage_dir / MARKER_PATH).read_bytes() != marker_data(metadata, architecture):
-         raise ValueError("bundle marker does not match pinned ConPTY metadata")
-+    if (stage_dir / PRODUCT_LICENSE_PATH).read_bytes() != read_product_license():
-+        raise ValueError("staged LICENSE.txt does not match the product license")
-     for item in metadata["bundles"][architecture]["files"]:
-         path = stage_dir / PurePosixPath(item["destination"])
-         actual_hash = sha256_file(path)
-@@ -206,7 +227,13 @@ def archive_bundle(
+@@ -226,7 +227,13 @@ def archive_bundle(
      with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
          for path in sorted(stage_dir.rglob("*")):
              if path.is_file():
@@ -52977,7 +52989,7 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
  
  
  def parse_args() -> argparse.Namespace:
-@@ -224,6 +251,10 @@ def parse_args() -> argparse.Namespace:
+@@ -244,6 +251,10 @@ def parse_args() -> argparse.Namespace:
      archive.add_argument("--architecture", choices=("x86_64",), default="x86_64")
      archive.add_argument("--stage-dir", type=Path, required=True)
      archive.add_argument("--output", type=Path, required=True)
@@ -52988,7 +53000,7 @@ index 2fc51a1e2899daa3def67642d6ed1a79c9ab2558..370dd3fbb5adf9eee5cc39405eb4c993
      return parser.parse_args()
  
  
-@@ -237,8 +268,10 @@ def main() -> None:
+@@ -257,8 +268,10 @@ def main() -> None:
              args.herdr_exe,
              args.output_dir,
          )
@@ -53955,19 +53967,10 @@ index fa55d623d865cfe1f797ab3efad58ae842f91c7c..a9ee8d43c8eeb7f4f732380a6f069f1d
      current.add_argument("--manifest", default="website/preview.json")
      current.set_defaults(func=cmd_current_commit)
 diff --git a/scripts/test_package_windows_conpty.py b/scripts/test_package_windows_conpty.py
-index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..7a9f323734bd548969b6e4034be3cca557c89b31 100644
+index 2962b9e98a8eae5496aacc831b6a45b811d8fdd8..7a9f323734bd548969b6e4034be3cca557c89b31 100644
 --- a/scripts/test_package_windows_conpty.py
 +++ b/scripts/test_package_windows_conpty.py
-@@ -16,6 +16,8 @@ from scripts import package_windows_conpty as package
- class WindowsConptyPackageTests(unittest.TestCase):
-     def test_pinned_metadata_and_notices_are_consistent(self) -> None:
-         metadata = package.load_metadata(package.DEFAULT_METADATA)
-+        self.assertTrue(package.PRODUCT_LICENSE_SOURCE.is_file())
-+        self.assertEqual(package.PRODUCT_LICENSE_PATH.as_posix(), "LICENSE.txt")
-         self.assertEqual(metadata["package"]["id"], "Microsoft.Windows.Console.ConPTY")
-         self.assertEqual(metadata["package"]["version"], "1.24.260710001")
-         self.assertEqual(
-@@ -29,14 +31,8 @@ class WindowsConptyPackageTests(unittest.TestCase):
+@@ -31,14 +31,8 @@ class WindowsConptyPackageTests(unittest.TestCase):
          loader = (
              package.PROJECT_ROOT / "vendor/portable-pty/src/win/psuedocon.rs"
          ).read_text(encoding="utf-8")
@@ -53982,7 +53985,7 @@ index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..7a9f323734bd548969b6e4034be3cca5
          for notice in metadata["notices"]:
              source = package.PROJECT_ROOT / notice["source"]
              self.assertEqual(package.sha256_file(source), notice["sha256"])
-@@ -52,6 +48,20 @@ class WindowsConptyPackageTests(unittest.TestCase):
+@@ -54,6 +48,20 @@ class WindowsConptyPackageTests(unittest.TestCase):
          self.assertIn('conpty\\conpty.dll', wrapper)
          self.assertIn('"*Microsoft Corporation*"', wrapper)
  
@@ -54003,18 +54006,7 @@ index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..7a9f323734bd548969b6e4034be3cca5
      def test_package_download_has_a_finite_timeout(self) -> None:
          payload = b"package"
          with tempfile.TemporaryDirectory() as temporary:
-@@ -115,6 +125,10 @@ class WindowsConptyPackageTests(unittest.TestCase):
-             stage = root / "stage"
-             package.stage_bundle(metadata_path, "x86_64", nupkg, herdr, stage)
-             package.validate_stage(metadata_path, "x86_64", stage)
-+            self.assertEqual(
-+                (stage / "LICENSE.txt").read_bytes(),
-+                package.PRODUCT_LICENSE_SOURCE.read_bytes(),
-+            )
- 
-             output = root / "herdr.zip"
-             package.archive_bundle(metadata_path, "x86_64", stage, output)
-@@ -125,6 +139,16 @@ class WindowsConptyPackageTests(unittest.TestCase):
+@@ -131,6 +139,16 @@ class WindowsConptyPackageTests(unittest.TestCase):
                          package.load_metadata(metadata_path), "x86_64"
                      ),
                  )
@@ -54032,7 +54024,7 @@ index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..7a9f323734bd548969b6e4034be3cca5
              (stage / "conpty" / "conpty.dll").write_bytes(b"tampered")
              with self.assertRaisesRegex(ValueError, "staged file hash mismatch"):
 diff --git a/scripts/test_preview.py b/scripts/test_preview.py
-index c280f572d346fe3f6776dac9416562f8c88d490f..e30f075ddaa82add1ee564cbc0a57a65b80c7741 100644
+index 137a13f0b5906cac5b74ea1bf56d62342e24c82f..df350456e2b033a34a86b93df77efc3aa2c25679 100644
 --- a/scripts/test_preview.py
 +++ b/scripts/test_preview.py
 @@ -3,12 +3,18 @@ import os
@@ -54375,14 +54367,6 @@ index c280f572d346fe3f6776dac9416562f8c88d490f..e30f075ddaa82add1ee564cbc0a57a65
 +            "https://github.com/herdrdev/herdr/commit/44b3adb125524ea9a55739eee3776f922f2115ad",
              output,
          )
- 
-@@ -211,7 +460,6 @@ file: ../../../public/assets/logo.svg
-         self.assertIn("[Install](/docs/0.7.4/install/)", output)
-         self.assertIn("file: ../../../../../public/assets/logo.svg", output)
-         self.assertIn("from '../../../../components/ConfigReference.astro'", output)
--        self.assertIn("blob/v0.7.4/docs/next/website/src/content/docs/index.mdx", output)
-         self.assertIn("blob/v0.7.4/SKILL.md", output)
- 
  
 diff --git a/scripts/test_vendor_libghostty_vt.py b/scripts/test_vendor_libghostty_vt.py
 index ad5c8d5e2f46793d46f75cbd84710b58a3447fdc..2986af8f9609e27886eb2be61f121c44710a6049 100644
@@ -55033,10 +55017,10 @@ index 0000000000000000000000000000000000000000..8b18f5b396b4f1cfd9395de27d1492d5
 +if __name__ == "__main__":
 +    unittest.main()
 diff --git a/scripts/windows_install_conpty_package_test.ps1 b/scripts/windows_install_conpty_package_test.ps1
-index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c2729de67 100644
+index f4c4fc6078de94f84a598a8271d1eb8b1708b5e6..331dec1946e78838302c93b9325a825c2729de67 100644
 --- a/scripts/windows_install_conpty_package_test.ps1
 +++ b/scripts/windows_install_conpty_package_test.ps1
-@@ -6,204 +6,21 @@ param(
+@@ -6,461 +6,21 @@ param(
  Set-StrictMode -Version Latest
  $ErrorActionPreference = "Stop"
  
@@ -55072,8 +55056,16 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -$testEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testRegistryPath)
 -if ($null -eq $testEnvironmentKey) {
 -    throw "unable to create temporary installer test registry key"
--}
--try {
++$archive = (Resolve-Path -LiteralPath $ArchivePath).Path
++$tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
++    [System.IO.Path]::GetTempPath()
++} else {
++    $env:RUNNER_TEMP
+ }
++$root = Join-Path $tempRoot ("herdr-conpty-archive-test-" + [Guid]::NewGuid().ToString("N"))
++$stage = Join-Path $root "stage"
++New-Item -ItemType Directory -Path $root | Out-Null
+ try {
 -    [Environment]::SetEnvironmentVariable($pathTestVariable, "C:\expanded", "Process")
 -    $testEnvironmentKey.SetValue(
 -        "Path",
@@ -55096,14 +55088,18 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -    }
 -    if ($testEnvironmentKey.GetValueKind("Path") -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) {
 -        throw "installer changed the PATH registry value kind"
--    }
--} finally {
++    Expand-Archive -LiteralPath $archive -DestinationPath $stage
++    & python "$PSScriptRoot\package_windows_conpty.py" "validate" "--stage-dir" $stage
++    if ($LASTEXITCODE -ne 0) {
++        throw "ConPTY archive validation failed with exit code $LASTEXITCODE"
+     }
+ } finally {
 -    $testEnvironmentKey.Dispose()
 -    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testRegistryPath, $false)
 -    [Environment]::SetEnvironmentVariable($pathTestVariable, $oldPathTestVariable, "Process")
 -}
 -
- $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
+-$archive = (Resolve-Path -LiteralPath $ArchivePath).Path
 -$root = Join-Path $env:RUNNER_TEMP ("herdr-installer-test-" + [Guid]::NewGuid().ToString("N"))
 -$webRoot = Join-Path $root "web"
 -$herdrHome = Join-Path $root "home"
@@ -55116,7 +55112,7 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -$listener.Start()
 -$port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
 -$listener.Stop()
--$manifest = @{
+-$previewManifest = @{
 -    channel = "preview"
 -    base_version = "0.0.0"
 -    build_id = "installer-test"
@@ -55128,26 +55124,35 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -        }
 -    }
 -} | ConvertTo-Json -Depth 5
--$manifestPath = Join-Path $webRoot "preview.json"
--$manifest | Out-File -LiteralPath $manifestPath -Encoding utf8
+-$legacyStableManifest = @{
+-    version = "0.0.0"
+-    assets = @{}
+-} | ConvertTo-Json -Depth 5
+-$stableManifest = @{
+-    version = "0.0.1"
+-    assets = @{
+-        "windows-x86_64" = "http://127.0.0.1:$port/herdr-windows-x86_64.zip"
+-    }
+-    sha256 = @{
+-        "windows-x86_64" = $hash
+-    }
+-} | ConvertTo-Json -Depth 5
+-$previewManifestPath = Join-Path $webRoot "preview.json"
+-$stableManifestPath = Join-Path $webRoot "latest.json"
+-$previewManifest | Out-File -LiteralPath $previewManifestPath -Encoding utf8
+-$legacyStableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
 -
 -$server = $null
 -$oldHerdrHome = $env:HERDR_HOME
-+$tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
-+    [System.IO.Path]::GetTempPath()
-+} else {
-+    $env:RUNNER_TEMP
-+}
-+$root = Join-Path $tempRoot ("herdr-conpty-archive-test-" + [Guid]::NewGuid().ToString("N"))
-+$stage = Join-Path $root "stage"
-+New-Item -ItemType Directory -Path $root | Out-Null
- try {
+-$oldProcessPath = $env:Path
+-try {
 -    $server = Start-Process python -ArgumentList @("-m", "http.server", "$port", "--bind", "127.0.0.1", "--directory", $webRoot) -PassThru -WindowStyle Hidden
 -    $env:HERDR_HOME = Join-Path $root "unused\..\home"
--    $manifestUrl = "http://127.0.0.1:$port/preview.json"
+-    $previewManifestUrl = "http://127.0.0.1:$port/preview.json"
+-    $stableManifestUrl = "http://127.0.0.1:$port/latest.json"
 -    for ($attempt = 0; $attempt -lt 20; $attempt++) {
 -        try {
--            Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing | Out-Null
+-            Invoke-WebRequest -Uri $stableManifestUrl -UseBasicParsing | Out-Null
 -            break
 -        } catch {
 -            if ($attempt -eq 19) { throw }
@@ -55155,10 +55160,79 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -        }
 -    }
 -
--    & "$PSScriptRoot\..\website\install.ps1" `
--        -ManifestUrl $manifestUrl `
+-    $freshStableHome = Join-Path $root "fresh-stable-home"
+-    $freshStableBin = Join-Path $root "fresh-stable-bin"
+-    $stableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
+-    $env:HERDR_HOME = $freshStableHome
+-    $env:Path = $oldProcessPath
+-    & $installerPath `
+-        -ManifestUrl $stableManifestUrl `
+-        -InstallDir $freshStableBin
+-    $freshStableRelease = Get-ChildItem -LiteralPath (Join-Path $freshStableHome "packages\standalone\releases") -Directory |
+-        Where-Object { $_.Name.StartsWith("0.0.1-") } |
+-        Select-Object -First 1
+-    if ($null -eq $freshStableRelease) {
+-        throw "fresh installer did not default to the stable Windows package"
+-    }
+-
+-    $legacyStableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
+-    $env:HERDR_HOME = Join-Path $root "unused\..\home"
+-    $env:Path = $oldProcessPath
+-    & $installerPath `
+-        -ManifestUrl $stableManifestUrl `
 -        -InstallDir $installDir `
 -        -ExpectedBuildId "installer-test"
+-
+-    # Keep the existing positional web-installer contract, including Retain in slot five.
+-    & $installerPath "preview" $previewManifestUrl $installDir "installer-test" 3
+-
+-    $localInstallDir = Join-Path $root "local-bin"
+-    $env:HERDR_HOME = Join-Path $root "local-home"
+-    $partialLocalModeRejected = $false
+-    try {
+-        & $installerPath `
+-            -InstallDir $localInstallDir `
+-            -LocalPackagePath $archive
+-    } catch {
+-        if ($_.Exception.Message -notlike "Local package mode requires*") {
+-            throw
+-        }
+-        $partialLocalModeRejected = $true
+-    }
+-    if (-not $partialLocalModeRejected) {
+-        throw "installer accepted partial local-package inputs"
+-    }
+-
+-    $badLocalChecksumRejected = $false
+-    try {
+-        & $installerPath `
+-            -ManifestUrl "$previewManifestUrl/unused" `
+-            -InstallDir $localInstallDir `
+-            -LocalPackagePath $archive `
+-            -LocalPackageFormat "zip" `
+-            -LocalPackageIdentity "0.0.0-preview.local-package" `
+-            -LocalPackageSha256 ("0" * 64)
+-    } catch {
+-        if ($_.Exception.Message -notlike "Downloaded Herdr checksum did not match.*") {
+-            throw
+-        }
+-        $badLocalChecksumRejected = $true
+-    }
+-    if (-not $badLocalChecksumRejected) {
+-        throw "installer accepted a local package with the wrong checksum"
+-    }
+-
+-    & $installerPath `
+-        -ManifestUrl "$previewManifestUrl/unused" `
+-        -InstallDir $localInstallDir `
+-        -LocalPackagePath $archive `
+-        -LocalPackageFormat "zip" `
+-        -LocalPackageIdentity "0.0.0-preview.local-package" `
+-        -LocalPackageSha256 $hash
+-    if (-not (Test-Path -LiteralPath (Join-Path $localInstallDir "herdr.exe") -PathType Leaf)) {
+-        throw "installer did not activate the verified local package"
+-    }
+-    $env:HERDR_HOME = $herdrHome
 -
 -    $required = @(
 -        "herdr.exe",
@@ -55175,7 +55249,8 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -        }
 -    }
 -
--    $releaseDir = Get-ChildItem -LiteralPath (Join-Path $herdrHome "packages\standalone\releases") -Directory |
+-    $releasesDir = Join-Path $herdrHome "packages\standalone\releases"
+-    $releaseDir = Get-ChildItem -LiteralPath $releasesDir -Directory |
 -        Where-Object { -not $_.Name.StartsWith(".staging.") } |
 -        Select-Object -First 1
 -    if ($null -eq $releaseDir) {
@@ -55183,13 +55258,14 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -    }
 -    Remove-Item -LiteralPath (Join-Path $releaseDir.FullName "conpty\conpty.dll") -Force
 -
--    $badManifest = $manifest | ConvertFrom-Json
+-    $badManifest = $previewManifest | ConvertFrom-Json
 -    $badManifest.assets."windows-x86_64".url = "http://127.0.0.1:$port/missing.zip"
--    $badManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $manifestPath -Encoding utf8
+-    $badManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $previewManifestPath -Encoding utf8
 -    $downloadFailed = $false
 -    try {
 -        & "$PSScriptRoot\..\website\install.ps1" `
--            -ManifestUrl $manifestUrl `
+-            -Channel preview `
+-            -ManifestUrl $previewManifestUrl `
 -            -InstallDir $installDir `
 -            -ExpectedBuildId "installer-test"
 -    } catch {
@@ -55205,9 +55281,117 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -        throw "failed repair removed the existing release"
 -    }
 -
--    $manifest | Out-File -LiteralPath $manifestPath -Encoding utf8
+-    $previewManifest | Out-File -LiteralPath $previewManifestPath -Encoding utf8
+-    $stagedConpty = Join-Path $releasesDir ".staging.$($releaseDir.Name).$PID\conpty\conpty.dll"
+-
+-    $transientLockState = @{ Handle = $null; Acquired = $false; Released = $false }
+-    $transientLockTimer = New-Object System.Timers.Timer
+-    $transientLockTimer.Interval = 300
+-    $transientLockTimer.AutoReset = $false
+-    $transientLockSource = "HerdrTransientInstallerLock-$PID"
+-    $transientLockRelease = Register-ObjectEvent `
+-        -InputObject $transientLockTimer `
+-        -EventName Elapsed `
+-        -SourceIdentifier $transientLockSource `
+-        -MessageData $transientLockState `
+-        -Action {
+-            $state = $event.MessageData
+-            if ($null -ne $state.Handle) {
+-                $state.Handle.Dispose()
+-                $state.Handle = $null
+-            }
+-            $state.Released = $true
+-        }
+-    $lockStagedFileTransiently = {
+-        if (-not $transientLockState.Acquired) {
+-            $transientLockState.Handle = [System.IO.File]::Open(
+-                $stagedConpty,
+-                [System.IO.FileMode]::Open,
+-                [System.IO.FileAccess]::Read,
+-                [System.IO.FileShare]::Read
+-            )
+-            $transientLockState.Acquired = $true
+-            $transientLockTimer.Start()
+-        }
+-    }.GetNewClosure()
+-    $transientLockBreakpoint = Set-PSBreakpoint -Script $installerPath -Variable "backupDir" -Mode Write -Action $lockStagedFileTransiently
+-    try {
+-        & $installerPath `
+-            -Channel preview `
+-            -ManifestUrl $previewManifestUrl `
+-            -InstallDir $installDir `
+-            -ExpectedBuildId "installer-test"
+-        if (-not $transientLockState.Acquired) {
+-            throw "installer did not acquire the transient staged-file lock"
+-        }
+-        if (-not $transientLockState.Released) {
+-            throw "installer activated the release before the transient lock was released"
+-        }
+-        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "conpty\conpty.dll") -PathType Leaf)) {
+-            throw "installer did not repair the release after the transient lock cleared"
+-        }
+-    } finally {
+-        Remove-PSBreakpoint -Breakpoint $transientLockBreakpoint
+-        $transientLockTimer.Stop()
+-        Unregister-Event -SourceIdentifier $transientLockSource -ErrorAction SilentlyContinue
+-        Remove-Job -Id $transientLockRelease.Id -Force -ErrorAction SilentlyContinue
+-        if ($null -ne $transientLockState.Handle) {
+-            $transientLockState.Handle.Dispose()
+-        }
+-        $transientLockTimer.Dispose()
+-    }
+-
+-    Remove-Item -LiteralPath (Join-Path $releaseDir.FullName "conpty\conpty.dll") -Force
+-    $lockState = @{ Handle = $null }
+-    $lockStagedFile = {
+-        if ($null -eq $lockState.Handle) {
+-            $lockState.Handle = [System.IO.File]::Open(
+-                $stagedConpty,
+-                [System.IO.FileMode]::Open,
+-                [System.IO.FileAccess]::Read,
+-                [System.IO.FileShare]::Read
+-            )
+-        }
+-    }.GetNewClosure()
+-    $swapBreakpoint = Set-PSBreakpoint -Script $installerPath -Variable "backupDir" -Mode Write -Action $lockStagedFile
+-    try {
+-        $swapFailed = $false
+-        try {
+-            & $installerPath `
+-                -Channel preview `
+-                -ManifestUrl $previewManifestUrl `
+-                -InstallDir $installDir `
+-                -ExpectedBuildId "installer-test"
+-        } catch {
+-            $swapFailed = $true
+-        }
+-        if ($null -eq $lockState.Handle) {
+-            throw "installer did not acquire the staged file handle before the swap"
+-        }
+-        if (-not $swapFailed) {
+-            throw "installer unexpectedly activated a release with a locked staged file"
+-        }
+-        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "herdr.exe") -PathType Leaf)) {
+-            throw "failed activation did not restore the prior release"
+-        }
+-        if (@(Get-ChildItem -LiteralPath $releasesDir -Force -Directory -Filter ".backup.$($releaseDir.Name).*").Count -ne 0) {
+-            throw "failed activation stranded a release backup"
+-        }
+-        foreach ($junction in @($installDir, (Join-Path $herdrHome "packages\standalone\current"))) {
+-            if (-not (Test-Path -LiteralPath (Join-Path $junction "herdr.exe") -PathType Leaf)) {
+-                throw "failed activation left an invalid installer junction at $junction"
+-            }
+-        }
+-    } finally {
+-        Remove-PSBreakpoint -Breakpoint $swapBreakpoint
+-        if ($null -ne $lockState.Handle) {
+-            $lockState.Handle.Dispose()
+-        }
+-    }
+-
 -    & "$PSScriptRoot\..\website\install.ps1" `
--        -ManifestUrl $manifestUrl `
+-        -Channel preview `
+-        -ManifestUrl $previewManifestUrl `
 -        -InstallDir $installDir `
 -        -ExpectedBuildId "installer-test"
 -    if (-not (Test-Path -LiteralPath (Join-Path $installDir "conpty\conpty.dll") -PathType Leaf)) {
@@ -55219,7 +55403,8 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -    Move-Item -LiteralPath $x64HostDir -Destination $junctionTarget
 -    New-Item -ItemType Junction -Path $x64HostDir -Target $junctionTarget | Out-Null
 -    & "$PSScriptRoot\..\website\install.ps1" `
--        -ManifestUrl $manifestUrl `
+-        -Channel preview `
+-        -ManifestUrl $previewManifestUrl `
 -        -InstallDir $installDir `
 -        -ExpectedBuildId "installer-test"
 -    $repairedHostDir = Get-Item -LiteralPath (Join-Path $installDir "conpty\x64") -Force
@@ -55230,7 +55415,8 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -    $rejected = $false
 -    try {
 -        & "$PSScriptRoot\..\website\install.ps1" `
--            -ManifestUrl $manifestUrl `
+-            -Channel preview `
+-            -ManifestUrl $previewManifestUrl `
 -            -InstallDir $installDir `
 -            -ExpectedBuildId "different-build"
 -    } catch {
@@ -55241,13 +55427,68 @@ index 232e61ac4dbc07220d5baa446e7d2390991d976e..331dec1946e78838302c93b9325a825c
 -    }
 -    if (-not $rejected) {
 -        throw "installer accepted a manifest that did not match the updater-selected build"
-+    Expand-Archive -LiteralPath $archive -DestinationPath $stage
-+    & python "$PSScriptRoot\package_windows_conpty.py" "validate" "--stage-dir" $stage
-+    if ($LASTEXITCODE -ne 0) {
-+        throw "ConPTY archive validation failed with exit code $LASTEXITCODE"
-     }
- } finally {
+-    }
+-
+-    $stableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
+-    & "$PSScriptRoot\..\website\install.ps1" `
+-        -Channel stable `
+-        -ManifestUrl $stableManifestUrl `
+-        -InstallDir $installDir
+-    $stableReleaseDir = Get-ChildItem -LiteralPath (Join-Path $herdrHome "packages\standalone\releases") -Directory |
+-        Where-Object { $_.Name.StartsWith("0.0.1-") } |
+-        Select-Object -First 1
+-    if ($null -eq $stableReleaseDir) {
+-        throw "installer did not install the stable Windows package"
+-    }
+-    foreach ($relative in $required) {
+-        if (-not (Test-Path -LiteralPath (Join-Path $installDir $relative) -PathType Leaf)) {
+-            throw "stable installer did not activate required file $relative"
+-        }
+-    }
+-
+-    $customPreviewManifestPath = Join-Path $webRoot "candidate.json"
+-    $customPreviewManifest = $previewManifest | ConvertFrom-Json
+-    $customPreviewManifest.PSObject.Properties.Remove("channel")
+-    $customPreviewManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $customPreviewManifestPath -Encoding utf8
+-    $fakeBin = Join-Path $root "fake-existing"
+-    New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
+-    @'
+-@echo off
+-if "%1"=="channel" if "%2"=="show" (
+-  echo preview
+-  exit /b 0
+-)
+-exit /b 1
+-'@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
+-
+-    $preserveHome = Join-Path $root "preserve-home"
+-    $preserveBin = Join-Path $root "preserve-bin"
+-    $env:HERDR_HOME = $preserveHome
+-    $env:Path = "$fakeBin;$oldProcessPath"
+-    & "$PSScriptRoot\..\website\install.ps1" `
+-        -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
+-        -InstallDir $preserveBin `
+-        -ExpectedBuildId "installer-test"
+-    $preservedPreview = Get-ChildItem -LiteralPath (Join-Path $preserveHome "packages\standalone\releases") -Directory |
+-        Where-Object { $_.Name.StartsWith("0.0.0-preview.installer-test-") } |
+-        Select-Object -First 1
+-    if ($null -eq $preservedPreview) {
+-        throw "installer did not preserve the existing preview channel"
+-    }
+-
+-    & "$PSScriptRoot\..\website\install.ps1" `
+-        -Channel stable `
+-        -ManifestUrl $stableManifestUrl `
+-        -InstallDir $preserveBin
+-    $explicitStable = Get-ChildItem -LiteralPath (Join-Path $preserveHome "packages\standalone\releases") -Directory |
+-        Where-Object { $_.Name.StartsWith("0.0.1-") } |
+-        Select-Object -First 1
+-    if ($null -eq $explicitStable) {
+-        throw "explicit stable channel did not override the existing preview channel"
+-    }
+-} finally {
 -    $env:HERDR_HOME = $oldHerdrHome
+-    $env:Path = $oldProcessPath
 -    if ($null -ne $server -and -not $server.HasExited) {
 -        Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
 -    }
@@ -56603,10 +56844,10 @@ index b956fc987b3ade0a310464ca0021d00813216121..79feaa78029d6bd67d5434f3b4ee22a2
                  "HERDR_BIN_PATH".to_string(),
                  current_exe.display().to_string(),
 diff --git a/src/app/input/navigate.rs b/src/app/input/navigate.rs
-index 68941e663f469563797f9bb982e3277e38fe125a..b52f81e94fe35a3a4ce25e2aae2da645845da655 100644
+index 2cb657a727d1878550097ae96209580fd72a488e..22280a658b656c2e7272497d9e12e28db33ecb7b 100644
 --- a/src/app/input/navigate.rs
 +++ b/src/app/input/navigate.rs
-@@ -835,7 +835,7 @@ impl App {
+@@ -883,7 +883,7 @@ impl App {
              crate::api::SOCKET_PATH_ENV_VAR.to_string(),
              crate::api::socket_path().display().to_string(),
          )];
@@ -56822,10 +57063,10 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..4a5ee9894e1cda12e983064d8fd25645
      }
  }
 diff --git a/src/cli.rs b/src/cli.rs
-index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a1b198a2e 100644
+index b432528de1bdbc5fe3e92b6c8ba11e21df72e24b..935e554750ee4df223105b3bbceaedb6b14c1831 100644
 --- a/src/cli.rs
 +++ b/src/cli.rs
-@@ -89,7 +89,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+@@ -112,7 +112,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
          "status" => status::run_status_command(&args[2..])?,
          "completion" | "completions" => completion::run_completion_command(&args[2..])?,
          "config" => run_config_command(&args[2..])?,
@@ -56833,7 +57074,7 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
          "workspace" => workspace::run_workspace_command(&args[2..])?,
          "worktree" => worktree::run_worktree_command(&args[2..])?,
          "tab" => tab::run_tab_command(&args[2..])?,
-@@ -106,141 +105,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+@@ -129,136 +128,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
      Ok(CommandOutcome::Handled(exit_code))
  }
  
@@ -56916,6 +57157,7 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
 -        ChannelSetInstallAction::RunSelfUpdate => {}
 -    }
 -
+-    crate::platform::end_cli_output();
 -    if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
 -        eprintln!("update failed: {err}");
 -        eprintln!("Run `herdr update` to retry.");
@@ -56938,12 +57180,6 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
 -    channel: &str,
 -    install_rejection: Option<&'static str>,
 -) -> Option<&'static str> {
--    if cfg!(windows) && channel == "stable" {
--        return Some(
--            "stable channel is not available on Windows yet; Windows builds are preview-only",
--        );
--    }
--
 -    if channel == "preview" {
 -        return install_rejection;
 -    }
@@ -56975,11 +57211,10 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
  fn run_config_command(args: &[String]) -> std::io::Result<i32> {
      let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
          print_config_help();
-@@ -1006,68 +870,6 @@ fn _print_json<T: Serialize>(value: &T) {
- 
+@@ -1044,47 +913,6 @@ fn _print_json<T: Serialize>(value: &T) {
  #[cfg(test)]
  mod tests {
--    #[test]
+     #[test]
 -    fn parses_channel_set_argument() {
 -        assert_eq!(
 -            super::parse_channel_set_arg(&["preview".to_string()]),
@@ -56997,36 +57232,16 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
 -    }
 -
 -    #[test]
--    fn channel_set_rejects_package_managed_preview_before_config_write() {
+-    fn channel_set_only_applies_package_rejection_to_preview() {
 -        assert_eq!(
 -            super::channel_set_rejection("preview", Some("no preview")),
 -            Some("no preview")
 -        );
 -        assert_eq!(
 -            super::channel_set_rejection("stable", Some("no preview")),
--            if cfg!(windows) {
--                Some(
--                    "stable channel is not available on Windows yet; Windows builds are preview-only",
--                )
--            } else {
--                None
--            }
+-            None
 -        );
 -        assert_eq!(super::channel_set_rejection("preview", None), None);
--    }
--
--    #[test]
--    fn channel_set_rejects_stable_only_on_windows() {
--        assert_eq!(
--            super::channel_set_rejection("stable", None),
--            if cfg!(windows) {
--                Some(
--                    "stable channel is not available on Windows yet; Windows builds are preview-only",
--                )
--            } else {
--                None
--            }
--        );
 -    }
 -
 -    #[test]
@@ -57045,7 +57260,7 @@ index 4d3c67c0792289ab67e6fd71d8fec226864c25fa..069428088ab529e22c92b9251ed4281a
      fn parse_env_assignment_accepts_empty_values() {
          assert_eq!(
 diff --git a/src/cli/spec.rs b/src/cli/spec.rs
-index 95657dd6aa932a3c025c07efcaebf1209d786b35..a4c08370b5d972fb130570ef4528773057321bc7 100644
+index c85d6c38322e17de2afe8d7fb97e9a5d1076da62..007c326eb5b7cc32981db922caeb98034209d6da 100644
 --- a/src/cli/spec.rs
 +++ b/src/cli/spec.rs
 @@ -30,7 +30,6 @@ pub(super) fn command() -> Command {
@@ -57056,7 +57271,7 @@ index 95657dd6aa932a3c025c07efcaebf1209d786b35..a4c08370b5d972fb130570ef45287730
          .subcommand(server_command())
          .subcommand(api_command())
          .subcommand(workspace_command())
-@@ -141,20 +140,6 @@ fn config_command() -> Command {
+@@ -151,20 +150,6 @@ fn config_command() -> Command {
          .subcommand(Command::new("reset-keys").about("Reset custom keybindings"))
  }
  
@@ -57078,7 +57293,7 @@ index 95657dd6aa932a3c025c07efcaebf1209d786b35..a4c08370b5d972fb130570ef45287730
      Command::new("server")
          .about("Run or control the headless server")
 diff --git a/src/cli/status.rs b/src/cli/status.rs
-index ea3efeeeb2dcf7382a6bd06519b23534588ceafb..961928e732d042dfff12b85f3e4f54fe2627c161 100644
+index 4bb9295f9aa924096cfd93eaed38f2e0c635397c..b40e198b36d1628c4b281effbc783acb36225cdc 100644
 --- a/src/cli/status.rs
 +++ b/src/cli/status.rs
 @@ -94,10 +94,8 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
@@ -57138,7 +57353,7 @@ index ea3efeeeb2dcf7382a6bd06519b23534588ceafb..961928e732d042dfff12b85f3e4f54fe
  fn print_status_help() {
      eprintln!("herdr status commands:");
      eprintln!("  herdr status [--json]         show local client and running server status");
-@@ -356,4 +358,19 @@ mod tests {
+@@ -350,4 +352,19 @@ mod tests {
  
          assert_eq!(value["binary"], binary);
      }
@@ -57159,20 +57374,20 @@ index ea3efeeeb2dcf7382a6bd06519b23534588ceafb..961928e732d042dfff12b85f3e4f54fe
 +    }
  }
 diff --git a/src/config.rs b/src/config.rs
-index f3fc170a65ead5a1c0424121373afab55d17d7fd..96fd8d1325bf1cdd7061035a3e505e08aa799d9c 100644
+index 0595ae2f7675c2cb963ec90a37c34c780a01b99a..cf62e8ffcf31698205dae8e54ba1490d1668fba2 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -22,7 +22,7 @@ pub use self::{
-         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
+@@ -25,7 +25,7 @@ pub use self::{
          ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, ShellModeConfig,
-         SidebarCollapsedModeConfig, TabBarPositionConfig, ToastClipboardPosition, ToastConfig,
--        ToastDelivery, ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
-+        ToastDelivery, ToastHerdrPosition, MAX_TOAST_DELAY_SECONDS,
+         SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
+         ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+-        UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
++        MAX_TOAST_DELAY_SECONDS,
      },
      sidebar::{
          AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
 diff --git a/src/config/model.rs b/src/config/model.rs
-index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373c54aef97 100644
+index c10cd7330722a14cac0b96a82771f655e111f87b..e06fd6a35abcaccdd21883b19e304e8229cb205d 100644
 --- a/src/config/model.rs
 +++ b/src/config/model.rs
 @@ -11,27 +11,9 @@ use super::{
@@ -57203,7 +57418,7 @@ index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373
      pub version_check: bool,
      pub manifest_check: bool,
  }
-@@ -39,21 +21,12 @@ pub struct UpdateConfig {
+@@ -39,25 +21,12 @@ pub struct UpdateConfig {
  impl Default for UpdateConfig {
      fn default() -> Self {
          Self {
@@ -57215,7 +57430,11 @@ index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373
  }
  
 -fn default_update_channel() -> UpdateChannelConfig {
--    if cfg!(windows) {
+-    default_update_channel_for_build(cfg!(windows), crate::build_info::is_preview())
+-}
+-
+-fn default_update_channel_for_build(is_windows: bool, is_preview: bool) -> UpdateChannelConfig {
+-    if is_windows && is_preview {
 -        UpdateChannelConfig::Preview
 -    } else {
 -        UpdateChannelConfig::Stable
@@ -57225,7 +57444,7 @@ index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373
  #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
  #[serde(rename_all = "lowercase")]
  pub enum ToastDelivery {
-@@ -1129,41 +1102,19 @@ mod tests {
+@@ -1238,53 +1207,19 @@ mod tests {
      #[test]
      fn update_config_defaults_and_parses() {
          let default_config = Config::default();
@@ -57246,21 +57465,33 @@ index e56ac087226af0bb995b6678980eccf828156d92..369c326c3859afbd18fd342ce4fa4373
          assert!(!config.update.manifest_check);
      }
  
--    #[cfg(windows)]
 -    #[test]
--    fn windows_update_config_defaults_to_preview() {
+-    fn update_channel_default_follows_windows_build_identity() {
+-        assert_eq!(
+-            default_update_channel_for_build(true, true),
+-            UpdateChannelConfig::Preview
+-        );
+-        assert_eq!(
+-            default_update_channel_for_build(true, false),
+-            UpdateChannelConfig::Stable
+-        );
+-        assert_eq!(
+-            default_update_channel_for_build(false, true),
+-            UpdateChannelConfig::Stable
+-        );
+-    }
+-
+-    #[test]
+-    fn missing_update_channel_uses_build_default() {
 -        let empty: Config = toml::from_str("").unwrap();
 -        let without_update_channel: Config =
 -            toml::from_str("[update]\nversion_check = false").unwrap();
 -
--        assert_eq!(
--            Config::default().update.channel,
--            UpdateChannelConfig::Preview
--        );
--        assert_eq!(empty.update.channel, UpdateChannelConfig::Preview);
+-        assert_eq!(Config::default().update.channel, default_update_channel());
+-        assert_eq!(empty.update.channel, default_update_channel());
 -        assert_eq!(
 -            without_update_channel.update.channel,
--            UpdateChannelConfig::Preview
+-            default_update_channel()
 -        );
 -    }
 -
@@ -57316,7 +57547,7 @@ index 0000000000000000000000000000000000000000..320cf6d97fa808c5aa2c429d75987dac
 +    }
 +}
 diff --git a/src/main.rs b/src/main.rs
-index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295c0a82648 100644
+index f697d9b3f454599909136c85fac058ec9486184d..791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -63,6 +63,7 @@ mod cli;
@@ -57335,13 +57566,13 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
  mod metadata_tokens;
  mod noninteractive_process;
  mod pane;
-@@ -147,12 +149,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+@@ -152,12 +154,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
  # new_cwd = "follow"
  
  [update]
 -# Update channel used by background version checks and `herdr update`.
--# Defaults to "stable" on Linux/macOS and "preview" on Windows.
--# Set explicitly to choose stable releases or opt-in preview builds.
+-# Stable builds default to "stable". Windows preview builds default to "preview"
+-# so existing preview installs stay there until explicitly switched.
 -# channel = "stable"
 +# The herdr-win update source is fixed by src/distribution.rs.
 +# User configuration cannot redirect the updater away from the fork release feed.
@@ -57351,7 +57582,7 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
  # version_check = true
  
  # Check herdr.dev for remote agent-detection manifest updates in the background.
-@@ -476,7 +476,21 @@ where
+@@ -516,7 +516,21 @@ where
          .collect()
  }
  
@@ -57373,10 +57604,10 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
      let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
          Ok(args) => args,
          Err(err) => {
-@@ -485,6 +499,21 @@ fn main() -> io::Result<()> {
-             std::process::exit(2);
+@@ -526,6 +540,21 @@ fn main() -> io::Result<()> {
          }
      };
+     let raw_args = platform::prepare_interactive_server_bootstrap(raw_args)?;
 +    #[cfg(windows)]
 +    match installer_stop_sessions_requested(&raw_args) {
 +        Ok(true) => match session::stop_all_sessions_for_uninstall() {
@@ -57395,7 +57626,7 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
      let args = match session::configure_from_args(&raw_args) {
          Ok(args) => args,
          Err(err) => {
-@@ -597,14 +626,12 @@ fn main() -> io::Result<()> {
+@@ -639,14 +668,12 @@ fn main() -> io::Result<()> {
          println!("       herdr session attach <name>");
          println!("       herdr completion zsh");
          println!("       herdr update [--handoff]");
@@ -57410,7 +57641,7 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
          println!("       herdr workspace <subcommand> ...");
          println!("       herdr worktree <subcommand> ...");
          println!("       herdr tab <subcommand> ...");
-@@ -631,10 +658,6 @@ fn main() -> io::Result<()> {
+@@ -673,10 +700,6 @@ fn main() -> io::Result<()> {
                  "herdr server stop",
                  "Stop the running server via the API socket",
              ),
@@ -57421,7 +57652,7 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
              (
                  "herdr server reload-config",
                  "Reload config.toml in the running server",
-@@ -643,10 +666,6 @@ fn main() -> io::Result<()> {
+@@ -685,10 +708,6 @@ fn main() -> io::Result<()> {
                  "herdr config reset-keys",
                  "Back up config.toml and remove custom keybindings",
              ),
@@ -57432,16 +57663,16 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
              (
                  "herdr api <subcommand>",
                  "Inspect socket API metadata and live runtime state",
-@@ -711,7 +730,7 @@ fn main() -> io::Result<()> {
-     }
+@@ -755,7 +774,7 @@ fn main() -> io::Result<()> {
  
      if args.iter().any(|a| a == "--version" || a == "-V") {
+         platform::begin_cli_output();
 -        println!("herdr {}", crate::build_info::version());
 +        println!("{}", crate::build_info::cli_version());
          return Ok(());
      }
  
-@@ -757,7 +776,6 @@ fn main() -> io::Result<()> {
+@@ -803,7 +822,6 @@ fn main() -> io::Result<()> {
                  "update",
                  "status",
                  "config",
@@ -57449,7 +57680,7 @@ index a64ba88e5562f0a27b2fa2a6c1548f55002b170b..9009d9dbd2177e1117cce5b0c0f57295
                  "workspace",
                  "worktree",
                  "pane",
-@@ -985,4 +1003,25 @@ mod tests {
+@@ -1031,4 +1049,25 @@ mod tests {
              "argument 2 is not valid UTF-8"
          );
      }
@@ -57804,10 +58035,10 @@ index 0000000000000000000000000000000000000000..9aff5705992f659ca47a5348891ed224
 +    }
 +}
 diff --git a/src/platform/mod.rs b/src/platform/mod.rs
-index 23520e3a55dd6f33acfa342dcfdafe0db57e7c1c..639c9a71e2c15ba9702b4878a43909610d3d58b1 100644
+index 4d21190dd4dada7550575d562ec7f628d5f271bc..d125f74a52480146b691adf61d1e78cc90625e00 100644
 --- a/src/platform/mod.rs
 +++ b/src/platform/mod.rs
-@@ -46,6 +46,31 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command)
+@@ -51,6 +51,31 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command)
      configure_background_command_platform(command);
  }
  
@@ -57837,48 +58068,47 @@ index 23520e3a55dd6f33acfa342dcfdafe0db57e7c1c..639c9a71e2c15ba9702b4878a4390961
 +}
 +
  #[cfg(not(windows))]
- fn configure_background_command_platform(_command: &mut std::process::Command) {}
+ pub(crate) fn prepare_interactive_server_bootstrap(
+     args: Vec<String>,
+@@ -206,14 +231,11 @@ pub(crate) struct RemoteSshConfigPaths {
+ #[cfg(unix)]
+ mod unix_common;
+ #[cfg(unix)]
+-pub(crate) use unix_common::{begin_cli_output, end_cli_output};
++pub(crate) use unix_common::begin_cli_output;
  
+ #[cfg(not(unix))]
+ pub(crate) fn begin_cli_output() {}
+ 
+-#[cfg(not(unix))]
+-pub(crate) fn end_cli_output() {}
+-
+ #[cfg(target_os = "linux")]
+ mod linux;
+ #[cfg(target_os = "linux")]
+diff --git a/src/platform/unix_common.rs b/src/platform/unix_common.rs
+index b997049f9e14df62a0e90c490c081b4532b7a14f..676eec13c5af3017c14acd677e9239bb70c5f6f5 100644
+--- a/src/platform/unix_common.rs
++++ b/src/platform/unix_common.rs
+@@ -15,10 +15,6 @@ pub(crate) fn begin_cli_output() {
+     set_sigpipe_disposition(libc::SIG_DFL);
+ }
+ 
+-pub(crate) fn end_cli_output() {
+-    set_sigpipe_disposition(libc::SIG_IGN);
+-}
+-
+ pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
+     super::RemoteSshConfigPaths {
+         user_config: std::env::var_os("HOME")
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 83f340b6468f894978b5a67bef65558dd7e2a01e..8f403fed995368ba43aac5baff6c4b2dfcd4225c 100644
+index c096abd081e8feafd3588b5e7cbd0116a6651d49..96e4c16ced61d57e4504fb0d35c1d9bd30282e56 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
-@@ -4,7 +4,8 @@ use std::{
-     ffi::{c_void, OsStr},
-     mem::{size_of, MaybeUninit},
-     path::PathBuf,
--    ptr::{copy_nonoverlapping, null_mut},
-+    process::{Child, ExitStatus},
-+    ptr::{copy_nonoverlapping, null, null_mut},
-     sync::{
-         atomic::{AtomicU64, Ordering as AtomicOrdering},
-         Arc, LazyLock, Mutex, OnceLock,
-@@ -17,7 +18,7 @@ use windows_sys::{
-     Win32::{
-         Foundation::{
-             CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
--            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
-+            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_OBJECT_0, WAIT_TIMEOUT,
-         },
-         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
-         System::{
-@@ -45,9 +46,9 @@ use windows_sys::{
-             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
-             Threading::{
-                 GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
--                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
--                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
--                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-+                QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
-+                CREATE_NO_WINDOW, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-+                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-             },
-         },
-         UI::{
-@@ -73,6 +74,14 @@ use windows_sys::{
+@@ -85,6 +85,15 @@ use windows_sys::{
+ 
  use super::{ClipboardImage, ForegroundJob, Signal};
  
- mod clipboard_image;
 +// This shared boundary also contains the dedicated launcher's pointer and
 +// coordination operations, which are intentionally unreachable in `herdr.exe`.
 +#[allow(dead_code)]
@@ -57887,122 +58117,26 @@ index 83f340b6468f894978b5a67bef65558dd7e2a01e..8f403fed995368ba43aac5baff6c4b2d
 +    adopt_managed_runtime_lease_platform, managed_install_command_executable_platform,
 +    ManagedRuntimeLease,
 +};
- 
++
  const STILL_ACTIVE: u32 = 259;
  const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
-@@ -1256,6 +1265,108 @@ pub fn process_exists(pid: u32) -> bool {
-     ok && exit_code == STILL_ACTIVE
- }
- 
-+pub(crate) fn wait_child_bounded(
-+    child: &mut Child,
-+    timeout: Duration,
-+) -> std::io::Result<Option<ExitStatus>> {
-+    use std::os::windows::io::AsRawHandle;
-+
-+    let timeout_millis = u32::try_from(timeout.as_millis()).map_err(|_| {
-+        std::io::Error::new(
-+            std::io::ErrorKind::InvalidInput,
-+            "Windows child wait timeout exceeds the Win32 limit",
-+        )
-+    })?;
-+    // SAFETY: std::process::Child owns a valid process handle until it is
-+    // waited or dropped. WaitForSingleObject does not take ownership.
-+    let result = unsafe { WaitForSingleObject(child.as_raw_handle() as HANDLE, timeout_millis) };
-+    match result {
-+        WAIT_OBJECT_0 => child
-+            .try_wait()?
-+            .ok_or_else(|| {
-+                std::io::Error::other("signaled Windows child did not report an exit status")
-+            })
-+            .map(Some),
-+        WAIT_TIMEOUT => Ok(None),
-+        _ => Err(std::io::Error::last_os_error()),
-+    }
-+}
-+
-+pub(crate) struct ChildProcessJob {
-+    handle: HANDLE,
-+}
-+
-+impl ChildProcessJob {
-+    pub(crate) fn new_kill_on_close() -> std::io::Result<Self> {
-+        // SAFETY: null security attributes and name request a private job with
-+        // default security. The returned handle is owned by this guard.
-+        let handle = unsafe { CreateJobObjectW(null(), null()) };
-+        if handle.is_null() {
-+            return Err(std::io::Error::last_os_error());
-+        }
-+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-+        // SAFETY: limits has the exact structure and size required by the
-+        // selected information class, and the job handle is valid.
-+        let configured = unsafe {
-+            SetInformationJobObject(
-+                handle,
-+                JobObjectExtendedLimitInformation,
-+                (&raw const limits).cast(),
-+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-+            )
-+        };
-+        if configured == 0 {
-+            let err = std::io::Error::last_os_error();
-+            // SAFETY: the handle was created above and has not been transferred.
-+            unsafe {
-+                CloseHandle(handle);
-+            }
-+            return Err(err);
-+        }
-+        Ok(Self { handle })
-+    }
-+
-+    pub(crate) fn assign(&self, child: &Child) -> std::io::Result<()> {
-+        use std::os::windows::io::AsRawHandle;
-+
-+        // SAFETY: both handles are valid and remain owned by their guards.
-+        if unsafe { AssignProcessToJobObject(self.handle, child.as_raw_handle() as HANDLE) } == 0 {
-+            return Err(std::io::Error::last_os_error());
-+        }
-+        Ok(())
-+    }
-+
-+    pub(crate) fn terminate_and_wait(
-+        &self,
-+        child: &mut Child,
-+        timeout: Duration,
-+    ) -> std::io::Result<()> {
-+        // SAFETY: this guard owns the job handle. TerminateJobObject applies to
-+        // the assigned installer and every child in its nested job hierarchy.
-+        if unsafe { TerminateJobObject(self.handle, 1) } == 0 && child.try_wait()?.is_none() {
-+            return Err(std::io::Error::last_os_error());
-+        }
-+        match wait_child_bounded(child, timeout)? {
-+            Some(_) => Ok(()),
-+            None => Err(std::io::Error::new(
-+                std::io::ErrorKind::TimedOut,
-+                "Windows child job did not terminate before its cleanup deadline",
-+            )),
-+        }
-+    }
-+}
-+
-+impl Drop for ChildProcessJob {
-+    fn drop(&mut self) {
-+        // SAFETY: this guard exclusively owns the job handle. The configured
-+        // kill-on-close limit prevents descendants from escaping cleanup.
-+        unsafe {
-+            CloseHandle(self.handle);
-+        }
-+    }
-+}
-+
- pub fn write_clipboard(bytes: &[u8]) -> bool {
-     let Ok(text) = std::str::from_utf8(bytes) else {
-         return false;
-@@ -2088,6 +2199,37 @@ mod tests {
+ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
+@@ -3261,6 +3270,49 @@ mod tests {
          );
      }
  
++    #[test]
++    fn current_process_executable_is_read_from_process_parameters() {
++        let expected = std::env::current_exe().expect("current executable");
++        let actual =
++            super::process_executable(std::process::id()).expect("read current process executable");
++
++        assert_eq!(
++            crate::worktree::canonical_or_original(&actual),
++            crate::worktree::canonical_or_original(&expected)
++        );
++    }
++
 +    #[test]
 +    fn child_process_job_assigns_and_terminates_within_deadline() {
 +        let mut child = Command::new("powershell.exe")
@@ -65313,10 +65447,10 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7dfb2462ac 100644
+index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59dae53d0fe 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
-@@ -26,8 +26,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
+@@ -28,8 +28,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
  const REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
  const REMOTE_SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
  const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
@@ -65324,8 +65458,8 @@ index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7d
 -const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
  const REMOTE_BINARY_ENV_VAR: &str = "HERDR_REMOTE_BINARY";
  const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
- const PWSH_EXECUTABLE: &str = "pwsh.exe";
-@@ -36,6 +34,10 @@ pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
+ const WINDOWS_POWERSHELL_EXECUTABLE: &str = "powershell.exe";
+@@ -37,6 +35,10 @@ pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
  
  pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
  
@@ -65336,40 +65470,16 @@ index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7d
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
  pub(crate) enum RemoteKeybindings {
      Local,
-@@ -2992,10 +2994,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
- 
-     let dir = private_download_dir(&asset_key)?;
-     let path = dir.join("herdr.tmp");
--    let status = crate::noninteractive_process::curl_command()
--        .args(["-sfL", "--max-time", "120", "-o"])
-+    let status = crate::noninteractive_process::curl_command(&asset.url)
-+        .args(["--max-time", "120", "-o"])
-         .arg(&path)
--        .arg(&asset.url)
-         .status()
-         .map_err(|err| io::Error::new(err.kind(), format!("download failed: {err}")))?;
-     if !status.success() {
-@@ -3042,16 +3043,16 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
- }
- 
- fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
--    let output = crate::noninteractive_process::curl_command()
-+    let output = crate::noninteractive_process::curl_command(url)
+@@ -2831,6 +2833,8 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
+     let output = crate::noninteractive_process::curl_command()
          .args([
--            "-sfL",
+             "-sfL",
 +            "-H",
 +            "Cache-Control: no-cache",
              "--retry",
              "3",
              "--connect-timeout",
-             "10",
-             "--max-time",
-             "20",
--            url,
-         ])
-         .output()
-         .map_err(|err| io::Error::new(err.kind(), format!("curl failed: {err}")))?;
-@@ -3089,7 +3090,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2875,7 +2879,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
          let build_id = crate::build_info::build_id().ok_or_else(|| {
              io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
          })?;
@@ -65378,7 +65488,7 @@ index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7d
          let manifest: RemotePreviewManifest =
              serde_json::from_slice(&manifest_bytes).map_err(|err| {
                  io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
-@@ -3108,7 +3109,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2894,7 +2898,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
      }
  
      let current_version = current_version();
@@ -65387,7 +65497,7 @@ index 0fb0e7ed1b2bc587db48f56326744a76aa834c41..1715845f03b687c48834f3ae09089e7d
      let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
          .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
      let release = manifest.release_for_version(&current_version).ok_or_else(|| {
-@@ -3707,7 +3708,7 @@ fn run_client_process(
+@@ -3563,7 +3567,7 @@ fn run_client_process(
      reattach_command: &str,
      keybindings: RemoteKeybindings,
  ) -> io::Result<()> {
@@ -65415,10 +65525,10 @@ index 698c871fef7f81b571e4e6335c77e8a9df7a72ff..da4bb92262f2de7c90ae8663c1881c2c
              err.kind(),
              format!("failed to determine herdr executable path: {err}"),
 diff --git a/src/server/handoff.rs b/src/server/handoff.rs
-index d17bfa91b62a42d32f06bb596315ca02a05c3f96..8ebfaeb5245404eecdfa8037646322b4dfc36afb 100644
+index 2cd17144e0f2a98e7cb099c7c0d30bbb4837bb49..23e8ce0ce62b0edb6f3af072f73cb417e4b618a6 100644
 --- a/src/server/handoff.rs
 +++ b/src/server/handoff.rs
-@@ -63,7 +63,7 @@ pub(crate) fn spawn_handoff_import(
+@@ -68,7 +68,7 @@ pub(crate) fn spawn_handoff_import(
      let exe = if let Some(import_exe) = import_exe {
          import_exe
      } else {
@@ -65510,7 +65620,7 @@ index 09657fa0c0c2b4d804750cbcd5c490f54c84741a..faa864c06050e40caa7c2eb00895c5e4
      fn stop_request_errors_wait_for_socket_state() {
          for kind in [
 diff --git a/src/update.rs b/src/update.rs
-index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2cc495f46c 100644
+index 647c017f75dc9ea15cbaf237da61df10e9513f9d..353809fb50f341c7c9c8ae95f7186f5f3037ab32 100644
 --- a/src/update.rs
 +++ b/src/update.rs
 @@ -1,6 +1,6 @@
@@ -65521,15 +65631,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  //! Manual `herdr update` downloads and installs the binary.
  //! Background checks only surface availability and release notes.
  //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
-@@ -8,7 +8,6 @@
- 
- use std::collections::BTreeMap;
- use std::env;
--#[cfg(not(windows))]
- use std::fs;
- #[cfg(not(windows))]
- use std::io;
-@@ -16,17 +15,31 @@ use std::io;
+@@ -15,17 +15,31 @@ use std::io;
  use std::io::{BufRead, BufReader, IsTerminal, Write};
  use std::path::{Path, PathBuf};
  use std::process::Command;
@@ -65564,7 +65666,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
  const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
  const NIX_UPDATE_COMMAND: &str = "update through Nix";
-@@ -42,6 +55,17 @@ const SERVER_HANDOFF_REQUEST_TIMEOUT: Duration = Duration::from_secs(240);
+@@ -41,6 +55,17 @@ const SERVER_HANDOFF_REQUEST_TIMEOUT: Duration = Duration::from_secs(240);
  const SERVER_HANDOFF_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
  #[cfg(not(windows))]
  const SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -65582,7 +65684,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  fn fake_release_notes_body(version: &str) -> String {
      let notes_version = env::var(FAKE_UPDATE_NOTES_VERSION_ENV)
          .ok()
-@@ -95,6 +119,68 @@ impl std::fmt::Display for Version {
+@@ -94,6 +119,68 @@ impl std::fmt::Display for Version {
      }
  }
  
@@ -65651,7 +65753,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  // ---------------------------------------------------------------------------
  // Update manifest
  // ---------------------------------------------------------------------------
-@@ -107,9 +193,9 @@ enum UpdateChannel {
+@@ -106,9 +193,9 @@ enum UpdateChannel {
  
  impl UpdateChannel {
      fn configured() -> Self {
@@ -65664,40 +65766,70 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          }
      }
  
-@@ -125,6 +211,7 @@ impl UpdateChannel {
+@@ -124,7 +211,6 @@ impl UpdateChannel {
  struct AssetRef {
      url: String,
      sha256: Option<String>,
-+    format: Option<String>,
+-    #[cfg(windows)]
+     format: Option<String>,
  }
  
- impl<'de> Deserialize<'de> for AssetRef {
-@@ -137,6 +224,7 @@ impl<'de> Deserialize<'de> for AssetRef {
+@@ -138,7 +224,6 @@ impl<'de> Deserialize<'de> for AssetRef {
              serde_json::Value::String(url) if !url.trim().is_empty() => Ok(Self {
                  url: url.trim().to_string(),
                  sha256: None,
-+                format: None,
+-                #[cfg(windows)]
+                 format: None,
              }),
              serde_json::Value::Object(mut object) => {
-                 let url = object
-@@ -146,12 +234,16 @@ impl<'de> Deserialize<'de> for AssetRef {
+@@ -149,7 +234,6 @@ impl<'de> Deserialize<'de> for AssetRef {
                  let sha256 = object
                      .remove("sha256")
                      .and_then(|value| value.as_str().map(str::to_string));
-+                let format = object
-+                    .remove("format")
-+                    .and_then(|value| value.as_str().map(str::to_string));
-                 if url.trim().is_empty() {
-                     return Err(serde::de::Error::custom("asset url must not be empty"));
-                 }
+-                #[cfg(windows)]
+                 let format = object
+                     .remove("format")
+                     .and_then(|value| value.as_str().map(str::to_string));
+@@ -159,7 +243,6 @@ impl<'de> Deserialize<'de> for AssetRef {
                  Ok(Self {
                      url: url.trim().to_string(),
                      sha256: sha256.filter(|value| !value.trim().is_empty()),
-+                    format: format.filter(|value| !value.trim().is_empty()),
+-                    #[cfg(windows)]
+                     format: format.filter(|value| !value.trim().is_empty()),
                  })
              }
-             _ => Err(serde::de::Error::custom(
-@@ -198,6 +290,7 @@ struct PreviewManifest {
+@@ -170,30 +253,6 @@ impl<'de> Deserialize<'de> for AssetRef {
+     }
+ }
+ 
+-#[cfg(windows)]
+-impl AssetRef {
+-    fn package_format(&self) -> Result<String, String> {
+-        let format = self
+-            .format
+-            .clone()
+-            .unwrap_or_else(|| {
+-                if self.url.to_ascii_lowercase().ends_with(".zip") {
+-                    "zip"
+-                } else {
+-                    "exe"
+-                }
+-                .into()
+-            })
+-            .to_ascii_lowercase();
+-        match format.as_str() {
+-            "zip" | "exe" => Ok(format),
+-            _ => Err(format!(
+-                "update manifest asset has unsupported format '{format}'"
+-            )),
+-        }
+-    }
+-}
+-
+ #[derive(Deserialize)]
+ struct UpdateManifest {
+     version: String,
+@@ -233,6 +292,7 @@ struct PreviewManifest {
      channel: String,
      base_version: String,
      build_id: String,
@@ -65705,7 +65837,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      commit: String,
      built_at: String,
      protocol: u32,
-@@ -264,8 +357,12 @@ impl ManifestReleaseMetadata {
+@@ -299,8 +359,12 @@ impl ManifestReleaseMetadata {
  /// Information about an available update.
  #[derive(Debug, Clone)]
  struct ReleaseInfo {
@@ -65718,15 +65850,17 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      channel: UpdateChannel,
      build_id: Option<String>,
      commit: Option<String>,
-@@ -273,6 +370,7 @@ struct ReleaseInfo {
+@@ -308,8 +372,7 @@ struct ReleaseInfo {
      target_protocol: Option<u32>,
      download_url: String,
      sha256: Option<String>,
+-    #[cfg(windows)]
+-    package_format: String,
 +    asset_format: Option<String>,
      notes_body: String,
  }
  
-@@ -280,14 +378,19 @@ impl ReleaseInfo {
+@@ -317,14 +380,19 @@ impl ReleaseInfo {
      fn label(&self) -> &str {
          &self.identity
      }
@@ -65748,7 +65882,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  }
  
  fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
-@@ -297,6 +400,8 @@ where
+@@ -334,6 +402,8 @@ where
      let output = crate::noninteractive_process::curl_command()
          .args([
              "-sfL",
@@ -65757,7 +65891,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              "--retry",
              "3",
              "--connect-timeout",
-@@ -338,6 +443,58 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
+@@ -375,6 +445,58 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
      }
  }
  
@@ -65816,7 +65950,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<ReleaseInfo>, String> {
      let current = Version::current();
      let latest = Version::parse(&manifest.version)
-@@ -356,16 +513,20 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+@@ -393,11 +515,13 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
      }
  
      let (os, arch) = platform_target();
@@ -65829,6 +65963,9 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +    #[cfg(windows)]
 +    validate_windows_installer_asset(&asset_key, asset)?;
      let download_url = asset.url.clone();
+     let sha256 = asset
+         .sha256
+@@ -409,7 +533,9 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
  
      Ok(Some(ReleaseInfo {
          identity: latest.to_string(),
@@ -65838,15 +65975,17 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          channel: UpdateChannel::Stable,
          build_id: None,
          commit: None,
-@@ -373,6 +534,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+@@ -417,8 +543,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
          target_protocol: manifest.protocol,
          download_url,
-         sha256: asset.sha256.clone(),
+         sha256: Some(sha256),
+-        #[cfg(windows)]
+-        package_format: asset.package_format()?,
 +        asset_format: asset.format.clone(),
          notes_body,
      }))
  }
-@@ -385,12 +547,35 @@ fn stable_channel_should_install(
+@@ -431,12 +556,35 @@ fn stable_channel_should_install(
      installed_is_preview || latest > current
  }
  
@@ -65888,7 +66027,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  }
  
  fn release_info_from_preview_manifest(
-@@ -403,27 +588,32 @@ fn release_info_from_preview_manifest(
+@@ -449,27 +597,32 @@ fn release_info_from_preview_manifest(
          ));
      }
      let build_id = manifest.build_id.trim();
@@ -65930,7 +66069,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      if let Some(archived) = manifest.builds.get(build_id) {
          if archived.base_version != manifest.base_version
              || archived.commit != manifest.commit
-@@ -446,11 +636,15 @@ fn release_info_from_preview_manifest(
+@@ -492,11 +645,15 @@ fn release_info_from_preview_manifest(
                  .and_then(|build| build.assets.get(&asset_key))
          })
          .ok_or_else(|| format!("no binary for {asset_key} in preview manifest"))?;
@@ -65947,15 +66086,17 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          channel: UpdateChannel::Preview,
          build_id: Some(build_id.to_string()),
          commit: Some(manifest.commit.clone()),
-@@ -458,6 +652,7 @@ fn release_info_from_preview_manifest(
+@@ -504,8 +661,7 @@ fn release_info_from_preview_manifest(
          target_protocol: Some(manifest.protocol),
          download_url,
          sha256: asset.sha256.clone(),
+-        #[cfg(windows)]
+-        package_format: asset.package_format()?,
 +        asset_format: asset.format.clone(),
          notes_body,
      }))
  }
-@@ -529,6 +724,93 @@ fn check_homebrew_latest() -> Result<Option<Version>, String> {
+@@ -589,6 +745,93 @@ fn check_homebrew_latest() -> Result<Option<Version>, String> {
      homebrew_update_from_formula_json(&output.stdout, &current)
  }
  
@@ -66049,49 +66190,31 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  // ---------------------------------------------------------------------------
  // Download + install
  // ---------------------------------------------------------------------------
-@@ -628,53 +910,148 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
+@@ -688,105 +931,148 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
  }
  
  #[cfg(windows)]
--fn install_windows_update_with_installer(
--    channel: UpdateChannel,
--    expected_build_id: Option<&str>,
--) -> Result<(), String> {
--    let mut command = Command::new("powershell");
--    command
--        .args([
--            "-NoProfile",
--            "-ExecutionPolicy",
--            "Bypass",
--            "-Command",
--            "irm https://herdr.dev/install.ps1 | iex",
--        ])
--        .env("HERDR_CHANNEL", channel.as_str())
--        // Drop any inherited PSModulePath. When herdr is launched from
--        // PowerShell 7, its Core module paths come first and Windows
--        // PowerShell 5.1 (this `powershell`) fails to autoload cmdlets like
--        // Get-FileHash. Removing it lets 5.1 compute its own default path.
--        // See PowerShell/PowerShell#8635.
--        .env_remove("PSModulePath");
--    if let Some(build_id) = expected_build_id {
--        command.env("HERDR_EXPECTED_BUILD_ID", build_id);
--    }
--    let status = command
--        .status()
--        .map_err(|err| format!("failed to run Windows installer: {err}"))?;
+-const WINDOWS_INSTALLER: &str = include_str!("../website/install.ps1");
 +struct DownloadedWindowsInstaller {
 +    root: PathBuf,
 +    path: PathBuf,
 +}
  
-+#[cfg(windows)]
+ #[cfg(windows)]
+-struct DownloadedWindowsUpdate {
+-    package_path: PathBuf,
+-    installer_path: PathBuf,
 +impl Drop for DownloadedWindowsInstaller {
 +    fn drop(&mut self) {
 +        let _ = fs::remove_dir_all(&self.root);
 +    }
-+}
-+
-+#[cfg(windows)]
+ }
+ 
+ #[cfg(windows)]
+-impl Drop for DownloadedWindowsUpdate {
+-    fn drop(&mut self) {
+-        let _ = fs::remove_file(&self.package_path);
+-        let _ = fs::remove_file(&self.installer_path);
 +fn create_windows_update_temp_root() -> Result<PathBuf, String> {
 +    let nonce = std::time::SystemTime::now()
 +        .duration_since(std::time::UNIX_EPOCH)
@@ -66112,18 +66235,27 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +                ));
 +            }
 +        }
-+    }
+     }
 +    Err("failed to allocate a unique Windows update directory".to_string())
-+}
-+
-+#[cfg(windows)]
+ }
+ 
+ #[cfg(windows)]
+-fn download_windows_update(release: &ReleaseInfo) -> Result<DownloadedWindowsUpdate, String> {
 +fn download_windows_installer(release: &ReleaseInfo) -> Result<DownloadedWindowsInstaller, String> {
 +    if release.asset_format.as_deref() != Some("nsis") {
 +        return Err("selected Windows update asset is not an NSIS installer".to_string());
 +    }
-+    let expected_sha256 = release
-+        .sha256
-+        .as_deref()
+     let expected_sha256 = release
+         .sha256
+         .as_deref()
+-        .ok_or("Windows update asset is missing a SHA-256 checksum")?;
+-    let stem = format!("herdr-update-{}", std::process::id());
+-    let update = DownloadedWindowsUpdate {
+-        package_path: env::temp_dir().join(format!("{stem}.{}", release.package_format)),
+-        installer_path: env::temp_dir().join(format!("{stem}.ps1")),
+-    };
+-    fs::write(&update.installer_path, WINDOWS_INSTALLER)
+-        .map_err(|err| format!("failed to prepare Windows installer: {err}"))?;
 +        .ok_or("selected Windows update asset has no SHA-256 digest")?;
 +    let root = create_windows_update_temp_root()?;
 +    let asset_name = release
@@ -66134,40 +66266,75 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +        .ok_or("selected Windows update asset has an invalid setup filename")?;
 +    let path = root.join(asset_name);
 +    let download = DownloadedWindowsInstaller { root, path };
-+
-+    let status = crate::noninteractive_process::curl_command()
-+        .args(["-sfL", "--max-time", "120", "-o"])
+ 
+     let status = crate::noninteractive_process::curl_command()
+         .args(["-sfL", "--max-time", "120", "-o"])
+-        .arg(&update.package_path)
 +        .arg(&download.path)
-+        .arg(&release.download_url)
-+        .status()
+         .arg(&release.download_url)
+         .status()
+-        .map_err(|err| format!("download failed: {err}"))?;
 +        .map_err(|err| format!("failed to download Windows installer: {err}"))?;
      if !status.success() {
--        return Err(format!("Windows installer failed with status {status}"));
+-        return Err("download failed".into());
 +        return Err(format!(
 +            "failed to download Windows installer with status {status}"
 +        ));
      }
+-    crate::checksum::verify_sha256(&update.package_path, expected_sha256)
+-        .map_err(|err| format!("downloaded update checksum verification failed: {err}"))?;
+-    tracing::info!(sha256 = %expected_sha256, "downloaded update checksum verified");
+-
+-    Ok(update)
 +    crate::checksum::verify_sha256(&download.path, expected_sha256).map_err(|err| {
 +        format!("downloaded Windows installer checksum verification failed: {err}")
 +    })?;
 +    tracing::info!(sha256 = %expected_sha256, "downloaded Windows installer checksum verified");
 +    Ok(download)
-+}
- 
--    Ok(())
-+#[cfg(windows)]
-+fn windows_installer_command(installer: &Path, start_gate: &Path) -> Command {
-+    let mut command = Command::new(installer);
-+    command
-+        .arg("/S")
-+        .env(WINDOWS_INSTALLER_START_GATE_ENV, start_gate);
-+    command
  }
  
  #[cfg(windows)]
--fn windows_installed_herdr_exe_path() -> Result<PathBuf, String> {
--    if let Some(install_dir) = env::var_os("HERDR_INSTALL_DIR").filter(|value| !value.is_empty()) {
--        return Ok(PathBuf::from(install_dir).join("herdr.exe"));
+-fn install_windows_update_with_installer(
+-    release: &ReleaseInfo,
+-    update: &DownloadedWindowsUpdate,
+-) -> Result<(), String> {
+-    let expected_sha256 = release
+-        .sha256
+-        .as_deref()
+-        .ok_or("Windows update asset is missing a SHA-256 checksum")?;
+-    let mut command = Command::new("powershell");
++fn windows_installer_command(installer: &Path, start_gate: &Path) -> Command {
++    let mut command = Command::new(installer);
+     command
+-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+-        .arg(&update.installer_path)
+-        .args(["-Channel", release.channel.as_str(), "-LocalPackagePath"])
+-        .arg(&update.package_path)
+-        .args([
+-            "-LocalPackageFormat",
+-            &release.package_format,
+-            "-LocalPackageIdentity",
+-            release.label(),
+-            "-LocalPackageSha256",
+-            expected_sha256,
+-        ])
+-        // Drop any inherited PSModulePath. When herdr is launched from
+-        // PowerShell 7, its Core module paths come first and Windows
+-        // PowerShell 5.1 (this `powershell`) fails to autoload cmdlets like
+-        // Get-FileHash. Removing it lets 5.1 compute its own default path.
+-        // See PowerShell/PowerShell#8635.
+-        .env_remove("PSModulePath");
+-    let status = command
+-        .status()
+-        .map_err(|err| format!("failed to run Windows installer: {err}"))?;
++        .arg("/S")
++        .env(WINDOWS_INSTALLER_START_GATE_ENV, start_gate);
++    command
++}
+ 
+-    if !status.success() {
+-        return Err(format!("Windows installer failed with status {status}"));
++#[cfg(windows)]
 +fn terminate_windows_installer(
 +    job: &crate::platform::ChildProcessJob,
 +    child: &mut std::process::Child,
@@ -66177,16 +66344,14 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +        Ok(()) => failure,
 +        Err(cleanup_err) => format!("{failure}; cleanup failed: {cleanup_err}"),
      }
-+}
+-
+-    Ok(())
+ }
  
--    let local_app_data = env::var_os("LOCALAPPDATA")
--        .ok_or("LOCALAPPDATA is not set; cannot locate Herdr install")?;
--    Ok(PathBuf::from(local_app_data)
--        .join("Programs")
--        .join("Herdr")
--        .join("bin")
--        .join("herdr.exe"))
-+#[cfg(windows)]
+ #[cfg(windows)]
+-fn windows_installed_herdr_exe_path() -> Result<PathBuf, String> {
+-    if let Some(install_dir) = env::var_os("HERDR_INSTALL_DIR").filter(|value| !value.is_empty()) {
+-        return Ok(PathBuf::from(install_dir).join("herdr.exe"));
 +fn install_windows_update_with_installer(release: &ReleaseInfo) -> Result<(), String> {
 +    let installer = download_windows_installer(release)?;
 +    let start_gate = installer.root.join("installer.start");
@@ -66201,7 +66366,15 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +            &mut child,
 +            format!("failed to assign Windows installer process job: {err}"),
 +        ));
-+    }
+     }
+-
+-    let local_app_data = env::var_os("LOCALAPPDATA")
+-        .ok_or("LOCALAPPDATA is not set; cannot locate Herdr install")?;
+-    Ok(PathBuf::from(local_app_data)
+-        .join("Programs")
+-        .join("Herdr")
+-        .join("bin")
+-        .join("herdr.exe"))
 +    if let Err(err) = fs::write(&start_gate, b"assigned\n") {
 +        return Err(terminate_windows_installer(
 +            &job,
@@ -66236,7 +66409,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  }
  
  // ---------------------------------------------------------------------------
-@@ -1240,7 +1617,7 @@ fn runtime_matches_release(status: &crate::api::RuntimeStatus, release: &Release
+@@ -1352,7 +1638,7 @@ fn runtime_matches_release(status: &crate::api::RuntimeStatus, release: &Release
      let protocol_matches = release
          .target_protocol
          .is_none_or(|protocol| status.protocol == Some(protocol));
@@ -66245,7 +66418,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      protocol_matches && version_matches
  }
  
-@@ -1474,7 +1851,7 @@ fn live_handoff_server_via_api_for_release_at(
+@@ -1586,7 +1872,7 @@ fn live_handoff_server_via_api_for_release_at(
      let params = ServerLiveHandoffParams {
          import_exe: Some(updated_exe.display().to_string()),
          expected_protocol: release.target_protocol,
@@ -66254,7 +66427,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      };
  
      send_server_update_method_at(
-@@ -1561,7 +1938,7 @@ fn wait_for_server_handoff_at(
+@@ -1673,7 +1959,7 @@ fn wait_for_server_handoff_at(
          socket_path,
          timeout,
          release.target_protocol,
@@ -66263,7 +66436,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      )
  }
  
-@@ -1732,7 +2109,9 @@ fn print_running_session_update_outcomes(
+@@ -1844,7 +2130,9 @@ fn print_running_session_update_outcomes(
  // ---------------------------------------------------------------------------
  
  pub(crate) fn update_install_command() -> &'static str {
@@ -66274,7 +66447,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          HOMEBREW_UPDATE_COMMAND
      } else if is_mise_managed_install() {
          MISE_UPDATE_COMMAND
-@@ -1748,6 +2127,11 @@ pub(crate) fn update_install_instruction(install_command: &str) -> String {
+@@ -1860,6 +2148,11 @@ pub(crate) fn update_install_instruction(install_command: &str) -> String {
          HERDR_UPDATE_COMMAND => {
              "detach, run `herdr update`, then follow its restart guidance".to_string()
          }
@@ -66286,7 +66459,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          HOMEBREW_UPDATE_COMMAND => {
              "detach, run `brew update && brew upgrade herdr`, then restart this Herdr session when ready".to_string()
          }
-@@ -1786,40 +2170,25 @@ fn is_mise_managed_install() -> bool {
+@@ -1898,40 +2191,25 @@ fn is_mise_managed_install() -> bool {
      is_mise_managed_exe_path_following_links(&current_exe)
  }
  
@@ -66343,22 +66516,17 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      }
  }
  
-@@ -1957,42 +2326,24 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
+@@ -2069,36 +2347,24 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
  
  /// Manual self-update command (`herdr update`).
  pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
 -    let channel = UpdateChannel::configured();
--    #[cfg(windows)]
--    if channel == UpdateChannel::Stable {
--        return Err(
--            "Windows builds are preview-only for now; run `herdr channel set preview`".into(),
--        );
+-
 +    if is_winget_managed_install()? {
 +        return Err(format!(
 +            "self-update is disabled for WinGet installs; run `{WINGET_UPDATE_COMMAND}`"
 +        ));
-     }
--
++    }
      if is_homebrew_managed_install() {
 -        if channel == UpdateChannel::Preview {
 -            return Err(
@@ -66390,7 +66558,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          return Err(
              "self-update is disabled for Nix installs; update with `nix profile upgrade` or update the flake input that provides Herdr".into(),
          );
-@@ -2002,7 +2353,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+@@ -2108,7 +2374,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
          return Err("run `herdr update` outside herdr after detaching from the session".into());
      }
  
@@ -66399,7 +66567,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  
      let current = Version::current();
  
-@@ -2015,7 +2366,12 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+@@ -2121,7 +2387,12 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
      };
  
      if let Some(commit) = &release.commit {
@@ -66413,7 +66581,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      }
      if let Err(e) = crate::release_notes::save_pending(release.label(), &release.notes_body) {
          tracing::warn!("failed to save pending release notes: {e}");
-@@ -2024,22 +2380,20 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+@@ -2130,25 +2401,20 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
      #[cfg(windows)]
      {
          let _ = options;
@@ -66437,7 +66605,10 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
 +            eprintln!("installed {}", release.label());
 +            eprintln!("New Herdr launches use the managed Windows installation.");
          }
--        install_windows_update_with_installer(channel, release.build_id.as_deref())?;
+-        eprintln!("downloading {}...", release.label());
+-        let downloaded_update = download_windows_update(&release)?;
+-        eprintln!("downloaded {}", release.label());
+-        install_windows_update_with_installer(&release, &downloaded_update)?;
 -        let updated_exe = windows_installed_herdr_exe_path()?;
 -        eprintln!("installed {}", release.label());
 -        print_outdated_integration_notice_with_updated_binary(&updated_exe);
@@ -66448,7 +66619,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      }
  
      #[cfg(not(windows))]
-@@ -2079,6 +2433,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+@@ -2188,6 +2454,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
      Ok(release.version)
  }
  
@@ -66456,7 +66627,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
      let status = Command::new(updated_exe)
          .args(["integration", "status", "--outdated-only"])
-@@ -2118,7 +2473,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2227,7 +2494,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
      if is_homebrew_managed_install() {
          if configured_channel == UpdateChannel::Preview {
              crate::logging::update_check_failed(
@@ -66465,7 +66636,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              );
              return;
          }
-@@ -2127,16 +2482,31 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2236,16 +2503,31 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
      }
  
      if is_mise_managed_install() && configured_channel == UpdateChannel::Preview {
@@ -66499,7 +66670,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      let release = match check_latest() {
          Ok(Some(r)) => r,
          Ok(None) => return,
-@@ -2146,8 +2516,38 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2255,8 +2537,38 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
          }
      };
  
@@ -66538,7 +66709,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          "new {} build available at {}",
          release.channel.as_str(),
          release.download_url
-@@ -2163,9 +2563,17 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+@@ -2272,9 +2584,17 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
      );
  
      // Notify the TUI — blocking_send is safe from a std::thread
@@ -66557,7 +66728,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      });
  }
  
-@@ -2246,6 +2654,312 @@ fn platform_target() -> (&'static str, &'static str) {
+@@ -2355,6 +2675,312 @@ fn platform_target() -> (&'static str, &'static str) {
  // Tests
  // ---------------------------------------------------------------------------
  
@@ -66870,7 +67041,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
  #[cfg(all(test, unix))]
  mod tests {
      use super::*;
-@@ -2319,12 +3033,15 @@ mod tests {
+@@ -2428,12 +3054,15 @@ mod tests {
          ReleaseInfo {
              version: Version::parse(version).unwrap(),
              identity: version.to_string(),
@@ -66886,7 +67057,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              notes_body: "### Changed\n- One".to_string(),
          }
      }
-@@ -2512,22 +3229,6 @@ mod tests {
+@@ -2621,22 +3250,6 @@ mod tests {
          assert!(is_package_manager_managed_exe_path(path));
      }
  
@@ -66909,7 +67080,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      #[test]
      fn non_nix_store_path_is_not_detected() {
          let path = Path::new("/usr/local/bin/herdr");
-@@ -2598,22 +3299,6 @@ mod tests {
+@@ -2707,22 +3320,6 @@ mod tests {
          assert_eq!(body, "### Fixed\n- Brew notes");
      }
  
@@ -66932,7 +67103,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
      #[test]
      fn fake_release_notes_default_to_real_large_changelog_section() {
          let _guard = env_lock().lock().unwrap();
-@@ -2697,12 +3382,15 @@ mod tests {
+@@ -2806,12 +3403,15 @@ mod tests {
          let compatible_release = ReleaseInfo {
              version: Version::parse("0.5.6").unwrap(),
              identity: "0.5.6".to_string(),
@@ -66948,7 +67119,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              notes_body: "### Changed\n- One".to_string(),
          };
          let incompatible_release = ReleaseInfo {
-@@ -2941,12 +3629,15 @@ mod tests {
+@@ -3050,12 +3650,15 @@ mod tests {
          let release = ReleaseInfo {
              version: Version::parse("0.5.6").unwrap(),
              identity: "0.5.6".to_string(),
@@ -66964,7 +67135,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              notes_body: "### Changed\n- One".to_string(),
          };
          let plan = RunningServerUpdatePlan {
-@@ -3076,12 +3767,15 @@ mod tests {
+@@ -3185,12 +3788,15 @@ mod tests {
          let release = ReleaseInfo {
              version: Version::parse("9.8.7").unwrap(),
              identity: "9.8.7".to_string(),
@@ -66980,7 +67151,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
              notes_body: "### Changed\n- One".to_string(),
          };
  
-@@ -3383,14 +4077,15 @@ mod tests {
+@@ -3515,14 +4121,15 @@ mod tests {
      }
  
      #[test]
@@ -66998,7 +67169,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
                  "commit": "abcdef1234567890",
                  "built_at": "2026-06-02T03:00:00Z",
                  "protocol": 77,
-@@ -3402,7 +4097,7 @@ mod tests {
+@@ -3534,7 +4141,7 @@ mod tests {
                      }}
                  }},
                  "builds": {{
@@ -67007,7 +67178,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
                          "base_version": "9.9.9",
                          "commit": "abcdef1234567890",
                          "built_at": "2026-06-02T03:00:00Z",
-@@ -3424,7 +4119,15 @@ mod tests {
+@@ -3556,7 +4163,15 @@ mod tests {
              .expect("preview update");
  
          assert_eq!(release.channel, UpdateChannel::Preview);
@@ -67025,7 +67196,7 @@ index 294aa1cc22211f40c280069a62ba894cdb827f13..1c3b07ae861810d280fec2421858bd2c
          assert_eq!(release.sha256.as_deref(), Some("deadbeef"));
      }
 diff --git a/tests/api_ping.rs b/tests/api_ping.rs
-index 1033628a924307791197c9476242a8a2bdfcf11a..997d9c724ec07d72784267a5fa1c368cbd05bdc3 100644
+index bfecc27af371e3f9399f341bb332e965be2c3a00..d2c42de2b4fcca14d64ab8a01c60b00705cbb2d5 100644
 --- a/tests/api_ping.rs
 +++ b/tests/api_ping.rs
 @@ -301,7 +301,16 @@ fn ping_over_socket_returns_version() {
@@ -67045,9 +67216,9 @@ index 1033628a924307791197c9476242a8a2bdfcf11a..997d9c724ec07d72784267a5fa1c368c
 +    assert_eq!(value["result"]["version"], expected_version);
      // Intentionally hardcoded so wire protocol bumps require updating this test.
      // Changing this value means old clients/servers are no longer compatible.
-     assert_eq!(value["result"]["protocol"], 19);
+     assert_eq!(value["result"]["protocol"], 20);
 diff --git a/tests/cli/sessions.rs b/tests/cli/sessions.rs
-index 934d7e27775896f4b4ca796b20e66a65e457db9d..0b1935786e1aadd8aaca94efe6957261a8a71ac5 100644
+index d86de44a65a485b8e95991a88f6dc3c95b11cd0b..0b1935786e1aadd8aaca94efe6957261a8a71ac5 100644
 --- a/tests/cli/sessions.rs
 +++ b/tests/cli/sessions.rs
 @@ -375,6 +375,15 @@ fn status_commands_report_client_and_server_versions() {
@@ -67098,7 +67269,7 @@ index 934d7e27775896f4b4ca796b20e66a65e457db9d..0b1935786e1aadd8aaca94efe6957261
  
      let full_json = run_cli_json(&socket_path, &["status", "--json"]);
 -    assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
--    assert_eq!(full_json["client"]["protocol"], 19);
+-    assert_eq!(full_json["client"]["protocol"], 20);
 +    assert_eq!(full_json["client"]["version"], expected_version);
 +    assert_eq!(
 +        full_json["client"]["herdr_version"],
@@ -67113,14 +67284,14 @@ index 934d7e27775896f4b4ca796b20e66a65e457db9d..0b1935786e1aadd8aaca94efe6957261
      let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
      assert_eq!(server_json["status"], "running");
 -    assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
--    assert_eq!(server_json["protocol"], 19);
+-    assert_eq!(server_json["protocol"], 20);
 +    assert_eq!(server_json["version"], expected_version);
 +    assert_eq!(server_json["protocol"], CURRENT_PROTOCOL);
      assert_eq!(server_json["compatible"], true);
  
      let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
 -    assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
--    assert_eq!(client_json["protocol"], 19);
+-    assert_eq!(client_json["protocol"], 20);
 +    assert_eq!(client_json["version"], expected_version);
 +    assert_eq!(client_json["herdr_version"], env!("CARGO_PKG_VERSION"));
 +    assert_eq!(client_json["protocol"], CURRENT_PROTOCOL);
@@ -67128,62 +67299,78 @@ index 934d7e27775896f4b4ca796b20e66a65e457db9d..0b1935786e1aadd8aaca94efe6957261
          .as_str()
          .is_some_and(|path| !path.is_empty()));
 diff --git a/website/agent-guide.md b/website/agent-guide.md
-index 20291d0d11918a79d5f151921031a4c23d966c01..dc8d577b5fd9b531b04154747a20d4ec09b04a86 100644
+index 713928172794444a8131317b861cbe02c875c7f3..37c6048cd434143d6cae55c30fba662700626534 100644
 --- a/website/agent-guide.md
 +++ b/website/agent-guide.md
 @@ -32,12 +32,7 @@ curl -fsSL https://herdr.dev/install.sh | sh
  herdr
  ```
  
--Windows preview beta:
+-Windows:
 -
 -```powershell
 -powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 -herdr
 -```
-+Windows preview beta: download and run the newest `herdr-win_v<version>_windows_amd64_setup.exe` from https://github.com/hdosys/herdr-win/releases, open a new terminal, then run `herdr`.
++Windows: download and run the newest `herdr-win_v<version>_windows_amd64_setup.exe` from https://github.com/hdosys/herdr-win/releases, open a new terminal, then run `herdr`.
  
- Homebrew, mise, and Nix installs, verification, and manual downloads: https://herdr.dev/docs/install/. Updating later is `herdr update`. Check the version with `herdr --version`.
+ Homebrew, mise, and Nix installs, verification, and manual downloads: https://herdr.dev/docs/install/. Direct installs use the stable channel by default and update with `herdr update`; preview is opt-in. Package-manager installs update through that package manager. Check the version with `herdr --version`.
  
 diff --git a/website/index.html b/website/index.html
-index cd01769259a4aeea50857dc184123f3997337c21..6b1166d554126dc450a96b0dc795b0f0493fe222 100644
+index 0675044458e939a7b9d4af0ae4181080b816e4ec..b83e9d8ab0a1ced838b94b5ce91e11a35bcb3564 100644
 --- a/website/index.html
 +++ b/website/index.html
-@@ -487,7 +487,7 @@
+@@ -475,7 +475,7 @@
                          <button type="button" id="copy-btn-2" aria-label="Copy install command">copy</button>
                      </div>
                  </div>
--                <div class="meta">Windows beta: <code>irm https://herdr.dev/install.ps1 | iex</code> &nbsp;—&nbsp; <a href="/docs/">all install methods →</a></div>
-+                <div class="meta">Windows beta: <a href="https://github.com/hdosys/herdr-win/releases">download Herdr Win setup →</a> &nbsp;—&nbsp; <a href="/docs/">all install methods →</a></div>
+-                <div class="meta">Windows: <code>irm https://herdr.dev/install.ps1 | iex</code> &nbsp;—&nbsp; <a href="/docs/">all install methods →</a></div>
++                <div class="meta">Windows: <a href="https://github.com/hdosys/herdr-win/releases">download Herdr Win setup →</a> &nbsp;—&nbsp; <a href="/docs/">all install methods →</a></div>
              </div>
          </section>
  
 diff --git a/website/install.ps1 b/website/install.ps1
 deleted file mode 100644
-index e5842dc8f54be11f544d574e438ffc73ce3aaac9..0000000000000000000000000000000000000000
+index 9dacfaa987947ee1467325959e1a6c36ad7e4712..0000000000000000000000000000000000000000
 --- a/website/install.ps1
 +++ /dev/null
-@@ -1,688 +0,0 @@
+@@ -1,815 +0,0 @@
 -[CmdletBinding()]
 -param(
 -    [string]$Channel = $env:HERDR_CHANNEL,
 -    [string]$ManifestUrl = $env:HERDR_MANIFEST_URL,
 -    [string]$InstallDir = $env:HERDR_INSTALL_DIR,
 -    [string]$ExpectedBuildId = $env:HERDR_EXPECTED_BUILD_ID,
--    [int]$Retain = 3
+-    [int]$Retain = 3,
+-    [string]$LocalPackagePath,
+-    [string]$LocalPackageFormat,
+-    [string]$LocalPackageIdentity,
+-    [string]$LocalPackageSha256
 -)
 -
 -Set-StrictMode -Version Latest
 -$ErrorActionPreference = "Stop"
 -$ProgressPreference = "SilentlyContinue"
 -
--if ([string]::IsNullOrWhiteSpace($Channel)) {
--    $Channel = "preview"
+-$channelWasExplicit = -not [string]::IsNullOrWhiteSpace($Channel)
+-if ($channelWasExplicit -and $Channel -notin @("stable", "preview")) {
+-    Write-Error "Invalid Herdr channel '$Channel'. Use 'stable' or 'preview'."
+-    exit 1
 -}
 -
--if ($Channel -notin @("stable", "preview")) {
--    Write-Error "Invalid Herdr channel '$Channel'. Use 'preview'."
--    exit 1
+-$localPackageValueCount = @(
+-    $LocalPackagePath,
+-    $LocalPackageFormat,
+-    $LocalPackageIdentity,
+-    $LocalPackageSha256 |
+-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+-).Count
+-if ($localPackageValueCount -notin @(0, 4)) {
+-    throw "Local package mode requires path, format, identity, and SHA-256."
+-}
+-$useLocalPackage = $localPackageValueCount -eq 4
+-if ($useLocalPackage -and $LocalPackageFormat -notin @("zip", "exe")) {
+-    throw "Local Herdr package has unsupported format '$LocalPackageFormat'."
 -}
 -
 -function Write-Step {
@@ -67320,12 +67507,21 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -        throw "Release manifest does not include a binary for $Target."
 -    }
 -
+-    $sha256 = $null
+-    $shaMapProperty = $Manifest.PSObject.Properties["sha256"]
+-    if ($null -ne $shaMapProperty -and $null -ne $shaMapProperty.Value) {
+-        $targetShaProperty = $shaMapProperty.Value.PSObject.Properties[$Target]
+-        if ($null -ne $targetShaProperty -and -not [string]::IsNullOrWhiteSpace([string]$targetShaProperty.Value)) {
+-            $sha256 = [string]$targetShaProperty.Value
+-        }
+-    }
+-
 -    $asset = $property.Value
 -    if ($asset -is [string]) {
 -        $url = [string]$asset
 -        return [PSCustomObject]@{
 -            Url = $url
--            Sha256 = $null
+-            Sha256 = $sha256
 -            Format = if ($url.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) { "zip" } else { "exe" }
 -        }
 -    }
@@ -67346,10 +67542,8 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -        throw "Release manifest asset $Target has unsupported format '$format'."
 -    }
 -    $shaProperty = $asset.PSObject.Properties["sha256"]
--    $sha256 = if ($null -eq $shaProperty -or [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
--        $null
--    } else {
--        [string]$shaProperty.Value
+-    if ($null -ne $shaProperty -and -not [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
+-        $sha256 = [string]$shaProperty.Value
 -    }
 -
 -    return [PSCustomObject]@{
@@ -67510,6 +67704,67 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -        return $false
 -    }
 -    return $true
+-}
+-
+-function Move-DirectoryWithRetry {
+-    param(
+-        [string]$Source,
+-        [string]$Destination,
+-        [int]$TimeoutMilliseconds = 5000
+-    )
+-
+-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+-    while ($true) {
+-        try {
+-            [System.IO.Directory]::Move($Source, $Destination)
+-            return
+-        } catch {
+-            $retryable = $false
+-            $exception = $_.Exception
+-            while ($null -ne $exception) {
+-                if ($exception -is [System.IO.IOException] -or
+-                    $exception -is [System.UnauthorizedAccessException]) {
+-                    $retryable = $true
+-                    break
+-                }
+-                $exception = $exception.InnerException
+-            }
+-            if (-not $retryable -or
+-                [DateTime]::UtcNow -ge $deadline -or
+-                -not (Test-Path -LiteralPath $Source -PathType Container) -or
+-                (Test-Path -LiteralPath $Destination)) {
+-                throw
+-            }
+-            Start-Sleep -Milliseconds 100
+-        }
+-    }
+-}
+-
+-function Remove-DirectoryWithRetry {
+-    param(
+-        [string]$Path,
+-        [int]$TimeoutMilliseconds = 5000
+-    )
+-
+-    $fullPath = [System.IO.Path]::GetFullPath($Path)
+-    $extendedPath = if ($fullPath.StartsWith("\\")) {
+-        "\\?\UNC\" + $fullPath.TrimStart([char]'\')
+-    } else {
+-        "\\?\" + $fullPath
+-    }
+-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+-    while (Test-Path -LiteralPath $Path) {
+-        try {
+-            [System.IO.Directory]::Delete($extendedPath, $true)
+-            return
+-        } catch {
+-            if ([DateTime]::UtcNow -ge $deadline) {
+-                Write-WarningStep "Herdr installed successfully but could not remove a temporary release backup at $Path."
+-                return
+-            }
+-            Start-Sleep -Milliseconds 100
+-        }
+-    }
 -}
 -
 -function Invoke-WithInstallLock {
@@ -67685,11 +67940,6 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -    exit 1
 -}
 -
--if ($Channel -eq "stable") {
--    Write-Error "Windows builds are preview-only for now. Omit -Channel or use -Channel preview."
--    exit 1
--}
--
 -$architecture = [System.Runtime.InteropServices.RuntimeInformation,mscorlib]::OSArchitecture.ToString()
 -switch ($architecture) {
 -    "X64" {
@@ -67704,14 +67954,6 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -    default {
 -        Write-Error "Unsupported Windows architecture: $architecture"
 -        exit 1
--    }
--}
--
--if ([string]::IsNullOrWhiteSpace($ManifestUrl)) {
--    $ManifestUrl = if ($Channel -eq "preview") {
--        "https://herdr.dev/preview.json"
--    } else {
--        "https://herdr.dev/latest.json"
 -    }
 -}
 -
@@ -67748,13 +67990,65 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -    Write-WarningStep "PATH order decides which Herdr runs. This installer will put $visibleBinDir first for future and current PowerShell sessions."
 -}
 -
--Write-Step "Fetching Herdr $Channel manifest"
--$manifest = ConvertTo-ManifestObject -Manifest (Invoke-RestMethod -Uri $ManifestUrl)
--if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and [string]$manifest.build_id -ne $ExpectedBuildId) {
--    throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run herdr update again."
+-if ($useLocalPackage) {
+-    $versionIdentity = $LocalPackageIdentity
+-    $asset = [PSCustomObject]@{
+-        Sha256 = $LocalPackageSha256
+-        Format = $LocalPackageFormat
+-    }
+-} else {
+-    if (-not $channelWasExplicit) {
+-        if (-not [string]::IsNullOrWhiteSpace($existingHerdr)) {
+-            $detectedChannel = [string](& $existingHerdr channel show 2>$null | Select-Object -Last 1)
+-            $detectedChannel = $detectedChannel.Trim()
+-            if ($LASTEXITCODE -ne 0 -or $detectedChannel -notin @("stable", "preview")) {
+-                throw "Could not determine the existing Herdr update channel. Rerun with -Channel stable or -Channel preview."
+-            }
+-            $Channel = $detectedChannel
+-            Write-Step "Preserving existing Herdr $Channel channel"
+-        } elseif (-not [string]::IsNullOrWhiteSpace($ManifestUrl) -and $ManifestUrl -match "/preview\.json$") {
+-            $Channel = "preview"
+-        } else {
+-            $Channel = "stable"
+-        }
+-    }
+-
+-    if ([string]::IsNullOrWhiteSpace($ManifestUrl)) {
+-        $ManifestUrl = if ($Channel -eq "preview") {
+-            "https://herdr.dev/preview.json"
+-        } else {
+-            "https://herdr.dev/latest.json"
+-        }
+-    }
+-
+-    Write-Step "Fetching Herdr $Channel manifest"
+-    $manifest = ConvertTo-ManifestObject -Manifest (Invoke-RestMethod -Uri $ManifestUrl)
+-    $manifestChannelProperty = $manifest.PSObject.Properties["channel"]
+-    if (-not $channelWasExplicit -and $null -ne $manifestChannelProperty -and [string]$manifestChannelProperty.Value -eq "preview") {
+-        $Channel = "preview"
+-    }
+-    $assetsProperty = $manifest.PSObject.Properties["assets"]
+-    $assetProperty = if ($null -eq $assetsProperty) {
+-        $null
+-    } else {
+-        $assetsProperty.Value.PSObject.Properties[$target]
+-    }
+-    if ($null -eq $assetProperty -and
+-        -not $channelWasExplicit -and
+-        $Channel -eq "stable" -and
+-        $ManifestUrl -match "/latest\.json$") {
+-        Write-WarningStep "The stable manifest does not include Windows yet; using preview during the stable-channel rollout."
+-        $Channel = "preview"
+-        $ManifestUrl = $ManifestUrl.Substring(0, $ManifestUrl.Length - "latest.json".Length) + "preview.json"
+-        Write-Step "Fetching Herdr preview manifest"
+-        $manifest = ConvertTo-ManifestObject -Manifest (Invoke-RestMethod -Uri $ManifestUrl)
+-    }
+-    $asset = Get-ManifestAsset -Manifest $manifest -Target $target
+-    if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and [string]$manifest.build_id -ne $ExpectedBuildId) {
+-        throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run herdr update again."
+-    }
+-    $versionIdentity = Resolve-HerdrVersion -Manifest $manifest -SelectedChannel $Channel
 -}
--$versionIdentity = Resolve-HerdrVersion -Manifest $manifest -SelectedChannel $Channel
--$asset = Get-ManifestAsset -Manifest $manifest -Target $target
 -$safeVersionIdentity = $versionIdentity -replace '[^0-9A-Za-z._-]', '-'
 -$releaseName = "$safeVersionIdentity-$targetTriple"
 -$releaseDir = Join-Path $releasesDir $releaseName
@@ -67768,10 +68062,16 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -        Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 -
 -        if (-not (Test-HerdrReleaseComplete -ReleaseDir $releaseDir -Format $asset.Format)) {
--            $downloadPath = Join-Path $tempDir "herdr-download.$($asset.Format)"
+-            $downloadPath = if ($useLocalPackage) {
+-                $LocalPackagePath
+-            } else {
+-                Join-Path $tempDir "herdr-download.$($asset.Format)"
+-            }
 -            $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
--            Write-Step "Downloading Herdr"
--            Invoke-WebRequest -Uri $asset.Url -OutFile $downloadPath
+-            if (-not $useLocalPackage) {
+-                Write-Step "Downloading Herdr"
+-                Invoke-WebRequest -Uri $asset.Url -OutFile $downloadPath
+-            }
 -            Test-FileDigest -Path $downloadPath -ExpectedDigest $asset.Sha256
 -
 -            if ($asset.Format -eq "zip") {
@@ -67791,18 +68091,16 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -            $backupDir = $null
 -            if (Test-Path -LiteralPath $releaseDir) {
 -                $backupDir = Join-Path $releasesDir ".backup.$releaseName.$([System.Guid]::NewGuid().ToString('N'))"
--                Move-Item -LiteralPath $releaseDir -Destination $backupDir
+-                [System.IO.Directory]::Move($releaseDir, $backupDir)
 -            }
 -            try {
--                Move-Item -LiteralPath $stagingDir -Destination $releaseDir
+-                Move-DirectoryWithRetry -Source $stagingDir -Destination $releaseDir
 -            } catch {
 -                if ($null -ne $backupDir -and -not (Test-Path -LiteralPath $releaseDir)) {
--                    Move-Item -LiteralPath $backupDir -Destination $releaseDir
+-                    [System.IO.Directory]::Move($backupDir, $releaseDir)
 -                }
+-                Write-WarningStep "Windows could not activate the downloaded release. Another process may have a package file open, such as antivirus or indexing. No incomplete release was activated. Run herdr update again."
 -                throw
--            }
--            if ($null -ne $backupDir) {
--                Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
 -            }
 -        }
 -
@@ -67812,7 +68110,7 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -            throw "Installed Herdr command failed verification: $releaseHerdr --version"
 -        }
 -        Get-ChildItem -LiteralPath $releasesDir -Force -Directory -Filter ".backup.$releaseName.*" -ErrorAction SilentlyContinue |
--            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+-            ForEach-Object { Remove-DirectoryWithRetry -Path $_.FullName }
 -
 -        Set-ManagedJunction -LinkPath $currentDir -TargetPath $releaseDir -ManagedTargetPrefix $releasesDir
 -        Set-ManagedJunction -LinkPath $visibleBinDir -TargetPath $releaseDir -ManagedTargetPrefix $standaloneRoot -AllowLegacyHerdrBinMigration $allowLegacyVisibleBinMigration
@@ -67853,10 +68151,10 @@ index e5842dc8f54be11f544d574e438ffc73ce3aaac9..00000000000000000000000000000000
 -Write-Step "Future PowerShell windows: open a new PowerShell window and run: herdr"
 -Write-Host "Herdr $versionIdentity installed successfully."
 diff --git a/website/scripts/prepare-docs.mjs b/website/scripts/prepare-docs.mjs
-index a96e2c41af74654234ef54f524958574c4232361..0050a6d4a4b56fcd50f616bebad1c91ed69c7e8d 100644
+index 14d62abc5cb2029260288e363ecf50ea8f0e9f5f..08d8d808d5211f30d717431dc33399724d06a0d4 100644
 --- a/website/scripts/prepare-docs.mjs
 +++ b/website/scripts/prepare-docs.mjs
-@@ -64,7 +64,6 @@ async function preparePublicAssets() {
+@@ -67,7 +67,6 @@ async function preparePublicAssets() {
  
    for (const file of [
      'install.sh',
@@ -67864,197 +68162,6 @@ index a96e2c41af74654234ef54f524958574c4232361..0050a6d4a4b56fcd50f616bebad1c91e
      'agent-guide.md',
      'latest.json',
      'preview.json',
-diff --git a/website/src/content/docs/install.mdx b/website/src/content/docs/install.mdx
-index 19a38e572299ba1cb8fee9f368a5f479eea4a3fd..e0c27478e7b3ca1d0ceffee123f22cfac9063312 100644
---- a/website/src/content/docs/install.mdx
-+++ b/website/src/content/docs/install.mdx
-@@ -13,13 +13,7 @@ On Linux or macOS, run:
- curl -fsSL https://herdr.dev/install.sh | sh
- ```
- 
--On Windows preview beta, install the preview channel:
--
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--The installer downloads the right release binary for your platform and places it on your PATH. Herdr defaults to preview on Windows without changing your config. The installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
-+On Windows, download the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases) and run it. Setup installs for the current user without administrator access, adds `herdr` to the user `PATH`, and registers **Herdr Win** in Installed Apps. It keeps one stable launcher at `%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` and immutable runtime directories for safe updates while sessions are active.
- 
- ## Install with Homebrew
- 
-@@ -92,11 +86,13 @@ mv herdr-linux-x86_64 ~/.local/bin/herdr
- 
- ### Windows beta downloads
- 
--Windows binaries are published only on preview releases while native Windows support is in beta. Use the preview installer above for normal testing, or download the Windows asset from a preview GitHub prerelease:
-+Use the herdr-win setup above for normal testing, or download the matching portable ZIP from the same herdr-win release:
- 
- | System | Asset |
- | --- | --- |
--| Windows x86_64 beta | `herdr-windows-x86_64.exe` |
-+| Windows x86_64 beta | `herdr-win_v<version>_windows_amd64.zip` |
-+
-+The archive contains `herdr.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `herdr.exe`.
- 
- ## Verify
- 
-@@ -118,23 +114,7 @@ herdr update
- 
- `herdr update` is for installs managed by Herdr's own installer. Homebrew, mise, and Nix installs are updated through those package managers instead.
- 
--On Linux and macOS, Herdr uses the stable update channel by default. To opt into preview builds from `master`, set the channel:
--
--```bash
--herdr channel set preview
--```
--
--Switch Linux and macOS direct installs back to stable the same way:
--
--```bash
--herdr channel set stable
--```
--
--For direct installs, changing channels also checks that channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
--
--Preview builds are manually published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
--
--Windows beta builds are preview-only for now. `herdr channel set stable` is rejected on Windows until stable Windows releases are available.
-+The installed distribution owns its update feed. Official Herdr direct installs use official Herdr releases. A herdr-win build uses only the fork's CalVer release feed and cannot be redirected to official Herdr or another channel through config. Homebrew, mise, Nix, and WinGet installs update through their package manager.
- 
- By default, `herdr update` installs the new binary and leaves compatible running sessions alone. If an update changes Herdr's client/server protocol, Herdr asks whether to stop the old server after installing. Stop the old server to use the new version. Stopping exits pane processes. For the default session, run `herdr server stop`, then run `herdr` again. For a named session, run `herdr session stop <name>`, then run `herdr session attach <name>` again.
- 
-diff --git a/website/src/content/docs/ja/install.mdx b/website/src/content/docs/ja/install.mdx
-index 30753259b4aa2caa4d996b34b828ac26f4976be1..04cf3c7c7bc3c204453229587fc64025e973a7d7 100644
---- a/website/src/content/docs/ja/install.mdx
-+++ b/website/src/content/docs/ja/install.mdx
-@@ -13,13 +13,7 @@ Linux または macOS では次を実行します:
- curl -fsSL https://herdr.dev/install.sh | sh
- ```
- 
--Windows プレビューベータでは、プレビューチャンネルをインストールします:
--
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
-+Windows では、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードして実行します。セットアップは管理者権限なしで現在のユーザー向けにインストールし、`herdr` をユーザーの `PATH` に追加して、インストールされているアプリに **Herdr Win** を登録します。安全な更新のため、`%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` に 1 つの安定したランチャーを置き、セッションが実行中の間は不変のランタイムディレクトリを使用します。
- 
- ## Homebrew でインストール
- 
-diff --git a/website/src/content/docs/ja/windows-beta.mdx b/website/src/content/docs/ja/windows-beta.mdx
-index fa526872336a21f22732503b6bccdb6d20b9c2d1..4393a13f857621d07f4c606f358f8f69d772ee3d 100644
---- a/website/src/content/docs/ja/windows-beta.mdx
-+++ b/website/src/content/docs/ja/windows-beta.mdx
-@@ -9,15 +9,9 @@ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モ
- 
- ベータの目的は実際の使用から学ぶことです: インストールの成功率、ペインの信頼性、エージェントのワークフロー、バグの量、不足している機能、そして Windows ユーザーが Herdr から十分な価値を得られているかどうか。そのフィードバックに基づき、Windows 対応は安定版に昇格するか、成熟するまでプレビュー限定のままか、メンテナンスコストに見合わなければ縮小される可能性があります。
- 
--ネイティブ Windows ベータビルドは PowerShell でインストールします:
-+Windows ネイティブベータビルドは、[herdr-win のリリース](https://github.com/hdosys/herdr-win/releases) から最新の `herdr-win_v<version>_windows_amd64_setup.exe` をダウンロードしてインストールします。ユーザー単位の NSIS セットアップは管理者権限を必要とせず、インストールされているアプリに **Herdr Win** を登録し、`%LOCALAPPDATA%\Programs\Herdr\bin` をユーザーの `PATH` に追加します。1 つの安定したランチャーが `%LOCALAPPDATA%\Programs\Herdr\runtime` の不変ランタイムを選択するため、実行中のセッションは新しいランタイムが有効になる前に終了できます。
- 
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--Windows ベータビルドはプレビューチャンネルでのみ提供されます。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
--
--内部ベータテスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。
-+インストール済みの Windows ディストリビューションはフォークの CalVer 更新フィードを所有し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。
- 
- ## ベータでサポート
- 
-@@ -107,7 +101,7 @@ herdr
- 
- このモードでは Herdr はリモートホスト上で動きます。ネイティブ Windows の `herdr --remote` はベータの範囲外です。
- 
--Windows のアップデートは Windows インストーラー経由で行われ、バージョン付きインストールジャンクションを更新します。アップデート後は実行中の Herdr セッションを再起動してください。ライブハンドオフは Unix 専用です。
-+Windows のアップデートは管理対象のセットアップ資産を使います。既存のセッションは現在の不変ランタイムを使い続け、アクティブなリースが終了した後に今後の起動が切り替わります。ライブハンドオフは Unix 専用です。
- 
- ## Windows ベータの問題を報告する
- 
-diff --git a/website/src/content/docs/windows-beta.mdx b/website/src/content/docs/windows-beta.mdx
-index 696a77be41d6669c237afa798b896960081da75d..f09027aeb4531fd8252cffe28de14922cae6bb57 100644
---- a/website/src/content/docs/windows-beta.mdx
-+++ b/website/src/content/docs/windows-beta.mdx
-@@ -9,15 +9,9 @@ Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the
- 
- The goal of the beta is to learn from real use: install success, pane reliability, agent workflows, bug volume, missing features, and whether Windows users are getting enough value from Herdr. Based on that feedback, Windows support may graduate to stable, stay preview-only while it matures, or be reduced if the maintenance cost is not justified.
- 
--Install native Windows beta builds with PowerShell:
-+Install native Windows beta builds by downloading the newest `herdr-win_v<version>_windows_amd64_setup.exe` from the [herdr-win releases](https://github.com/hdosys/herdr-win/releases). The per-user NSIS setup requires no administrator access, registers **Herdr Win** in Installed Apps, and puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user `PATH`. One stable launcher selects immutable runtimes under `%LOCALAPPDATA%\Programs\Herdr\runtime` so active sessions can finish before a newer runtime is activated.
- 
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--Windows beta builds ship only through the preview channel. Herdr defaults to preview on Windows without changing your config. The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
--
--For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest.
-+The installed Windows distribution owns its fork CalVer update feed and cannot be redirected to official Herdr or another channel through config.
- 
- ## Supported in beta
- 
-@@ -107,7 +101,7 @@ herdr
- 
- That mode runs Herdr on the remote host. Native Windows `herdr --remote` is not part of the beta.
- 
--Windows updates run through the Windows installer and update the versioned install junction. Restart running Herdr sessions after updating. Live handoff is Unix-only.
-+Windows updates run through the managed setup asset. Existing sessions keep their current immutable runtime, and future launches switch after active leases exit. Live handoff is Unix-only.
- 
- ## Reporting Windows beta issues
- 
-diff --git a/website/src/content/docs/zh-cn/install.mdx b/website/src/content/docs/zh-cn/install.mdx
-index ccab07d6c4c5debc0b1f545a25e035c5d2a3cdcb..78567cf206b3566fae4ef7bd509191e5c5a86f13 100644
---- a/website/src/content/docs/zh-cn/install.mdx
-+++ b/website/src/content/docs/zh-cn/install.mdx
-@@ -13,13 +13,7 @@ Herdr 为 Linux 和 macOS 提供稳定版二进制文件。Windows 原生支持
- curl -fsSL https://herdr.dev/install.sh | sh
- ```
- 
--在 Windows 预览测试版上,安装预览通道:
--
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--安装器会下载适合你平台的发布二进制文件并放到 PATH 上。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
-+在 Windows 上,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe` 并运行。安装程序无需管理员权限,为当前用户安装,将 `herdr` 添加到用户 `PATH`,并在已安装的应用中注册 **Herdr Win**。为了安全更新,它在 `%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe` 保留一个稳定启动器,并在会话运行期间使用不可变运行时目录。
- 
- ## 用 Homebrew 安装
- 
-diff --git a/website/src/content/docs/zh-cn/windows-beta.mdx b/website/src/content/docs/zh-cn/windows-beta.mdx
-index 5e922c3a56ca289d6833d5fda0d6a26259bd652e..365caa6c17a976c07219ef0a169306423f02474c 100644
---- a/website/src/content/docs/zh-cn/windows-beta.mdx
-+++ b/website/src/content/docs/zh-cn/windows-beta.mdx
-@@ -9,15 +9,9 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不
- 
- 测试版的目标是从真实使用中学习: 安装成功率、窗格可靠性、智能体工作流、bug 数量、缺失的功能,以及 Windows 用户是否从 Herdr 获得了足够的价值。基于这些反馈,Windows 支持可能升级为稳定版,可能在成熟前保持仅预览,也可能在维护成本不合理时被缩减。
- 
--用 PowerShell 安装 Windows 原生测试版构建:
-+安装 Windows 原生测试版时,从 [herdr-win 发布页](https://github.com/hdosys/herdr-win/releases) 下载最新的 `herdr-win_v<version>_windows_amd64_setup.exe`。按用户安装的 NSIS 安装程序无需管理员权限,在已安装的应用中注册 **Herdr Win**,并将 `%LOCALAPPDATA%\Programs\Herdr\bin` 添加到用户 `PATH`。一个稳定启动器会选择 `%LOCALAPPDATA%\Programs\Herdr\runtime` 下的不可变运行时,因此活动会话可以在启用新运行时之前正常结束。
- 
--```powershell
--powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
--```
--
--Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
--
--对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。
-+已安装的 Windows 发行版拥有该分支的 CalVer 更新源,不能通过配置切换到官方 Herdr 或其他通道。
- 
- ## 测试版支持
- 
-@@ -107,7 +101,7 @@ herdr
- 
- 这种模式下 Herdr 运行在远程主机上。Windows 原生的 `herdr --remote` 不在测试版范围内。
- 
--Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
-+Windows 更新使用受管理的安装程序资产。现有会话继续使用当前的不可变运行时,活动租约结束后,后续启动会切换到新运行时。实时交接仅限 Unix。
- 
- ## 报告 Windows 测试版问题
- 
 -- 
 2.55.0.windows.3
 

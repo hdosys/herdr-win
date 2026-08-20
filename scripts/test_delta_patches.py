@@ -221,7 +221,7 @@ class DeltaPatchTests(unittest.TestCase):
             "https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png",
             "https://github.com/hdosys/herdr-win/releases",
             "herdr-win_v<version>_windows_amd64_setup.exe",
-            "has not shipped in a stable release yet",
+            "ships in Herdr v0.8.2",
             "stops running managed Herdr sessions",
             "Upstreamed in Herdr v0.6.9",
             "Herdr v0.8.0 added the modern app-local ConPTY packaging",
@@ -399,14 +399,9 @@ class DeltaPatchTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "the latest stable upstream release selected during the manual refresh",
+            'echo "Release notes: https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/CHANGELOG.md"',
             workflow,
         )
-        self.assertIn(
-            'echo "- Latest stable upstream release: \\`Herdr v${BASE_VERSION}\\`"',
-            workflow,
-        )
-        self.assertIn('echo "- Upstream source: \\`${UPSTREAM_SHA}\\`"', workflow)
         self.assertIn("sha256sum --check \"$checksum\"", workflow)
         release_uploads = workflow.split('gh release create "$tag"', 1)[1].split(
             '--repo "$GITHUB_REPOSITORY"', 1

@@ -36,9 +36,10 @@ tests remain the detailed implementation truth.
   interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
   and owned upstream unless a maintained Windows delta explicitly changes it.
-- The maintained user-visible Windows delta covers terminal fidelity, remote
-  attach/image transport, managed Windows distribution, and truthful OpenCode
-  retry/error lifecycle reporting.
+- The maintained user-visible Windows delta covers terminal fidelity, Windows SSH
+  target provisioning, managed Windows distribution, and truthful OpenCode
+  retry/error lifecycle reporting. Upstream Herdr owns the shared remote client and
+  clipboard/file image bridge.
 
 ## Installation, Update, and Uninstall
 
@@ -174,19 +175,23 @@ tests remain the detailed implementation truth.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at
-  `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. If neither matches, an
+  `%USERPROFILE%\.herdr\remote\herdr.exe`. If neither matches, an
   interactive attach offers to transfer the complete digest-verified Windows
   portable payload into that user's profile without running the managed installer
   or changing `PATH`; an ordinary non-interactive attach never modifies the host.
-  Herdr validates remote configuration before an approved stop, then stages and
-  validates the payload, atomically replaces the stable runtime, removes the
-  transient rollback payload, and starts and verifies the new server. Another
-  active remote Herdr process blocks replacement instead of creating a parallel
-  runtime version.
+  Herdr validates remote configuration and the complete staged payload before an
+  approved stop. It then requires the exclusive runtime lease, removes the old
+  stable payload, promotes staging, and starts and verifies the exact binary,
+  version, and protocol. There is no rollback, legacy discovery, migration,
+  compatibility layout, or parallel runtime version.
   The Windows host's OpenSSH default shell must be `cmd.exe` or PowerShell 7
   (`pwsh.exe`) so the interactive binary stream remains byte-exact. Herdr rejects
   Windows PowerShell 5.1 and unrecognized default shells with a corrective action
   instead of opening a buffered or corrupted terminal.
+  Persistent server launch targets exactly one active desktop session owned by the
+  SSH user and verifies the launched process session. It fails closed when that
+  session is absent or ambiguous and leaves no persistent scheduled task. The
+  server and pane processes remain independent of the initiating SSH channel.
 - `herdr --remote <target> --provision` is the explicit configuration-management
   path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
   runtime, rejects invalid remote configuration before server activation, starts a

@@ -1217,25 +1217,7 @@ jobs:
             done
           }
 
-          {
-            echo "Unofficial herdr-win snapshot built from Herdr v${BASE_VERSION}, the latest stable upstream release selected during the manual refresh, plus the maintained herdr-win delta."
-            echo "Matching Linux and macOS executables are built from that same stable source for cross-platform remote compatibility."
-            echo
-            echo "- herdr-win release: \`v${RELEASE_VERSION}\`"
-            echo "- Latest stable upstream release: \`Herdr v${BASE_VERSION}\`"
-            echo "- Upstream source: \`${UPSTREAM_SHA}\`"
-            echo "- herdr-win control revision: \`${CONTROL_SHA}\`"
-            echo "- Build identity: \`${BUILD_ID}\`"
-            echo
-            echo "Applied patches:"
-            while IFS= read -r patch; do
-              patch="${patch%$'\r'}"
-              [[ -z "$patch" || "$patch" == \#* ]] && continue
-              printf -- '- `%s`\n' "$patch"
-            done < PATCH_SERIES.txt
-            echo
-            echo "The executable and command remain \`herdr\` on every platform. This is not an official upstream release."
-          } > RELEASE_NOTES.md
+          echo "Release notes: https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/CHANGELOG.md" > RELEASE_NOTES.md
 
           release_pages="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
           release_matches="$(jq -c --arg tag "$tag" '[.[][] | select(.tag_name == $tag)]' <<<"$release_pages")"

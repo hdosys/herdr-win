@@ -1,4 +1,4 @@
-From d31d1982b70109c6f12e460a2d81c473a9cd1e0d Mon Sep 17 00:00:00 2001
+From 5146ead7a7d9d36357b64cf3c345a9fbd916e049 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
@@ -6,39 +6,41 @@ Subject: [PATCH 1/5] feat(windows): preserve terminal appearance
 Transport bounded host color and appearance events, keep software and native cursors visible with host and child-selected colors, and follow host appearance for otherwise unconfigured themes.
 ---
  docs/next/CHANGELOG.md                        |   4 +
- docs/next/api/herdr-api.schema.json           |   2 +-
  .../src/content/docs/configuration.mdx        |   2 +-
  .../src/content/docs/ja/configuration.mdx     |   2 +-
  .../src/content/docs/zh-cn/configuration.mdx  |   2 +-
  .../website/src/data/config-reference.json    |   4 +-
  src/app/mod.rs                                |  56 ++-
- src/client/input.rs                           |  98 +++++-
+ src/app/theme_sync.rs                         |   4 +-
+ src/client/input.rs                           |  93 ++++-
  src/client/input/windows_vti.rs               |  88 ++++-
- src/client/mod.rs                             | 212 +++++++++---
+ src/client/mod.rs                             | 215 +++++++++---
  src/config/theme.rs                           |   6 +-
  src/main.rs                                   |   2 +-
  src/pane.rs                                   |   1 +
  src/pane/cursor.rs                            |   1 +
  src/pane/osc.rs                               | 187 +++++++++-
  src/pane/terminal.rs                          | 109 +++++-
- src/platform/windows.rs                       |  36 ++
+ src/platform/fallback.rs                      |   4 -
+ src/platform/linux.rs                         |   4 -
+ src/platform/macos.rs                         |   4 -
+ src/platform/windows.rs                       |  40 ++-
  src/protocol/render_ansi.rs                   | 320 +++++++++++++++++-
- src/protocol/wire.rs                          |  67 +++-
+ src/protocol/wire.rs                          |  63 +++-
  src/raw_input.rs                              | 119 ++++++-
  src/server/client_transport.rs                |   4 +-
  src/server/headless.rs                        |  16 +-
  src/server/render_stream.rs                   |   3 +
  src/terminal_modes.rs                         |  15 +-
- src/terminal_theme.rs                         |  50 ++-
+ src/terminal_theme.rs                         |  53 +--
  src/ui/tab_surface.rs                         |   6 +-
- tests/cli/sessions.rs                         |   6 +-
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 30 files changed, 1284 insertions(+), 164 deletions(-)
+ 32 files changed, 1276 insertions(+), 181 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index da9c9b710258580c0f193f1c95d4065884accc17..9e920e0187d45f3826bafa3417d3172ecefb6447 100644
+index 05f368084241fc56b7f437bd1232edce40f12b0b..4399782d932362f79a99f8aa596aa7728b84d860 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
 @@ -2,6 +2,9 @@
@@ -48,10 +50,10 @@ index da9c9b710258580c0f193f1c95d4065884accc17..9e920e0187d45f3826bafa3417d3172e
 +### Changed
 +- Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
 +
- ## [0.8.0] - 2026-08-03
+ ## [0.8.2] - 2026-08-19
  
  ### Added
-@@ -99,6 +102,7 @@
+@@ -188,6 +191,7 @@
  
  ### Changed
  - Agent commands now accept only a unique live agent name or the pane ID currently hosting that agent. Names are cleared when the occupant exits, is released, or is replaced. The old top-level `wait` commands were replaced by `agent wait` and `pane wait-output`, and `agent send` was replaced by `agent send-keys`.
@@ -59,23 +61,11 @@ index da9c9b710258580c0f193f1c95d4065884accc17..9e920e0187d45f3826bafa3417d3172e
  - The session navigator now uses connected tree glyphs, groups matches by workspace, and automatically selects the first result when a search begins. (#1611)
  
  ### Fixed
-diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
-index 1a91870babc94c54573ddb9d8a9658aee97913a1..4183c2ba0de983e75edaa55b527dac27dffa0d1d 100644
---- a/docs/next/api/herdr-api.schema.json
-+++ b/docs/next/api/herdr-api.schema.json
-@@ -1,6 +1,6 @@
- {
-   "$schema": "https://json-schema.org/draft/2020-12/schema",
--  "protocol": 19,
-+  "protocol": 20,
-   "schema_version": 1,
-   "schemas": {
-     "error_response": {
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
-index 92f5efa0f676c0e7f542d9d9ae820939b7efd1c3..69b2b9ed50a086caa14a1853d5eb50c73764b321 100644
+index 4138c9f5bc9184aafc8af9925f8a5cc208bf042f..68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx
 +++ b/docs/next/website/src/content/docs/configuration.mdx
-@@ -236,7 +236,7 @@ light_name = "catppuccin-latte"
+@@ -256,7 +256,7 @@ light_name = "catppuccin-latte"
  dark_name = "catppuccin"
  ```
  
@@ -85,10 +75,10 @@ index 92f5efa0f676c0e7f542d9d9ae820939b7efd1c3..69b2b9ed50a086caa14a1853d5eb50c7
  You can override individual colors:
  
 diff --git a/docs/next/website/src/content/docs/ja/configuration.mdx b/docs/next/website/src/content/docs/ja/configuration.mdx
-index e2b5ea5e785eb446d74d4c4eec4c2721d743b3e8..dda1629c537c6807c3a903cc22a5601c4dc9c2b0 100644
+index e93c20bde08d464fecd637b9db095d8980922ce0..13bd2d60d64f60acc5cfa6376934a43f1d9a5ac3 100644
 --- a/docs/next/website/src/content/docs/ja/configuration.mdx
 +++ b/docs/next/website/src/content/docs/ja/configuration.mdx
-@@ -232,7 +232,7 @@ light_name = "catppuccin-latte"
+@@ -252,7 +252,7 @@ light_name = "catppuccin-latte"
  dark_name = "catppuccin"
  ```
  
@@ -98,10 +88,10 @@ index e2b5ea5e785eb446d74d4c4eec4c2721d743b3e8..dda1629c537c6807c3a903cc22a5601c
  個々の色を上書きできます:
  
 diff --git a/docs/next/website/src/content/docs/zh-cn/configuration.mdx b/docs/next/website/src/content/docs/zh-cn/configuration.mdx
-index 8b8f6c4dd2db5233a251ab46c422fada36d5399b..237c53b484abb82ecc21052ffc9e68291fbbf86b 100644
+index 97a923a08fd45da8250b270797b35d64f8acce0b..61388bfc419ec120a49c858275ea338737bf2bea 100644
 --- a/docs/next/website/src/content/docs/zh-cn/configuration.mdx
 +++ b/docs/next/website/src/content/docs/zh-cn/configuration.mdx
-@@ -232,7 +232,7 @@ light_name = "catppuccin-latte"
+@@ -252,7 +252,7 @@ light_name = "catppuccin-latte"
  dark_name = "catppuccin"
  ```
  
@@ -111,10 +101,10 @@ index 8b8f6c4dd2db5233a251ab46c422fada36d5399b..237c53b484abb82ecc21052ffc9e6829
  你可以覆盖单个颜色：
  
 diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
-index 5c9911b9d67c22fa1544ea8faf0af2a65c4e89d9..1646a095a31af5fe46c95414fe0f65d716349d54 100644
+index 1765c10fb15e9a19efd9e3a88ea64972a0e5120c..44ac9b00bd28fe8c324c1126678f566b292fab6a 100644
 --- a/docs/next/website/src/data/config-reference.json
 +++ b/docs/next/website/src/data/config-reference.json
-@@ -25,8 +25,8 @@
+@@ -43,8 +43,8 @@
          {
            "key": "theme.auto_switch",
            "type": "boolean",
@@ -126,10 +116,10 @@ index 5c9911b9d67c22fa1544ea8faf0af2a65c4e89d9..1646a095a31af5fe46c95414fe0f65d7
          {
            "key": "theme.dark_name",
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f299620467e 100644
+index 85ad4fa35e1ac561bca8668855c24e5c81e8b662..95f8cf0517fd77b54fa9e60a16e93016486a21a5 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
-@@ -292,17 +292,25 @@ fn theme_runtime_config(
+@@ -309,17 +309,25 @@ fn theme_runtime_config(
      config: &crate::config::Config,
      use_legacy_ui_accent: bool,
  ) -> state::ThemeRuntimeConfig {
@@ -157,7 +147,7 @@ index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f29
          custom: config.theme.custom.clone(),
          legacy_accent: (use_legacy_ui_accent
              && config.ui.accent != "cyan"
-@@ -2673,7 +2681,37 @@ mod tests {
+@@ -2804,7 +2812,37 @@ mod tests {
      }
  
      #[test]
@@ -196,7 +186,7 @@ index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f29
          let mut config = Config::default();
          config.theme.name = Some("tokyo-night".to_string());
          let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-@@ -2686,10 +2724,10 @@ mod tests {
+@@ -2817,10 +2855,10 @@ mod tests {
      }
  
      #[test]
@@ -209,7 +199,7 @@ index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f29
          let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
          let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
  
-@@ -2703,10 +2741,10 @@ mod tests {
+@@ -2834,10 +2872,10 @@ mod tests {
      }
  
      #[test]
@@ -222,7 +212,7 @@ index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f29
          config.theme.custom = Some(crate::config::CustomThemeColors {
              accent: Some("#010203".to_string()),
              ..Default::default()
-@@ -2724,10 +2762,10 @@ mod tests {
+@@ -2855,10 +2893,10 @@ mod tests {
      }
  
      #[test]
@@ -235,26 +225,40 @@ index d049c0f2819a3a7c40ad877a127f40f0f30e5ba3..86757ad7a3964662434990cceb842f29
          let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
          let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
  
+diff --git a/src/app/theme_sync.rs b/src/app/theme_sync.rs
+index 58f95bec7bf8c90825fe18170d167f8468cfef9f..6bf06685df39ab2ff9da263d67d9abfba92dd496 100644
+--- a/src/app/theme_sync.rs
++++ b/src/app/theme_sync.rs
+@@ -13,9 +13,7 @@ impl App {
+     pub(super) fn query_host_terminal_theme(&self) {
+         use std::io::Write;
+ 
+-        let query = crate::terminal_theme::host_terminal_theme_query_sequence(
+-            crate::platform::should_query_host_terminal_palette(),
+-        );
++        let query = crate::terminal_theme::host_terminal_theme_query_sequence();
+         let _ = std::io::stdout().write_all(query.as_bytes());
+         let _ = std::io::stdout().flush();
+     }
 diff --git a/src/client/input.rs b/src/client/input.rs
-index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d2e79dfb7 100644
+index 456f59b51245d7ebdfb4c50f89864cce5a6ecb40..4af56e93307215c0590cf02339b6a1ab5d2d8704 100644
 --- a/src/client/input.rs
 +++ b/src/client/input.rs
-@@ -44,12 +44,8 @@ pub fn stdin_reader_loop(
- ) {
+@@ -48,12 +48,11 @@ pub fn stdin_reader_loop(
      #[cfg(windows)]
      {
--        let _ = (
+         let _ = (
 -            host_color_query_sent,
--            host_cell_size_query_sent,
--            host_mouse_capture_active,
--        );
+             host_cell_size_query_sent,
+             host_mouse_capture_active,
+             host_sgr_pixels_active,
+         );
 -        windows_stdin_reader_loop(event_tx, should_quit);
-+        let _ = (host_cell_size_query_sent, host_mouse_capture_active);
 +        windows_stdin_reader_loop(event_tx, should_quit, host_color_query_sent);
      }
  
      #[cfg(unix)]
-@@ -201,15 +197,21 @@ fn idle_flush_timeout_ms(
+@@ -325,15 +324,21 @@ fn idle_flush_timeout_ms(
  fn windows_stdin_reader_loop(
      event_tx: mpsc::Sender<ClientLoopEvent>,
      should_quit: &Arc<AtomicBool>,
@@ -279,7 +283,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
          }
      }
  }
-@@ -218,8 +220,9 @@ fn windows_stdin_reader_loop(
+@@ -342,8 +347,9 @@ fn windows_stdin_reader_loop(
  fn windows_crossterm_reader_loop(
      event_tx: mpsc::Sender<ClientLoopEvent>,
      should_quit: &Arc<AtomicBool>,
@@ -290,7 +294,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
  
      while !should_quit.load(Ordering::Acquire) {
          match crossterm::event::poll(Duration::from_millis(10)) {
-@@ -256,7 +259,7 @@ fn windows_crossterm_reader_loop(
+@@ -380,7 +386,7 @@ fn windows_crossterm_reader_loop(
  
          if raw_sequence_pending {
              tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
@@ -299,7 +303,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
                  return;
              }
          }
-@@ -305,6 +308,16 @@ fn windows_crossterm_input_event(
+@@ -429,6 +435,16 @@ fn windows_crossterm_input_event(
      }
  }
  
@@ -316,7 +320,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
  #[cfg(windows)]
  fn windows_event_is_control_key(event: &crossterm::event::Event) -> bool {
      use crossterm::event::{Event, KeyModifiers};
-@@ -429,9 +442,13 @@ fn windows_client_input_event_from_raw(
+@@ -553,9 +569,13 @@ fn windows_client_input_event_from_raw(
          crate::raw_input::RawInputEvent::OuterFocusLost => {
              Some(crate::protocol::ClientInputEvent::FocusLost)
          }
@@ -333,7 +337,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
          | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
          | crate::raw_input::RawInputEvent::Unsupported => None,
      }
-@@ -741,6 +758,59 @@ mod windows_tests {
+@@ -913,6 +933,59 @@ mod windows_tests {
          );
      }
  
@@ -394,7 +398,7 @@ index fd374491fe1e21104b1c963da138db99ce82b2ba..c8dfc21f1bbf6b8cb1b8f35ee89c866d
      fn windows_bare_escape_flushes_to_semantic_escape() {
          let mut framer = crate::raw_input::RawInputFramer::default();
 diff --git a/src/client/input/windows_vti.rs b/src/client/input/windows_vti.rs
-index c95cbc43f7b3221315d3dd3a0421d1cb450e9d55..4c06adf588e05950fb92541af0b002612a544827 100644
+index dcf804c1b984dfb607316f965ca0813a77ee45b1..84debf973b43f62eccebd8dd87c0e9b927f0eca0 100644
 --- a/src/client/input/windows_vti.rs
 +++ b/src/client/input/windows_vti.rs
 @@ -16,9 +16,10 @@ pub(super) fn raw_console_reader_loop(
@@ -443,7 +447,7 @@ index c95cbc43f7b3221315d3dd3a0421d1cb450e9d55..4c06adf588e05950fb92541af0b00261
                      let mut output = self.process_raw_events(raw_events);
                      output.extend(events);
                      output
-@@ -1264,6 +1271,79 @@ mod tests {
+@@ -1266,6 +1273,79 @@ mod tests {
          );
      }
  
@@ -524,10 +528,10 @@ index c95cbc43f7b3221315d3dd3a0421d1cb450e9d55..4c06adf588e05950fb92541af0b00261
      fn vti_win32_input_mode_bracketed_paste_key_records_emit_single_paste() {
          let records = win32_input_mode_encoded_key_bytes(
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65085c042d 100644
+index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009b8419613 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
-@@ -47,6 +47,7 @@ use crate::protocol::{
+@@ -50,6 +50,7 @@ use crate::protocol::{
  use crate::server::socket_paths::client_socket_path;
  
  static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
@@ -535,7 +539,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  
  // ---------------------------------------------------------------------------
  // Client state
-@@ -91,6 +92,8 @@ struct ClientState {
+@@ -98,6 +99,8 @@ struct ClientState {
      repaint_pending: bool,
      /// Whether this client draws the cursor into frame cells instead of using the host cursor.
      draw_host_cursor: bool,
@@ -544,7 +548,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  }
  
  #[derive(Debug, Default)]
-@@ -227,6 +230,55 @@ impl ClientState {
+@@ -234,6 +237,55 @@ impl ClientState {
      }
  }
  
@@ -600,7 +604,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  // ---------------------------------------------------------------------------
  // Error types
  // ---------------------------------------------------------------------------
-@@ -352,6 +404,8 @@ fn setup_terminal_with_capabilities(
+@@ -359,6 +411,8 @@ fn setup_terminal_with_capabilities(
      enable_client_protocols: bool,
      mouse_capture: bool,
  ) -> io::Result<TerminalGuard> {
@@ -609,7 +613,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      ratatui::init();
      crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
      let host_color_scheme_reports =
-@@ -369,7 +423,7 @@ fn setup_terminal_with_capabilities(
+@@ -376,7 +430,7 @@ fn setup_terminal_with_capabilities(
          }
          push_keyboard_enhancement_flags()?;
      } else {
@@ -618,10 +622,10 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
              write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
          }
          if mouse_capture {
-@@ -414,19 +468,25 @@ fn setup_terminal_with_capabilities(
-     Ok(TerminalGuard {
+@@ -422,13 +476,18 @@ fn setup_terminal_with_capabilities(
          reset_modify_other_keys: modify_other_keys_mode.is_some(),
          reset_host_color_scheme_reports: host_color_scheme_reports,
+         restored: false,
 +        host_cursor_color: Arc::new(Mutex::new(None)),
          #[cfg(windows)]
 -        restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
@@ -639,14 +643,15 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  }
  
  /// Guard that restores the terminal when dropped.
- struct TerminalGuard {
+@@ -436,6 +495,7 @@ struct TerminalGuard {
      reset_modify_other_keys: bool,
      reset_host_color_scheme_reports: bool,
+     restored: bool,
 +    host_cursor_color: SharedHostCursorColor,
      #[cfg(windows)]
      restore_windows_input_mode: Option<u32>,
  }
-@@ -447,13 +507,28 @@ fn write_host_color_scheme_report_mode(
+@@ -456,13 +516,28 @@ fn write_host_color_scheme_report_mode(
  fn write_terminal_restore_postlude(
      writer: &mut impl io::Write,
      reset_host_color_scheme_reports: bool,
@@ -676,7 +681,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      writer.write_all(b"\x1b[?25h\x1b[0 q")?;
      writer.flush()
  }
-@@ -538,6 +613,20 @@ fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
+@@ -547,6 +622,20 @@ fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
      mode | 0x0200
  }
  
@@ -697,26 +702,21 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  #[cfg(windows)]
  fn restore_windows_input_mode_value(mode: u32) {
      use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-@@ -569,6 +658,7 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
+@@ -583,6 +672,7 @@ fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
  fn restore_terminal_state(
      reset_modify_other_keys: bool,
      reset_host_color_scheme_reports: bool,
 +    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
      #[cfg(windows)] restore_windows_input_mode: Option<u32>,
- ) {
+ ) -> io::Result<()> {
      let _ = clear_received_kitty_graphics(&mut io::stdout());
-@@ -589,18 +679,21 @@ fn restore_terminal_state(
-         DisableMouseCapture
-     );
-     let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
--    #[cfg(windows)]
--    if let Some(mode) = restore_windows_input_mode {
--        restore_windows_input_mode_value(mode);
--    }
--
-     ratatui::restore();
--    let _ = write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
-+    let _ = write_terminal_restore_postlude(
+@@ -609,8 +699,11 @@ fn restore_terminal_state(
+     }
+ 
+     let restore_result = ratatui::try_restore();
+-    let postlude_result =
+-        write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
++    let postlude_result = write_terminal_restore_postlude(
 +        &mut io::stdout(),
 +        reset_host_color_scheme_reports,
 +        host_cursor_color,
@@ -724,19 +724,10 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  
      #[cfg(windows)]
      if windows_vti_input_backend_enabled() && windows_win32_input_mode_enabled() {
-         let _ = disable_windows_win32_input_mode(&mut io::stdout());
-     }
-+    #[cfg(windows)]
-+    if let Some(mode) = restore_windows_input_mode {
-+        restore_windows_input_mode_value(mode);
-+    }
- }
- 
- #[cfg(not(windows))]
-@@ -647,9 +740,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
- 
- impl Drop for TerminalGuard {
-     fn drop(&mut self) {
+@@ -665,9 +758,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
+ impl TerminalGuard {
+     fn restore(mut self) -> io::Result<()> {
+         self.restored = true;
 +        let host_cursor_color = self.host_cursor_color.lock().ok().and_then(|color| *color);
          restore_terminal_state(
              self.reset_modify_other_keys,
@@ -744,8 +735,20 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
 +            host_cursor_color,
              #[cfg(windows)]
              self.restore_windows_input_mode,
-         );
-@@ -1204,13 +1299,16 @@ fn run_client_with_mode(
+         )
+@@ -677,9 +772,11 @@ impl TerminalGuard {
+ impl Drop for TerminalGuard {
+     fn drop(&mut self) {
+         if !self.restored {
++            let host_cursor_color = self.host_cursor_color.lock().ok().and_then(|color| *color);
+             let _ = restore_terminal_state(
+                 self.reset_modify_other_keys,
+                 self.reset_host_color_scheme_reports,
++                host_cursor_color,
+                 #[cfg(windows)]
+                 self.restore_windows_input_mode,
+             );
+@@ -1296,13 +1393,16 @@ fn run_client_with_mode(
      // Install a panic hook to restore the terminal on panic (same as monolithic).
      let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
      let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
@@ -755,14 +758,14 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      let original_hook = std::panic::take_hook();
      std::panic::set_hook(Box::new(move |info| {
 +        let host_cursor_color = panic_host_cursor_color.lock().ok().and_then(|color| *color);
-         restore_terminal_state(
+         let _ = restore_terminal_state(
              panic_resets_modify_other_keys,
              panic_resets_host_color_scheme_reports,
 +            host_cursor_color,
              #[cfg(windows)]
              panic_restore_windows_input_mode,
          );
-@@ -1245,6 +1343,7 @@ fn run_client_with_mode(
+@@ -1337,6 +1437,7 @@ fn run_client_with_mode(
              loop_config,
              negotiated_encoding,
              attach_escape,
@@ -770,7 +773,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
          )
          .await
      });
-@@ -1291,6 +1390,7 @@ async fn run_client_loop(
+@@ -1386,6 +1487,7 @@ async fn run_client_loop(
      config: ClientLoopConfig,
      negotiated_encoding: RenderEncoding,
      attach_escape: Option<AttachEscapeState>,
@@ -778,7 +781,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  ) -> Result<(), ClientError> {
      #[cfg(windows)]
      let _ = config.mouse_scroll_lines;
-@@ -1313,6 +1413,7 @@ async fn run_client_loop(
+@@ -1410,6 +1512,7 @@ async fn run_client_loop(
          redraw_on_focus_gained: config.redraw_on_focus_gained,
          repaint_pending: false,
          draw_host_cursor,
@@ -786,7 +789,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      };
      debug!(?negotiated_encoding, "client render encoding active");
      let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
-@@ -1446,6 +1547,14 @@ async fn run_client_loop(
+@@ -1557,6 +1660,14 @@ async fn run_client_loop(
                      }
                  } else {
                      let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
@@ -801,7 +804,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
                      if crate::raw_input::events_require_host_surface_redraw(
                          &events,
                          state.redraw_on_focus_gained,
-@@ -1513,10 +1622,31 @@ async fn run_client_loop(
+@@ -1621,10 +1732,31 @@ async fn run_client_loop(
                  }
              }
              #[cfg(windows)]
@@ -831,10 +834,10 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
 +                if events.is_empty() {
 +                    continue;
 +                }
-                 let raw_events = events
-                     .iter()
-                     .map(crate::protocol::ClientInputEvent::to_raw_input_event)
-@@ -1527,6 +1657,9 @@ async fn run_client_loop(
+                 if should_bridge_clipboard_image_events(
+                     &events,
+                     is_remote_client,
+@@ -1652,6 +1784,9 @@ async fn run_client_loop(
                  ) {
                      state.request_repaint();
                  }
@@ -844,7 +847,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
                  let msg = ClientMessage::InputEvents { events };
                  if let Err(e) = write_to_server(&mut write_stream, &msg) {
                      return Err(ClientError::ConnectionLost(e));
-@@ -1548,32 +1681,7 @@ async fn run_client_loop(
+@@ -1673,32 +1808,7 @@ async fn run_client_loop(
              }
              ClientLoopEvent::ServerMessage(msg) => match msg {
                  ServerMessage::Frame(frame_data) => {
@@ -878,7 +881,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
                  }
                  ServerMessage::Terminal(frame) => {
                      if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
-@@ -2225,7 +2333,7 @@ fn query_host_terminal_theme() {
+@@ -2567,13 +2677,11 @@ fn query_host_terminal_theme() {
  }
  
  fn should_query_host_terminal_theme() -> bool {
@@ -887,7 +890,26 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
  }
  
  fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
-@@ -2589,8 +2697,8 @@ mod tests {
+-    let query = crate::terminal_theme::host_terminal_theme_query_sequence(
+-        crate::platform::should_query_host_terminal_palette(),
+-    );
++    let query = crate::terminal_theme::host_terminal_theme_query_sequence();
+     writer.write_all(query.as_bytes())?;
+     writer.flush()
+ }
+@@ -3001,10 +3109,7 @@ mod tests {
+         write_host_terminal_theme_query(&mut output).unwrap();
+         assert_eq!(
+             output,
+-            crate::terminal_theme::host_terminal_theme_query_sequence(
+-                crate::platform::should_query_host_terminal_palette(),
+-            )
+-            .as_bytes()
++            crate::terminal_theme::host_terminal_theme_query_sequence().as_bytes()
+         );
+         assert!(!output
+             .windows(crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.len())
+@@ -3038,8 +3143,8 @@ mod tests {
      }
  
      #[test]
@@ -898,7 +920,7 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      }
  
      #[test]
-@@ -2635,20 +2743,36 @@ mod tests {
+@@ -3088,20 +3193,36 @@ mod tests {
      #[test]
      fn terminal_restore_postlude_restores_visible_default_cursor() {
          let mut output = Vec::new();
@@ -940,10 +962,10 @@ index c0fe73d348105e69861e5afb2a9b278dbc982ac5..418598be2b39e45e0838097f71485f65
      }
  
 diff --git a/src/config/theme.rs b/src/config/theme.rs
-index fc601d3f576f7ea10ea9ceba45a15c437788fa6d..1e51c2f9a24099a78b237939800191a46c0eb20c 100644
+index 8f28390c7fead463b0c3ea5d7e98215680adadf4..8a009fa26f1e75dac94db40f3718022f66be33f7 100644
 --- a/src/config/theme.rs
 +++ b/src/config/theme.rs
-@@ -17,7 +17,7 @@ pub struct ThemeConfig {
+@@ -62,7 +62,7 @@ pub struct ThemeConfig {
      /// Built-in theme name. Default: "catppuccin".
      pub name: Option<String>,
      /// Follow host terminal light/dark appearance and switch between theme names.
@@ -952,7 +974,7 @@ index fc601d3f576f7ea10ea9ceba45a15c437788fa6d..1e51c2f9a24099a78b237939800191a4
      /// Theme name used when `auto_switch` selects a dark appearance.
      pub dark_name: Option<String>,
      /// Theme name used when `auto_switch` selects a light appearance.
-@@ -151,7 +151,7 @@ light_name = "catppuccin-latte"
+@@ -252,7 +252,7 @@ light_name = "catppuccin-latte"
  "#;
          let config: Config = toml::from_str(toml).unwrap();
          assert_eq!(config.theme.name.as_deref(), Some("catppuccin"));
@@ -961,7 +983,7 @@ index fc601d3f576f7ea10ea9ceba45a15c437788fa6d..1e51c2f9a24099a78b237939800191a4
          assert_eq!(config.theme.dark_name.as_deref(), Some("tokyo-night"));
          assert_eq!(config.theme.light_name.as_deref(), Some("catppuccin-latte"));
      }
-@@ -180,7 +180,7 @@ red = "rgb(255, 85, 85)"
+@@ -287,7 +287,7 @@ red = "rgb(255, 85, 85)"
      fn theme_defaults_when_missing() {
          let config: Config = toml::from_str("").unwrap();
          assert!(config.theme.name.is_none());
@@ -971,10 +993,10 @@ index fc601d3f576f7ea10ea9ceba45a15c437788fa6d..1e51c2f9a24099a78b237939800191a4
          assert!(config.theme.light_name.is_none());
          assert!(config.theme.custom.is_none());
 diff --git a/src/main.rs b/src/main.rs
-index 27c1d92f0f6e9f9d11557acb50b0612b4148b9b4..14aa78a52ad66fcf353c534e40e433d80c1e9a90 100644
+index 56dbb8df2664d6e7be3db8bc51f90785072c9b89..88b9250cb281871e0c2e96fc8c1b349720a5e724 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -120,7 +120,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+@@ -121,7 +121,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
  # name = "catppuccin"
  
  # Follow host terminal light/dark appearance and switch Herdr UI themes.
@@ -984,10 +1006,10 @@ index 27c1d92f0f6e9f9d11557acb50b0612b4148b9b4..14aa78a52ad66fcf353c534e40e433d8
  # dark_name = "catppuccin"
  # light_name = "catppuccin-latte"
 diff --git a/src/pane.rs b/src/pane.rs
-index 7669fc13cdde1051e7aa0e6477b5bcbcc9dc0fd0..40bfe0699774ef1a50ec8c3dbcc2e35745892913 100644
+index b2e1603ddd4261ee0e4ea8f53bfe817dd357cd5e..7997ff24d25f51f95fafea2db8aac7a627fd534e 100644
 --- a/src/pane.rs
 +++ b/src/pane.rs
-@@ -2593,6 +2593,7 @@ impl PaneRuntime {
+@@ -2734,6 +2734,7 @@ impl PaneRuntime {
              y: area.y + cursor.y,
              visible: cursor.visible,
              shape: cursor.shape,
@@ -1008,7 +1030,7 @@ index c72f697afb9d7d915591ecc1b817560f9b31315d..d1fce5c4908843723bbe265d5e04f47c
      }
  
 diff --git a/src/pane/osc.rs b/src/pane/osc.rs
-index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b528021cb 100644
+index a281af77aeaab7f83a8c4635ce3b04cbc58e34c2..0badb9ca2591c0bb717b5e92b9815d6847ec44e9 100644
 --- a/src/pane/osc.rs
 +++ b/src/pane/osc.rs
 @@ -263,6 +263,7 @@ fn parse_default_color_events(body: &[u8]) -> Vec<DefaultColorEvent> {
@@ -1019,7 +1041,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
          _ => parse_palette_color_query(body),
      };
      if let Some(event) = single {
-@@ -791,13 +792,6 @@ pub(super) fn should_restore_host_terminal_theme(
+@@ -795,13 +796,6 @@ pub(super) fn should_restore_host_terminal_theme(
          && foreground_job_is_shell(foreground_job, shell_pid)
  }
  
@@ -1033,7 +1055,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
  pub(super) fn write_host_terminal_theme_selective(
      terminal: &mut crate::ghostty::Terminal,
      theme: crate::terminal_theme::TerminalTheme,
-@@ -843,23 +837,49 @@ pub(super) fn restore_host_terminal_theme_if_needed(
+@@ -847,23 +841,49 @@ pub(super) fn restore_host_terminal_theme_if_needed(
      let Some(owner_pgid) = core.transient_default_color_owner_pgid else {
          return false;
      };
@@ -1091,7 +1113,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
  }
  
  #[cfg(test)]
-@@ -1233,7 +1253,7 @@ mod tests {
+@@ -1237,7 +1257,7 @@ mod tests {
          let mut tracker = DefaultColorEventTracker::default();
  
          tracker.observe(
@@ -1100,7 +1122,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
          );
  
          assert_eq!(
-@@ -1245,6 +1265,7 @@ mod tests {
+@@ -1249,6 +1269,7 @@ mod tests {
                  DefaultColorEvent::PaletteQuery(0),
                  DefaultColorEvent::Set(DefaultColorQuery::Foreground),
                  DefaultColorEvent::Reset(DefaultColorQuery::Background),
@@ -1108,7 +1130,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
              ]
          );
      }
-@@ -1494,6 +1515,7 @@ mod tests {
+@@ -1498,6 +1519,7 @@ mod tests {
          {
              let mut core = pane.core.lock().unwrap();
              core.transient_default_color_owner_pgid = Some(42);
@@ -1116,7 +1138,7 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
              core.terminal.write(b"\x1b]11;rgb:dd/ee/ff\x1b\\");
          }
          assert_eq!(
-@@ -1519,4 +1541,137 @@ mod tests {
+@@ -1523,4 +1545,137 @@ mod tests {
          assert_eq!(pane_default_theme(&pane).background, host_theme.background);
          assert_eq!(pane_default_theme(&pane).foreground, host_theme.foreground);
      }
@@ -1255,10 +1277,10 @@ index 16ee8feebce50e801938334ac2d09e894ced610f..2dee452cbf2661e378a64a7513ab890b
 +    }
  }
 diff --git a/src/pane/terminal.rs b/src/pane/terminal.rs
-index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e303b6cd3a4 100644
+index 0b06302e953d027c68eccc5a86a4b2693e7c6f03..cd8eb2c4150d4019f3014882e7014094b63f6dc0 100644
 --- a/src/pane/terminal.rs
 +++ b/src/pane/terminal.rs
-@@ -82,6 +82,8 @@ pub struct TerminalCursorState {
+@@ -87,6 +87,8 @@ pub struct TerminalCursorState {
      pub visible: bool,
      /// DECSCUSR parameter (0–6). 0 means terminal default.
      pub shape: u8,
@@ -1267,7 +1289,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
  }
  
  #[derive(Debug, Clone, PartialEq, Eq)]
-@@ -173,6 +175,7 @@ pub(crate) struct GhosttyPaneCore {
+@@ -182,6 +184,7 @@ pub(crate) struct GhosttyPaneCore {
      pub default_color_event_tracker: DefaultColorEventTracker,
      pub child_default_foreground_changed: bool,
      pub child_default_background_changed: bool,
@@ -1275,7 +1297,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      pub osc_debug_tracker: OscDebugTracker,
      pub agent_osc_state: AgentOscStateTracker,
      pub xtgettcap_query_tracker: XtgettcapQueryTracker,
-@@ -951,6 +954,7 @@ impl GhosttyPaneTerminal {
+@@ -1059,6 +1062,7 @@ impl GhosttyPaneTerminal {
                  default_color_event_tracker: DefaultColorEventTracker::default(),
                  child_default_foreground_changed: false,
                  child_default_background_changed: false,
@@ -1283,7 +1305,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
                  osc_debug_tracker: OscDebugTracker::default(),
                  agent_osc_state: AgentOscStateTracker::default(),
                  xtgettcap_query_tracker: XtgettcapQueryTracker::default(),
-@@ -974,7 +978,7 @@ impl GhosttyPaneTerminal {
+@@ -1082,7 +1086,7 @@ impl GhosttyPaneTerminal {
              let foreground_unowned = !core.child_default_foreground_changed;
              let background_unowned = !core.child_default_background_changed;
              core.host_terminal_theme = theme;
@@ -1292,7 +1314,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
                  core.transient_default_color_owner_pgid = None;
              }
  
-@@ -1316,7 +1320,10 @@ impl GhosttyPaneTerminal {
+@@ -1430,7 +1434,10 @@ impl GhosttyPaneTerminal {
              terminal_responses.extend(libghostty_responses);
          }
  
@@ -1304,7 +1326,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
              core.transient_default_color_owner_pgid = None;
          }
      }
-@@ -1919,6 +1926,7 @@ impl GhosttyPaneTerminal {
+@@ -2119,6 +2126,7 @@ impl GhosttyPaneTerminal {
          let host_theme = core.host_terminal_theme;
          let initial_default_foreground = core.initial_default_foreground;
          let initial_default_background = core.initial_default_background;
@@ -1312,7 +1334,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
          let GhosttyPaneCore {
              terminal,
              render_state,
-@@ -2008,7 +2016,8 @@ impl GhosttyPaneTerminal {
+@@ -2212,7 +2220,8 @@ impl GhosttyPaneTerminal {
  
          ghostty_clear_render_dirty(render_state, area.height);
  
@@ -1322,7 +1344,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
          if show_cursor {
              if let Some(cursor) =
                  effective_cursor_state(&mut core, current_cursor).filter(|cursor| cursor.visible)
-@@ -2082,7 +2091,15 @@ fn render_delay_after_pty_write(
+@@ -2286,7 +2295,15 @@ fn render_delay_after_pty_write(
      }
  }
  
@@ -1338,7 +1360,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      let GhosttyPaneCore {
          terminal,
          render_state,
-@@ -2090,12 +2107,13 @@ fn current_cursor_state(core: &mut GhosttyPaneCore) -> Option<TerminalCursorStat
+@@ -2294,12 +2311,13 @@ fn current_cursor_state(core: &mut GhosttyPaneCore) -> Option<TerminalCursorStat
          ..
      } = core;
      render_state.update(terminal).ok()?;
@@ -1353,7 +1375,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
  ) -> Option<TerminalCursorState> {
      let cursor = render_state.cursor_viewport().ok()??;
      let shape = if decscusr_tracker.cursor_shape_overridden() {
-@@ -2113,6 +2131,7 @@ fn cursor_state_from_render_state(
+@@ -2317,6 +2335,7 @@ fn cursor_state_from_render_state(
          y: cursor.y,
          visible: render_state.cursor_visible().ok()?,
          shape,
@@ -1361,7 +1383,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      })
  }
  
-@@ -2858,7 +2877,14 @@ fn respond_to_default_color_event(
+@@ -3086,7 +3105,14 @@ fn respond_to_default_color_event(
              default_color_event_response(core, event)
          }
          DefaultColorEvent::Set(query) => {
@@ -1377,7 +1399,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
              None
          }
          DefaultColorEvent::Reset(query) => {
-@@ -2971,7 +2997,7 @@ fn mark_child_default_color_changed(
+@@ -3199,7 +3225,7 @@ fn mark_child_default_color_changed(
      match query {
          DefaultColorQuery::Foreground => core.child_default_foreground_changed = changed,
          DefaultColorQuery::Background => core.child_default_background_changed = changed,
@@ -1386,7 +1408,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      }
  }
  
-@@ -3060,7 +3086,14 @@ fn contains_kitty_graphics_sequence(bytes: &[u8]) -> bool {
+@@ -3323,7 +3349,14 @@ fn contains_kitty_graphics_sequence(bytes: &[u8]) -> bool {
  }
  
  fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -> bool {
@@ -1402,7 +1424,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
          return false;
      }
  
-@@ -3757,6 +3790,7 @@ mod tests {
+@@ -4204,6 +4237,7 @@ mod tests {
          {
              let mut core = pane.core.lock().unwrap();
              core.transient_default_color_owner_pgid = Some(42);
@@ -1410,7 +1432,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
              core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
                  foreground: Some(crate::terminal_theme::RgbColor {
                      r: 0xaa,
-@@ -3784,6 +3818,7 @@ mod tests {
+@@ -4231,6 +4265,7 @@ mod tests {
          {
              let mut core = pane.core.lock().unwrap();
              core.transient_default_color_owner_pgid = Some(42);
@@ -1418,7 +1440,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
              core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
                  foreground: Some(crate::terminal_theme::RgbColor {
                      r: 0xaa,
-@@ -3803,6 +3838,21 @@ mod tests {
+@@ -4250,6 +4285,21 @@ mod tests {
          assert!(should_probe_host_terminal_theme_restore(&core));
      }
  
@@ -1440,7 +1462,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      #[test]
      fn ghostty_render_can_suppress_cursor_position() {
          let (tx, _rx) = mpsc::channel(4);
-@@ -5256,6 +5306,29 @@ mod tests {
+@@ -5859,6 +5909,29 @@ mod tests {
          assert!(rx.try_recv().is_err());
      }
  
@@ -1470,7 +1492,7 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      #[test]
      fn child_default_color_reset_restores_cached_host_color() {
          let (tx, mut rx) = mpsc::channel(4);
-@@ -5755,6 +5828,28 @@ mod tests {
+@@ -6358,6 +6431,28 @@ mod tests {
          assert!(core.child_default_background_changed);
      }
  
@@ -1499,11 +1521,56 @@ index b90c63f13ed3fe1129d6668ed38f1988142fc3b2..23f59ac4758f1f4f9f498d25e1804e30
      #[test]
      fn process_pty_bytes_returns_cursor_color_query_response_from_foreground_fallback() {
          let (tx, mut rx) = mpsc::channel(4);
+diff --git a/src/platform/fallback.rs b/src/platform/fallback.rs
+index cdfbc1571ab038937ddd51be21e51ed85c375a95..b6b6575fee9c76dbc55f4472105880c45af12587 100644
+--- a/src/platform/fallback.rs
++++ b/src/platform/fallback.rs
+@@ -89,10 +89,6 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+     false
+ }
+ 
+-pub(crate) fn should_query_host_terminal_palette() -> bool {
+-    false
+-}
+-
+ pub(crate) fn hostname() -> Option<String> {
+     None
+ }
+diff --git a/src/platform/linux.rs b/src/platform/linux.rs
+index b5c332591afce8c83f48e711b8b31cb3934282c3..04737d1e563ac125c56fb801c067d2b31208a477 100644
+--- a/src/platform/linux.rs
++++ b/src/platform/linux.rs
+@@ -41,10 +41,6 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+     running_inside_wsl()
+ }
+ 
+-pub(crate) fn should_query_host_terminal_palette() -> bool {
+-    !running_inside_wsl()
+-}
+-
+ fn running_inside_wsl() -> bool {
+     proc_file_indicates_wsl("/proc/sys/kernel/osrelease")
+         || proc_file_indicates_wsl("/proc/version")
+diff --git a/src/platform/macos.rs b/src/platform/macos.rs
+index 00fd245278a5957b800892b14a47e0496c411516..1fef08fe6f4badbcf1238cc6deb53b171e31b651 100644
+--- a/src/platform/macos.rs
++++ b/src/platform/macos.rs
+@@ -26,10 +26,6 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+     false
+ }
+ 
+-pub(crate) fn should_query_host_terminal_palette() -> bool {
+-    true
+-}
+-
+ fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
+     vec!["/bin/sh".into(), flag.into(), command.into()]
+ }
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 55e0fd0b521eb283cbe361178730078db6d7e1fa..16a8938cdeac07c71c9deaf482ecd47422905e80 100644
+index 7aee384ede2f070302a83edb2c7c5d05c0978022..4fef3251a66798edd21172971cdf2a5a87d1aa5c 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
-@@ -87,6 +87,15 @@ static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>
+@@ -212,6 +212,15 @@ pub(crate) fn remote_reattach_argument(value: &str) -> String {
  pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
      use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
  
@@ -1519,7 +1586,18 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..16a8938cdeac07c71c9deaf482ecd474
      let (virtual_key_code, virtual_scan_code, unicode, control_key_state) =
          if let Some(record) = key.windows_record() {
              (
-@@ -1814,6 +1823,33 @@ mod tests {
+@@ -362,10 +371,6 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+     true
+ }
+ 
+-pub(crate) fn should_query_host_terminal_palette() -> bool {
+-    false
+-}
+-
+ /// The machine's node name, as shown by tmux's `#h`.
+ pub(crate) fn hostname() -> Option<String> {
+     std::env::var("COMPUTERNAME")
+@@ -2563,6 +2568,33 @@ mod tests {
          );
      }
  
@@ -1554,7 +1632,7 @@ index 55e0fd0b521eb283cbe361178730078db6d7e1fa..16a8938cdeac07c71c9deaf482ecd474
      fn windows_conpty_native_encoder_preserves_semantic_escape_fallback() {
          let escape = crate::input::TerminalKey::new(
 diff --git a/src/protocol/render_ansi.rs b/src/protocol/render_ansi.rs
-index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b932c752b 100644
+index 97685d4d88336917832ba50d513da89f3ef4a805..f9869d658524d564eabac8c55a067e64ee8b81a1 100644
 --- a/src/protocol/render_ansi.rs
 +++ b/src/protocol/render_ansi.rs
 @@ -21,6 +21,7 @@
@@ -1742,7 +1820,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
  #[derive(Clone, Copy, Default)]
  struct ProfBlitStats {
      scanned_cells: u64,
-@@ -1034,6 +1147,7 @@ mod tests {
+@@ -1057,6 +1170,7 @@ mod tests {
                  y: 1,
                  visible: true,
                  shape: 0,
@@ -1750,7 +1828,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1101,6 +1215,7 @@ mod tests {
+@@ -1124,6 +1238,7 @@ mod tests {
                  y: 1,
                  visible: true,
                  shape: 0,
@@ -1758,7 +1836,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1141,6 +1256,7 @@ mod tests {
+@@ -1164,6 +1279,7 @@ mod tests {
                  y: 1,
                  visible: true,
                  shape: 0,
@@ -1766,7 +1844,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1181,11 +1297,12 @@ mod tests {
+@@ -1204,11 +1320,12 @@ mod tests {
                  y: 1,
                  visible: true,
                  shape: 6,
@@ -1780,7 +1858,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
  
          assert_eq!(drawn.cells[5].modifier, REVERSED_MODIFIER);
          assert_eq!(frame.cells[5].modifier, 0);
-@@ -1207,6 +1324,189 @@ mod tests {
+@@ -1230,6 +1347,189 @@ mod tests {
          );
      }
  
@@ -1970,7 +2048,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
      #[test]
      fn drawn_cursor_ignores_hidden_cursor() {
          let frame = FrameData {
-@@ -1218,12 +1518,13 @@ mod tests {
+@@ -1241,12 +1541,13 @@ mod tests {
                  y: 0,
                  visible: false,
                  shape: 0,
@@ -1985,7 +2063,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
      }
  
      #[test]
-@@ -1237,6 +1538,7 @@ mod tests {
+@@ -1260,6 +1561,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 6,
@@ -1993,7 +2071,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1284,6 +1586,7 @@ mod tests {
+@@ -1307,6 +1609,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 0,
@@ -2001,7 +2079,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1297,6 +1600,7 @@ mod tests {
+@@ -1320,6 +1623,7 @@ mod tests {
                  y: 1,
                  visible: false,
                  shape: 0,
@@ -2009,7 +2087,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1532,6 +1836,7 @@ mod tests {
+@@ -1555,6 +1859,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 0,
@@ -2017,7 +2095,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1558,6 +1863,7 @@ mod tests {
+@@ -1581,6 +1886,7 @@ mod tests {
                  y: 0,
                  visible: false,
                  shape: 0,
@@ -2025,7 +2103,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1606,6 +1912,7 @@ mod tests {
+@@ -1629,6 +1935,7 @@ mod tests {
                  y: 0,
                  visible: false,
                  shape: 0,
@@ -2033,7 +2111,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1628,6 +1935,7 @@ mod tests {
+@@ -1651,6 +1958,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 0,
@@ -2041,7 +2119,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1657,6 +1965,7 @@ mod tests {
+@@ -1680,6 +1988,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 0,
@@ -2049,7 +2127,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1668,6 +1977,7 @@ mod tests {
+@@ -1691,6 +2000,7 @@ mod tests {
              y: 2,
              visible: true,
              shape: 0,
@@ -2057,7 +2135,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
          });
  
          let mut output = Vec::new();
-@@ -1697,6 +2007,7 @@ mod tests {
+@@ -1720,6 +2030,7 @@ mod tests {
                  y: 1,
                  visible: true,
                  shape: 0,
@@ -2065,7 +2143,7 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1782,6 +2093,7 @@ mod tests {
+@@ -1805,6 +2116,7 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 0,
@@ -2074,19 +2152,10 @@ index 6cee4fdea0e08ee660a3bc12d38e9364d26c4696..d06abe5ec5ed60b8e35d28913484292b
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
 diff --git a/src/protocol/wire.rs b/src/protocol/wire.rs
-index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e38cef1c88 100644
+index 4a445361f5fdb24c7485643bfea654450118f5e6..e52ceeb992393b74dfe559e3df816bfd3bf0777b 100644
 --- a/src/protocol/wire.rs
 +++ b/src/protocol/wire.rs
-@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
- // ---------------------------------------------------------------------------
- 
- /// Current protocol version. Bumped when wire format changes incompatibly.
--pub const PROTOCOL_VERSION: u32 = 19;
-+pub const PROTOCOL_VERSION: u32 = 20;
- 
- /// Maximum allowed frame payload size (2 MB). Frames larger than this are
- /// rejected to prevent denial-of-service via oversized length prefixes.
-@@ -131,6 +131,11 @@ pub enum ClientInputEvent {
+@@ -133,6 +133,11 @@ pub enum ClientInputEvent {
      },
      FocusGained,
      FocusLost,
@@ -2098,7 +2167,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
  }
  
  #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-@@ -332,6 +337,15 @@ impl ClientInputEvent {
+@@ -334,6 +339,15 @@ impl ClientInputEvent {
              Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
              Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
              Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
@@ -2114,7 +2183,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
          }
      }
  }
-@@ -499,6 +513,9 @@ pub struct CursorState {
+@@ -520,6 +534,9 @@ pub struct CursorState {
      /// Cursor shape as a DECSCUSR parameter.
      #[serde(default)]
      pub shape: CursorShapeParam,
@@ -2124,7 +2193,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
  }
  
  /// A rendered frame to be displayed by the client.
-@@ -1139,16 +1156,27 @@ mod tests {
+@@ -1181,6 +1198,17 @@ mod tests {
                      row: 4,
                      modifiers: 0,
                  },
@@ -2142,8 +2211,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
              ],
          };
          let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
--        // Freeze the protocol 19 input envelope before it is published.
-+        // Freeze the protocol 20 input envelope before it is published.
+@@ -1188,9 +1216,9 @@ mod tests {
          assert_eq!(
              encoded,
              vec![
@@ -2155,7 +2223,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
              ]
          );
          let (decoded, _): (ClientMessage, _) =
-@@ -1227,6 +1255,30 @@ mod tests {
+@@ -1269,6 +1297,30 @@ mod tests {
              }
              other => panic!("expected backspace key event, got {other:?}"),
          }
@@ -2186,7 +2254,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
      }
  
      #[test]
-@@ -1421,6 +1473,11 @@ mod tests {
+@@ -1463,6 +1515,11 @@ mod tests {
                  y: 0,
                  visible: true,
                  shape: 6,
@@ -2198,7 +2266,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
              }),
              hyperlinks: vec!["https://example.com".to_owned()],
              graphics: Vec::new(),
-@@ -1606,6 +1663,7 @@ mod tests {
+@@ -1698,6 +1755,7 @@ mod tests {
                  y: 5,
                  visible: true,
                  shape: 0,
@@ -2206,7 +2274,7 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
              }),
              hyperlinks: Vec::new(),
              graphics: Vec::new(),
-@@ -1889,6 +1947,7 @@ mod tests {
+@@ -1981,6 +2039,7 @@ mod tests {
              y: 0,
              visible: true,
              shape: 0,
@@ -2215,10 +2283,10 @@ index 655f47cb448944504a08319bf5b582948f4a6965..e601e0f90204175f02fae2b6319174e3
          let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
  
 diff --git a/src/raw_input.rs b/src/raw_input.rs
-index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28de246c455 100644
+index 510768fc92031ba062d5fd2f2a2a48e508b25382..b199acc13bfa53b0d2fd6966351b2fa76213c112 100644
 --- a/src/raw_input.rs
 +++ b/src/raw_input.rs
-@@ -189,6 +189,11 @@ impl RawInputFramer {
+@@ -194,6 +194,11 @@ impl RawInputFramer {
          Self::events_from_chunks(self.byte_framer.flush_timeout())
      }
  
@@ -2230,12 +2298,13 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
      fn events_from_chunks(chunks: Vec<Vec<u8>>) -> Vec<RawInputEvent> {
          chunks
              .into_iter()
-@@ -217,14 +222,16 @@ pub(crate) struct RawInputByteFramer {
-     host_color_replies_awaited: u16,
+@@ -223,15 +228,17 @@ pub(crate) struct RawInputByteFramer {
      host_cell_size_replies_awaited: u16,
+     host_appearance_reply_awaited: bool,
      held_pending_host_reply_esc: bool,
 +    held_incomplete_default_color_response: bool,
      host_color_scheme_change_tracking: bool,
+     host_appearance_query_on_focus: bool,
      split_coalesced_escape: bool,
  }
  
@@ -2248,7 +2317,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
  
  impl RawInputByteFramer {
      pub(crate) fn for_host_input() -> Self {
-@@ -241,15 +248,19 @@ impl RawInputByteFramer {
+@@ -248,15 +255,19 @@ impl RawInputByteFramer {
      }
  
      pub(crate) fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
@@ -2268,8 +2337,8 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
 +        self.held_incomplete_default_color_response = false;
      }
  
-     /// Same hold window as `host_color_query_sent`, for the XTWINOPS cell size
-@@ -357,6 +368,20 @@ impl RawInputByteFramer {
+     fn host_appearance_query_sent(&mut self) {
+@@ -379,6 +390,20 @@ impl RawInputByteFramer {
          }
  
          if starts_with_incomplete_default_color_response(&self.buffer) {
@@ -2290,7 +2359,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
              tracing::trace!(
                  len = self.buffer.len(),
                  "waiting for host color response terminator"
-@@ -453,9 +478,29 @@ impl RawInputByteFramer {
+@@ -489,9 +514,29 @@ impl RawInputByteFramer {
          tracing::debug!(bytes = ?self.buffer, "dropping incomplete raw input buffer after timeout");
          self.lone_escape_recently_flushed = false;
          self.buffer.clear();
@@ -2320,7 +2389,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
      fn drain_available_chunks(&mut self) -> Vec<Vec<u8>> {
          let mut chunks = Vec::new();
  
-@@ -513,10 +558,7 @@ impl RawInputByteFramer {
+@@ -549,10 +594,7 @@ impl RawInputByteFramer {
              let Some((event, consumed)) = extract_one_event(&self.buffer) else {
                  break;
              };
@@ -2332,23 +2401,23 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
                  self.host_color_replies_awaited = self.host_color_replies_awaited.saturating_sub(1);
              } else if matches!(event, RawInputEvent::HostCellSizeReport { .. }) {
                  self.host_cell_size_replies_awaited =
-@@ -527,6 +569,7 @@ impl RawInputByteFramer {
-                 self.host_color_query_sent();
+@@ -568,6 +610,7 @@ impl RawInputByteFramer {
+                 }
              }
              self.held_pending_host_reply_esc = false;
 +            self.held_incomplete_default_color_response = false;
              chunks.push(self.buffer[..consumed].to_vec());
              self.buffer.drain(..consumed);
          }
-@@ -578,7 +621,6 @@ pub(crate) fn events_require_host_surface_redraw(
-             .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
+@@ -626,7 +669,6 @@ pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEv
+         .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
  }
  
 -#[cfg(any(not(windows), test))]
  pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
      events
          .iter()
-@@ -891,7 +933,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
+@@ -947,7 +989,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
          Some(ControlString::Incomplete {
              family: ControlStringFamily::Osc
          })
@@ -2360,7 +2429,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
  }
  
  fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
-@@ -1454,6 +1499,25 @@ mod tests {
+@@ -1563,6 +1608,25 @@ mod tests {
          );
      }
  
@@ -2386,7 +2455,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
      #[test]
      fn parses_legacy_up_arrow() {
          let (RawInputEvent::Key(key), consumed) = extract_one_event(b"\x1b[A").unwrap() else {
-@@ -2813,9 +2877,38 @@ mod tests {
+@@ -3067,9 +3131,38 @@ mod tests {
  
          assert!(framer.push(b"\x1b").is_empty());
          assert!(framer.flush_timeout().is_empty());
@@ -2425,7 +2494,7 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
      #[test]
      fn flushes_lone_escape_when_not_awaiting_host_color_reply() {
          let mut framer = RawInputByteFramer::default();
-@@ -2838,18 +2931,12 @@ mod tests {
+@@ -3092,18 +3185,12 @@ mod tests {
  
      #[test]
      fn stops_holding_lone_escape_after_host_color_reply_completes() {
@@ -2447,10 +2516,10 @@ index 5bd57719162d2698f90f676dedfa4cfe65a94c56..8d7b902ad6d041ea2063eccaa7afd28d
          // Window closed: a later lone Escape flushes immediately.
          assert!(framer.push(b"\x1b").is_empty());
 diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
-index 2675b4c30312cd0096e8d4b6e8083fc07033f577..ec41ec13afba50ef17509527249d39a0b5810e72 100644
+index f1237c89072e1ee596ad309bdb203684c796f01f..63403a485ea4a35e8b45bda03abbfc5e2bc8f871 100644
 --- a/src/server/client_transport.rs
 +++ b/src/server/client_transport.rs
-@@ -420,7 +420,9 @@ fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
+@@ -463,7 +463,9 @@ fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
              }
              ClientInputEvent::Mouse { .. }
              | ClientInputEvent::FocusGained
@@ -2462,10 +2531,10 @@ index 2675b4c30312cd0096e8d4b6e8083fc07033f577..ec41ec13afba50ef17509527249d39a0
      }
  
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413539fb56b 100644
+index 9161cd340983e90725c03941a1ad8c52820a5d07..75dc52320d8a321bcd4fd685d6eea43ec77f0afc 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -6802,10 +6802,9 @@ next_tab = ""
+@@ -7668,10 +7668,9 @@ next_tab = ""
          let mut state = AppState::test_new();
          let mut ws = crate::workspace::Workspace::test_new("test");
          let pane_id = ws.tabs[0].root_pane;
@@ -2479,7 +2548,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
  
          state.workspaces = vec![ws];
          state.active = Some(0);
-@@ -6829,6 +6828,11 @@ next_tab = ""
+@@ -7695,6 +7694,11 @@ next_tab = ""
                  y: pane.inner_rect.y,
                  visible: true,
                  shape: cursor.as_ref().map(|c| c.shape).unwrap_or(0),
@@ -2491,7 +2560,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
              })
          );
      }
-@@ -6865,6 +6869,7 @@ next_tab = ""
+@@ -7731,6 +7735,7 @@ next_tab = ""
                  y: pane.inner_rect.y,
                  visible: false,
                  shape: cursor.as_ref().map(|c| c.shape).unwrap_or(0),
@@ -2499,7 +2568,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
              })
          );
      }
-@@ -6966,6 +6971,7 @@ next_tab = ""
+@@ -7832,6 +7837,7 @@ next_tab = ""
                  y: pane.inner_rect.y,
                  visible: true,
                  shape: state.cjk_ime_cursor_shape,
@@ -2507,7 +2576,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
              })
          );
      }
-@@ -7043,6 +7049,7 @@ next_tab = ""
+@@ -7909,6 +7915,7 @@ next_tab = ""
                  y: pane.inner_rect.y,
                  visible: true,
                  shape: state.cjk_ime_cursor_shape,
@@ -2515,7 +2584,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
              }),
              "fallback should anchor at pane top-left with the configured shape",
          );
-@@ -9031,6 +9038,7 @@ next_tab = ""
+@@ -10026,6 +10033,7 @@ next_tab = ""
                  y: expected.y,
                  visible: expected.visible,
                  shape: expected.shape,
@@ -2524,7 +2593,7 @@ index f72d1a94efda67f7c5704abf99729bc81cdb9be6..30d1e3a5e7a392f8a9b6515654c03413
          );
      }
 diff --git a/src/server/render_stream.rs b/src/server/render_stream.rs
-index f1f6c428d6627ec050334d5ad82aacaacdbdb038..8253a4ba95a3cbfb91ec1a45b68aa74bc19f94ca 100644
+index f14deb5e7e2f3183410020e5f36f7fb11dda6780..e615402fe2ce34f9adf0e2f8bdaba309940c1be3 100644
 --- a/src/server/render_stream.rs
 +++ b/src/server/render_stream.rs
 @@ -220,6 +220,7 @@ impl CursorTrackingBackend {
@@ -2552,12 +2621,13 @@ index f1f6c428d6627ec050334d5ad82aacaacdbdb038..8253a4ba95a3cbfb91ec1a45b68aa74b
          .or_else(|| {
              (!suppress_cursor)
 diff --git a/src/terminal_modes.rs b/src/terminal_modes.rs
-index 8f0276e00d272e1e7694ca40b85b8ab6f6b21699..43888ee82643aa8edd29d06e93375d70fb3c00e0 100644
+index 5b6a5d3bbd0a0d135455a035c7357d64baeeca76..084174eb684e8b4e3b526fab9a950142be841e02 100644
 --- a/src/terminal_modes.rs
 +++ b/src/terminal_modes.rs
-@@ -1,20 +1,13 @@
- use std::io::{self, Write};
+@@ -2,21 +2,14 @@ use std::io::{self, Write};
  
+ #[cfg(not(windows))]
+ use crossterm::event::{PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 -#[cfg(any(not(windows), test))]
  const DISABLE_HOST_MOUSE_REPORTING_SEQUENCE: &[u8] =
 -    b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
@@ -2577,7 +2647,7 @@ index 8f0276e00d272e1e7694ca40b85b8ab6f6b21699..43888ee82643aa8edd29d06e93375d70
  #[cfg(not(windows))]
  pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
      writer: &mut W,
-@@ -52,9 +45,11 @@ mod tests {
+@@ -64,9 +57,11 @@ mod tests {
  
      #[test]
      fn clears_all_known_host_mouse_modes() {
@@ -2592,7 +2662,7 @@ index 8f0276e00d272e1e7694ca40b85b8ab6f6b21699..43888ee82643aa8edd29d06e93375d70
                  sequence.contains(&format!("\x1b[?{mode}l")),
                  "missing mouse mode {mode}"
 diff --git a/src/terminal_theme.rs b/src/terminal_theme.rs
-index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622ac03dffd4 100644
+index 2460731e2f9d76a8883494cfe2a9854e09cb498e..555e9f3ad1e4f30090775ef88349eaa133bb9e4b 100644
 --- a/src/terminal_theme.rs
 +++ b/src/terminal_theme.rs
 @@ -1,11 +1,11 @@
@@ -2623,10 +2693,10 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
  
 -pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
 +pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\";
+ #[cfg(any(not(windows), test))]
+ pub const HOST_COLOR_SCHEME_QUERY_SEQUENCE: &str = "\x1b[?996n";
  pub const HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE: &str = "\x1b[?2031h";
- pub const HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE: &str = "\x1b[?2031l";
- 
-@@ -63,6 +64,7 @@ impl TerminalTheme {
+@@ -65,6 +66,7 @@ impl TerminalTheme {
          match kind {
              DefaultColorKind::Foreground => self.foreground = Some(color),
              DefaultColorKind::Background => self.background = Some(color),
@@ -2634,16 +2704,18 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
          }
          self
      }
-@@ -77,14 +79,8 @@ impl TerminalTheme {
+@@ -79,16 +81,8 @@ impl TerminalTheme {
      }
  }
  
--pub fn host_terminal_theme_query_sequence() -> String {
+-pub fn host_terminal_theme_query_sequence(include_palette: bool) -> String {
 -    use std::fmt::Write as _;
 -
 -    let mut sequence = String::from(HOST_COLOR_QUERY_SEQUENCE);
--    for index in 0..=u8::MAX {
--        let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
+-    if include_palette {
+-        for index in 0..=u8::MAX {
+-            let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
+-        }
 -    }
 -    sequence
 +pub fn host_terminal_theme_query_sequence() -> &'static str {
@@ -2651,7 +2723,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
  }
  
  pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind, RgbColor)> {
-@@ -96,6 +92,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
+@@ -100,6 +94,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
      let kind = match command {
          "10" => DefaultColorKind::Foreground,
          "11" => DefaultColorKind::Background,
@@ -2659,7 +2731,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
          _ => return None,
      };
      Some((kind, parse_rgb_color(value)?))
-@@ -114,6 +111,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
+@@ -118,6 +113,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
      let command = match kind {
          DefaultColorKind::Foreground => 10,
          DefaultColorKind::Background => 11,
@@ -2667,7 +2739,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
      };
      format!(
          "\x1b]{command};rgb:{:02x}/{:02x}/{:02x}\x1b\\",
-@@ -125,6 +123,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str
+@@ -129,6 +125,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str
      match kind {
          DefaultColorKind::Foreground => "\x1b]110\x1b\\",
          DefaultColorKind::Background => "\x1b]111\x1b\\",
@@ -2675,7 +2747,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
      }
  }
  
-@@ -203,7 +202,7 @@ mod tests {
+@@ -207,7 +204,7 @@ mod tests {
      }
  
      #[test]
@@ -2684,9 +2756,12 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
          assert_eq!(
              parse_palette_color_response("\x1b]4;255;rgb:1111/2222/3333\x1b\\"),
              Some((
-@@ -218,9 +217,24 @@ mod tests {
+@@ -220,15 +217,25 @@ mod tests {
+             ))
+         );
  
-         let query = host_terminal_theme_query_sequence();
+-        let query = host_terminal_theme_query_sequence(true);
++        let query = host_terminal_theme_query_sequence();
          assert!(query.starts_with(HOST_COLOR_QUERY_SEQUENCE));
 -        assert!(query.contains("\x1b]4;0;?\x1b\\"));
 -        assert!(query.ends_with("\x1b]4;255;?\x1b\\"));
@@ -2694,11 +2769,13 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
 +        assert_eq!(query.matches("\x1b]").count(), 3);
 +        assert!(!query.contains("\x1b]4;"));
 +    }
-+
+ 
 +    #[test]
 +    fn parses_cursor_color_response() {
 +        let parsed = parse_default_color_response("\x1b]12;rgb:1212/3434/5656\x1b\\");
-+        assert_eq!(
+         assert_eq!(
+-            host_terminal_theme_query_sequence(false),
+-            HOST_COLOR_QUERY_SEQUENCE
 +            parsed,
 +            Some((
 +                DefaultColorKind::Cursor,
@@ -2708,11 +2785,10 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
 +                    b: 0x56,
 +                },
 +            ))
-+        );
+         );
      }
  
-     #[test]
-@@ -233,6 +247,10 @@ mod tests {
+@@ -242,6 +249,10 @@ mod tests {
              osc_reset_default_color_sequence(DefaultColorKind::Background),
              "\x1b]111\x1b\\"
          );
@@ -2724,7 +2800,7 @@ index ffe78a95b1765c2cffe69fc020f0c7ae42e801a1..c3a9489b3bf34b737ea26286f8b8622a
  
      #[test]
 diff --git a/src/ui/tab_surface.rs b/src/ui/tab_surface.rs
-index 1594f83dcd4d02b5914019bf2a918f423791e642..36208d5ed98c7f7c5e9bf1c00b764f44829161c8 100644
+index 99ca972700d1d57edd4baf9f5413cab2245c99f1..36208d5ed98c7f7c5e9bf1c00b764f44829161c8 100644
 --- a/src/ui/tab_surface.rs
 +++ b/src/ui/tab_surface.rs
 @@ -145,6 +145,7 @@ pub(crate) fn tab_surface_cursor(
@@ -2752,47 +2828,16 @@ index 1594f83dcd4d02b5914019bf2a918f423791e642..36208d5ed98c7f7c5e9bf1c00b764f44
          assert_eq!(frame.hyperlinks, vec![uri.to_owned()]);
          assert_eq!(
              frame_digest(&frame),
--            "ce383feeaac30922502b7c4f8af53b5ca30e816ec4503ca6d015738b584da487"
+-            "a7c21fa42305a41231c7ae254f264f6ef923f46301d8fc4cd35ab6dfdd651b6b"
 +            "5ed7414b3d26ee4d9e4031370036c97630822bd112b23606f8f97eb8abee595b"
          );
      }
  
-diff --git a/tests/cli/sessions.rs b/tests/cli/sessions.rs
-index 78b046809af53ffeebd334801cff76ed742240b1..934d7e27775896f4b4ca796b20e66a65e457db9d 100644
---- a/tests/cli/sessions.rs
-+++ b/tests/cli/sessions.rs
-@@ -389,7 +389,7 @@ fn status_commands_report_client_and_server_versions() {
-         "stdout: {full_stdout}"
-     );
-     assert!(
--        full_stdout.contains("  protocol: 19"),
-+        full_stdout.contains("  protocol: 20"),
-         "stdout: {full_stdout}"
-     );
-     assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
-@@ -422,7 +422,7 @@ fn status_commands_report_client_and_server_versions() {
-         "stdout: {server_stdout}"
-     );
-     assert!(
--        server_stdout.contains("protocol: 19"),
-+        server_stdout.contains("protocol: 20"),
-         "stdout: {server_stdout}"
-     );
- 
-@@ -434,7 +434,7 @@ fn status_commands_report_client_and_server_versions() {
-         "stdout: {client_stdout}"
-     );
-     assert!(
--        client_stdout.contains("protocol: 19"),
-+        client_stdout.contains("protocol: 20"),
-         "stdout: {client_stdout}"
-     );
-     assert!(
 diff --git a/tests/client_mode.rs b/tests/client_mode.rs
-index 10dcd19e73f18ceadd6dc568b18a855d35c9b9a5..dbd9b47bfd1fa520c53afbd03ff2031fe4cbe2ca 100644
+index 855fc31803b47871ce4ec0c5fa63ebb2bfd9f3bb..74fb40a574b2f5b8a396450c35dfa28e6939a2e7 100644
 --- a/tests/client_mode.rs
 +++ b/tests/client_mode.rs
-@@ -225,12 +225,22 @@ struct CellWire {
+@@ -279,12 +279,22 @@ struct CellWire {
      hyperlink: Option<u32>,
  }
  
@@ -2843,10 +2888,10 @@ index 6f1ab82b22fac6d81c2735ab81d8c22e6d439ab0..319a8198e68b9f56bb10afbd626da60d
  
  fn decode_frame_payload(payload: &[u8]) -> io::Result<FrameWire> {
 diff --git a/tests/multi_client.rs b/tests/multi_client.rs
-index 6e367eaf61d3394fa9d99b1fe8187fb245d69c5c..278e56ea49f376ae66b5b1206fe886db9e23b43b 100644
+index 20deedaf9f2f8f5ed20ffec35c2cd2e105b05671..c6e4c6f3cdbdba6af9ab420f787b6799084daddf 100644
 --- a/tests/multi_client.rs
 +++ b/tests/multi_client.rs
-@@ -611,12 +611,22 @@ struct CellWire {
+@@ -624,12 +624,22 @@ struct CellWire {
      hyperlink: Option<u32>,
  }
  

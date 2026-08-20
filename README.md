@@ -26,7 +26,7 @@ The reviewed upstream release provides Herdr's cross-platform core. herdr-win su
 - **A terminal that feels native:** without explicit theme configuration, Herdr follows the host's light or dark appearance while preserving cursor colors and Windows input through ConPTY.
 - **Windows as a Herdr server:** Windows, Linux, and macOS clients can attach to or provision a Windows workstation or VM over SSH with an exact runtime, protocol check, and named-session lifecycle.
 - **One release across mixed environments:** matching Windows, Linux, and macOS assets let Herdr provision supported remote endpoints from the same protocol-compatible build instead of relying on manual binary copying or independently released versions.
-- **Images cross the remote boundary:** from a Windows remote client, clipboard images and supported image-file drops are staged on the remote host and their usable remote path is pasted into the pane.
+- **The upstream image bridge stays intact:** Herdr v0.8.2 stages Windows clipboard images and supported image-file drops on the remote host and pastes their usable path. This fork no longer patches that shared transport.
 - **Updates that respect running work:** per-user setup uses verified immutable runtimes, lets active sessions finish, and activates one coherent replacement afterward without a permanent background service.
 - **Agent status that reflects reality:** OpenCode retries stay active instead of surfacing premature failures, while terminal errors remain visible.
 
@@ -40,12 +40,12 @@ The table is intentionally capability-level. The patch files contain the exact i
 | --- | --- | --- |
 | Native ConPTY foundation | ✅ **Upstreamed in Herdr v0.6.9** | Herdr v0.8.0 added the modern app-local ConPTY packaging that herdr-win now reuses instead of carrying a duplicate foundation. |
 | Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance by default and preserves cursor, rendering, and VTI input behavior in local and attached Windows sessions. |
-| Windows remote attach and image bridge | **Partly merged upstream after v0.8.0, release pending** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds Windows x86_64/ARM64 host detection, exact runtime provisioning, named-session lifecycle, and an image bridge that turns Windows clipboard or file images into usable remote paths. Upstream now owns Windows client attach to Linux/macOS; the remaining Windows-host delta stays here until the next stable refresh. |
+| Windows SSH target support | **Maintained here** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds Windows x86_64/ARM64 host detection, one exact provisioned payload, named-session lifecycle, and fail-closed launch into the SSH user's active desktop session. Herdr v0.8.2 owns Windows clients attaching to Linux/macOS and the shared image bridge. |
 | Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, and process-safe uninstall from one verified candidate. |
 | OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps active retries active and exposes only actionable terminal failures. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
 
-Upstream PR #2329 merged after v0.8.0 and has not shipped in a stable release yet. Mailbox `0003` therefore remains in the current queue; at the next stable refresh, it can shrink to Windows-host attach and the additional bridge hardening. The original implementation builds on [nsxdavid's `feat/windows-remote-attach` work](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
+Upstream PR #2329 ships in Herdr v0.8.2. The refreshed mailbox `0003` therefore contains only Windows target-host detection, provisioning, activation, and exact interactive-session launch. Shared client attach, image transport, and SSH bridge behavior now come directly from upstream. The original Windows-host work builds on [nsxdavid's `feat/windows-remote-attach` branch](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
 
 ## Sister project: Herdr Sandbox
 
@@ -57,12 +57,12 @@ herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com
 flowchart LR
     subgraph S["Source"]
         direction TB
-        U["Upstream Herdr<br/>v0.8.0"] --> B["BASE<br/>346411fa21af"]
+        U["Upstream Herdr<br/>v0.8.2"] --> B["BASE<br/>9eb521456ac0"]
     end
 
     subgraph Q["patches/delta/series"]
         direction TB
-        P1["0001<br/>Terminal fidelity"] --> P3["0003<br/>Remote attach"]
+        P1["0001<br/>Terminal fidelity"] --> P3["0003<br/>Windows SSH target"]
         P3 --> P4["0004<br/>Windows distribution"]
         P4 --> P5["0005<br/>OpenCode lifecycle"]
         P5 --> P6["0006<br/>Hardened downloads"]
@@ -88,7 +88,7 @@ Each release is one cross-platform snapshot for Windows x86_64, Linux amd64/arm6
 
 This supports mixed development environments directly: run the managed client and server on Windows, or use a matching Linux or macOS client to control a Herdr server on a Windows workstation or VM. The Linux and macOS builds can also run as remote endpoints when a Windows client connects in the other direction.
 
-Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or the stable per-user runtime at `%USERPROFILE%\.herdr\remote\bin\herdr.exe`. When that runtime is needed, an interactive attach validates remote configuration, stops the selected server with approval, stages and validates the complete digest-verified Windows portable payload, atomically replaces the stable runtime, removes the transient previous payload, then starts and verifies the new server. Local Windows development builds use the same complete portable layout; Herdr packages the adjacent runtime and rejects an executable without its ConPTY bundle. It never runs setup or changes remote `PATH`; ordinary non-interactive attach leaves the host unchanged. The host's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`) so the interactive bridge remains byte-exact. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
+Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr uses an exact matching `herdr.exe` from the SSH user's `PATH` or the stable `%USERPROFILE%\.herdr\remote\herdr.exe` payload. Provisioning validates the complete digest-bearing portable ZIP before stopping a server, then requires the exclusive lease, replaces the one stable payload, and verifies the exact binary, version, and protocol. There is no rollback, legacy discovery, migration, compatibility layout, or extra `bin` level. Local Windows development builds use the same portable layout and are rejected without their ConPTY bundle. The host's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`). The server starts in exactly one active desktop session owned by the SSH user and remains independent of the initiating SSH channel; absent or ambiguous sessions fail closed. Windows remote hosts do not support live handoff or OpenSSH control-socket reuse.
 
 For explicit unattended deployment and activation, validate the remote configuration and provision the matching binary with:
 

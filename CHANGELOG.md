@@ -5,6 +5,25 @@
 
 ## Unreleased
 
+## [2026.08.20.1] - 2026-08-20
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
+### Added
+- Windows, Linux, and macOS clients can now provision and attach to x86_64 or ARM64 Windows SSH targets. Provisioning validates one exact portable payload and starts the persistent server in the SSH user's active desktop session.
+
+### Changed
+- Shared remote attach and clipboard/file image transport now come directly from Herdr v0.8.2 (`herdrdev/herdr#2329`); the maintained remote mailbox is limited to the remaining Windows target-host contract.
+- Windows terminal synchronization keeps host foreground, background, and cursor colors while using Herdr's built-in indexed palette, preventing unframed OSC 4 replies from reaching pane input (`herdrdev/herdr#2786`).
+- Runtime `curl` transfers ignore ambient configuration, require HTTPS with TLS 1.2 or newer, disable URL globbing, and bound redirects.
+
+### Fixed
+- OpenCode retry and error events no longer publish a terminal failure while the same turn is still actively retrying.
+
+## [0.8.2] - 2026-08-19
+
+- Incorporated the [official Herdr v0.8.2 release](https://github.com/herdrdev/herdr/blob/v0.8.2/CHANGELOG.md#082---2026-08-19) as the recorded stable source.
+
 ## [0.8.0] - 2026-08-03
 
 ### Added

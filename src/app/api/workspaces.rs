@@ -5,7 +5,7 @@ use crate::api::schema::{
     WorkspaceMoveBlockParams, WorkspaceMoveParams, WorkspaceRenameParams,
     WorkspaceReportMetadataParams, WorkspaceTarget,
 };
-use crate::app::App;
+use crate::app::{App, DeferredWorkspaceShell};
 
 use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
 use super::responses::{encode_error, encode_success};
@@ -69,6 +69,47 @@ impl App {
             }
             Err(err) => encode_error(id, "workspace_create_failed", err.to_string()),
         }
+    }
+
+    pub(crate) fn handle_workspace_create_with_deferred_shell(
+        &mut self,
+        id: String,
+        params: WorkspaceCreateParams,
+    ) -> (String, Option<DeferredWorkspaceShell>) {
+        let cwd = params.cwd.map(PathBuf::from).unwrap_or_else(|| {
+            let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
+                self.focused_pane_cwd_in_workspace(ws_idx)
+                    .or_else(|| self.seed_cwd_from_workspace(ws_idx))
+            });
+            self.resolve_new_terminal_cwd(follow_cwd)
+        });
+        let extra_env = match super::env::normalize_launch_env(params.env) {
+            Ok(env) => env,
+            Err((code, message)) => return (encode_error(id, &code, message), None),
+        };
+        let (index, terminal_id) = self.create_workspace_with_deferred_shell(cwd, params.focus);
+        if let Some(label) = params.label {
+            if let Some(workspace) = self.state.workspaces.get_mut(index) {
+                workspace.set_custom_name(label);
+                crate::logging::workspace_renamed(&workspace.id);
+            }
+        }
+        self.emit_workspace_open_events(index);
+        let pending = DeferredWorkspaceShell {
+            terminal_id,
+            extra_env,
+        };
+        let Some(result) = self.workspace_created_result(index) else {
+            return (
+                encode_error(
+                    id,
+                    "internal_error",
+                    "created workspace response is incomplete".to_string(),
+                ),
+                Some(pending),
+            );
+        };
+        (encode_success(id, result), Some(pending))
     }
 
     pub(super) fn handle_workspace_focus(&mut self, id: String, target: WorkspaceTarget) -> String {

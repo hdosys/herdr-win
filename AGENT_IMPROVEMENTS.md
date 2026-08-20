@@ -68,3 +68,22 @@ configuration repository.
   rebuild fell from more than 20 minutes to 99.284 seconds, followed by a 22.122
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Give public preview-manifest propagation a sufficient
+  bounded release-ready gate.** Evidence: release publication committed the new
+  manifest and all immutable assets were live, but the exact raw branch URL served
+  the prior manifest for the complete 110-second retry window and exposed the new
+  build shortly afterward. The failed-job replay then re-entered the otherwise
+  successful publish job. Extend the existing post-publish readiness budget from
+  measured propagation or isolate its idempotent verifier so a transient cache miss
+  does not repeat publication. Expected benefit: avoid false failed releases while
+  retaining exact public-feed verification. Owner: `.github/workflows/release.yml`.
+
+- **Status: proposed. Keep successful portable release jobs free of unrelated
+  runner warnings.** Evidence: every portable artifact passed, while macOS jobs
+  still annotated the release for an unused untrusted preinstalled `aws/tap`, and
+  the pinned cache action reported its Node.js 20 runtime being forced onto Node.js
+  24. Remove only the unused tap exposure and adopt an eligible Node.js 24-native
+  pinned action when available, without trusting the whole tap or weakening action
+  pinning. Expected benefit: keep release annotations actionable. Owner:
+  `.github/workflows/release.yml`.

@@ -20,6 +20,15 @@ configuration repository.
 
 ## Proposals
 
+- **Status: proposed. Scope Git trust inside the delta-worktree helper.** Evidence:
+  `delta_workflow.py start` created the selected Sandbox worktree, then its Git
+  validation failed with dubious ownership; materialization and finalization
+  succeeded only after supplying command-scoped `safe.directory` values. Extend
+  the helper's Git wrapper to trust only the control checkout and selected
+  worktree, with one ownership-mismatch test. Expected benefit: keep the documented
+  replay workflow end to end without global Git configuration or manual recovery.
+  Owner: `scripts/delta_workflow.py`, its focused tests, and `CONTRIBUTING.md`.
+
 - **Status: proposed. Compile each mailbox prefix during stable-base refreshes.**
   Evidence: the v0.8.2 review found mailbox 0003 referring to owners introduced by
   0004, while 0004 referred to the curl API introduced by 0006. The complete queue

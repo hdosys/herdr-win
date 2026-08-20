@@ -5,6 +5,9 @@
 ### Changed
 - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
 
+### Fixed
+- Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

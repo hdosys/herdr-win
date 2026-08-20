@@ -641,7 +641,8 @@ impl App {
                 }
                 #[cfg(windows)]
                 if !remove.force_confirmation
-                    && crate::worktree::checkout_has_dirty_files(&remove.path).unwrap_or(false)
+                    && crate::worktree::checkout_has_dirty_files(&remove.repo_root, &remove.path)
+                        .unwrap_or(false)
                 {
                     remove.force_confirmation = true;
                     remove.error = None;
@@ -751,7 +752,8 @@ impl App {
         }
         #[cfg(windows)]
         if !remove.force_confirmation
-            && crate::worktree::checkout_has_dirty_files(&remove.path).unwrap_or(false)
+            && crate::worktree::checkout_has_dirty_files(&remove.repo_root, &remove.path)
+                .unwrap_or(false)
         {
             remove.force_confirmation = true;
             remove.error = None;

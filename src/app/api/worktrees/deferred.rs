@@ -259,7 +259,8 @@ impl App {
         #[cfg(windows)]
         {
             if !params.force
-                && crate::worktree::checkout_has_dirty_files(&space.checkout_path).unwrap_or(false)
+                && crate::worktree::checkout_has_dirty_files(&space.repo_root, &space.checkout_path)
+                    .unwrap_or(false)
             {
                 Self::send_api_response(
                     respond_to,
@@ -296,8 +297,18 @@ impl App {
             return;
         }
 
-        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force) {
-            self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
+        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force)
+            && !self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx)
+        {
+            Self::send_api_response(
+                respond_to,
+                encode_error(
+                    id,
+                    "worktree_remove_failed",
+                    "Could not stop the worktree terminal. Close it and retry removal.",
+                ),
+            );
+            return;
         }
 
         let operation_id = self.next_api_worktree_operation_id();

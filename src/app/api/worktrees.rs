@@ -2181,6 +2181,69 @@ mod tests {
     }
 
     #[test]
+    fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
+        let mut app = test_app();
+        let checkout = PathBuf::from("/repo/herdr-issue");
+        let membership = crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: checkout.clone(),
+            is_linked_worktree: true,
+        };
+        let mut parent = Workspace::test_new("parent");
+        parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            is_linked_worktree: false,
+            checkout_path: "/repo/herdr".into(),
+            ..membership.clone()
+        });
+        let mut child = Workspace::test_new("child");
+        child.worktree_space = Some(membership.clone());
+        let foreground = Workspace::test_new("foreground");
+        let child_id = child.id.clone();
+        let foreground_id = foreground.id.clone();
+        app.state.workspaces = vec![parent, child, foreground];
+        app.state.active = Some(2);
+        app.state.selected = 2;
+        let workspace_snapshot = app.workspace_info(1);
+        let worktree_snapshot = app.worktree_info_for_membership(&membership, None);
+        app.pending_api_worktree_removes.insert(child_id.clone(), 7);
+        app.pending_api_worktree_remove_paths
+            .insert(crate::worktree::canonical_or_original(&checkout), 7);
+        let (respond_to, response_rx) = response_channel();
+
+        app.handle_api_worktree_remove_finished(WorktreeRemoveResult {
+            workspace_id: child_id,
+            path: checkout.clone(),
+            workspace: Some(Box::new(workspace_snapshot)),
+            worktree: Some(Box::new(worktree_snapshot)),
+            forced: false,
+            api_request: Some(ApiWorktreeRemoveRequest {
+                id: "req".into(),
+                operation_id: 7,
+                checkout_key: crate::worktree::canonical_or_original(&checkout),
+                respond_to,
+            }),
+            result: Ok(()),
+        });
+
+        let response = response_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("background worktree remove completion should respond");
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::WorktreeRemoved { .. }
+        ));
+        assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(
+            app.state.active.map(|idx| &app.state.workspaces[idx].id),
+            Some(&foreground_id)
+        );
+        assert_eq!(app.state.workspaces[app.state.selected].id, foreground_id);
+    }
+
+    #[test]
     fn deferred_api_worktree_remove_emits_removed_after_workspace_changes() {
         let event_hub = crate::api::EventHub::default();
         let mut app = test_app_with_event_hub(event_hub.clone());

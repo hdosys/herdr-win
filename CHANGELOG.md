@@ -5,6 +5,13 @@
 
 ## Unreleased
 
+## [2026.08.20.5] - 2026-08-20
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
+### Fixed
+- Herdr worktree commands can now manage explicitly selected mounted repositories across Windows account boundaries without persistent or wildcard Git trust (`herdrdev/herdr#3044`).
+
 ## [2026.08.20.4] - 2026-08-20
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

@@ -1,16 +1,33 @@
 mod attach;
 #[cfg(unix)]
 mod host_unix;
+mod windows;
 
 pub(crate) use attach::*;
 #[cfg(unix)]
 pub(crate) use host_unix::run_remote_client_bridge;
-
 #[cfg(windows)]
-pub(crate) fn run_remote_client_bridge() -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "remote Windows hosts are not supported yet",
-    ))
+pub(crate) use windows::run_remote_client_bridge;
+pub(crate) use windows::{
+    adopt_remote_sidecar_lease, configure_remote_sidecar_child, remote_sidecar_active,
+    validate_remote_sidecar_payload, REMOTE_SIDECAR_VALIDATE_ARG,
+};
+
+pub(crate) fn reject_remote_sidecar_update_command(args: &[String]) -> Result<(), String> {
+    if remote_sidecar_active() && update_command_requested(args) {
+        return Err(
+            "self-update is disabled for a remote Windows sidecar; update it from the attaching Herdr client"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn update_command_requested(args: &[String]) -> bool {
+    args.get(1).is_some_and(|command| command == "update")
+        || args
+            .get(1..3)
+            .is_some_and(|commands| commands == ["channel", "set"])
 }
 
 pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
@@ -85,5 +102,19 @@ mod tests {
     #[test]
     fn ssh_check_command_quotes_remote_target() {
         assert_eq!(ssh_check_command("host name"), "ssh 'host name'");
+    }
+
+    #[test]
+    fn remote_sidecar_update_gate_matches_every_self_update_entry() {
+        assert!(update_command_requested(&["herdr".into(), "update".into()]));
+        assert!(update_command_requested(&[
+            "herdr".into(),
+            "channel".into(),
+            "set".into(),
+        ]));
+        assert!(!update_command_requested(&[
+            "herdr".into(),
+            "status".into()
+        ]));
     }
 }

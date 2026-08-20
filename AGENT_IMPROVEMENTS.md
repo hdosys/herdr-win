@@ -20,6 +20,15 @@ configuration repository.
 
 ## Proposals
 
+- **Status: proposed. Compile each mailbox prefix during stable-base refreshes.**
+  Evidence: the v0.8.2 review found mailbox 0003 referring to owners introduced by
+  0004, while 0004 referred to the curl API introduced by 0006. The complete queue
+  could compile while those ordering and ownership leaks remained hidden. Extend
+  the existing delta-queue test owner with a refresh-only check that replays and
+  compiles each prefix in series order. Expected benefit: catch mailbox coupling
+  before regeneration without slowing normal iteration. Owner:
+  `scripts/test_delta_patches.py` and the refresh procedure in `CONTRIBUTING.md`.
+
 - **Status: proposed. Render-check changed README Mermaid diagrams before commit.**
   Evidence: a fully horizontal patch flow was unreadably small at README width,
   while changing every level to vertical produced a multi-screen diagram. A

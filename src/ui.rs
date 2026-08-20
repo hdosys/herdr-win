@@ -193,7 +193,15 @@ fn desktop_tab_bar_and_terminal_area(
     ws: &crate::workspace::Workspace,
     main_area: Rect,
 ) -> (Rect, Rect) {
-    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.len() == 1;
+    desktop_tab_bar_and_terminal_area_for_tab_count(app, ws.tabs.len(), main_area)
+}
+
+fn desktop_tab_bar_and_terminal_area_for_tab_count(
+    app: &AppState,
+    tab_count: usize,
+    main_area: Rect,
+) -> (Rect, Rect) {
+    let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && tab_count == 1;
     if !hide_single_tab_bar && main_area.height > 1 {
         match app.tab_bar_position {
             crate::config::TabBarPositionConfig::Top => {
@@ -212,18 +220,7 @@ fn desktop_tab_bar_and_terminal_area(
     }
 }
 
-fn compute_view_internal(
-    app: &mut AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
-    area: Rect,
-    resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) {
-    if is_mobile_width(area, app.mobile_width_threshold) {
-        compute_mobile_view(app, terminal_runtimes, area, resize_panes, cell_size);
-        return;
-    }
-
+fn desktop_sidebar_and_main_area(app: &AppState, area: Rect) -> (Rect, Rect) {
     let sidebar_w = if app.sidebar_collapsed {
         match app.sidebar_collapsed_mode {
             crate::config::SidebarCollapsedModeConfig::Compact => COLLAPSED_WIDTH,
@@ -236,6 +233,42 @@ fn compute_view_internal(
 
     let [sidebar_area, main_area] =
         Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+    (sidebar_area, main_area)
+}
+
+fn mobile_header_and_terminal_area(area: Rect) -> (Rect, Rect) {
+    let header_h = area.height.min(2);
+    if area.height > header_h {
+        let [header_rect, terminal_area] =
+            Layout::vertical([Constraint::Length(header_h), Constraint::Min(1)]).areas(area);
+        (header_rect, terminal_area)
+    } else {
+        (area, Rect::default())
+    }
+}
+
+pub(crate) fn initial_workspace_terminal_area(app: &AppState, area: Rect) -> Rect {
+    if is_mobile_width(area, app.mobile_width_threshold) {
+        mobile_header_and_terminal_area(area).1
+    } else {
+        let (_, main_area) = desktop_sidebar_and_main_area(app, area);
+        desktop_tab_bar_and_terminal_area_for_tab_count(app, 1, main_area).1
+    }
+}
+
+fn compute_view_internal(
+    app: &mut AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+    resize_panes: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+) {
+    if is_mobile_width(area, app.mobile_width_threshold) {
+        compute_mobile_view(app, terminal_runtimes, area, resize_panes, cell_size);
+        return;
+    }
+
+    let (sidebar_area, main_area) = desktop_sidebar_and_main_area(app, area);
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -331,13 +364,7 @@ fn compute_mobile_view(
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
     let header_h = area.height.min(2);
-    let (header_rect, terminal_area) = if area.height > header_h {
-        let [header_rect, terminal_area] =
-            Layout::vertical([Constraint::Length(header_h), Constraint::Min(1)]).areas(area);
-        (header_rect, terminal_area)
-    } else {
-        (area, Rect::default())
-    };
+    let (header_rect, terminal_area) = mobile_header_and_terminal_area(area);
 
     if app.mode == Mode::Navigate {
         let switcher_viewport_h = area.height.saturating_sub(header_h + 1);

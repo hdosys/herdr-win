@@ -525,6 +525,7 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    let raw_args = platform::prepare_interactive_server_bootstrap(raw_args)?;
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
@@ -541,6 +542,20 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    let _remote_sidecar_lease = crate::remote::adopt_remote_sidecar_lease()?;
+    if args.get(1).map(String::as_str) == Some(remote::REMOTE_SIDECAR_VALIDATE_ARG) {
+        if args.len() > 3 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "remote sidecar payload validation accepts at most one SHA-256 argument",
+            ));
+        }
+        return remote::validate_remote_sidecar_payload(args.get(2).map(String::as_str));
+    }
+    if let Err(err) = remote::reject_remote_sidecar_update_command(&args) {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 
     if remote_launch.is_some()
         && args.get(1).is_some()
@@ -551,7 +566,7 @@ fn main() -> io::Result<()> {
             )
         })
     {
-        eprintln!("error: --remote can only be used with the default launch command");
+        eprintln!("error: --remote can only be used for attach or with --provision");
         eprintln!("run 'herdr --help' for usage");
         std::process::exit(2);
     }
@@ -620,10 +635,12 @@ fn main() -> io::Result<()> {
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
         println!("       herdr --remote <ssh-target> [--session <name>]");
+        println!("       herdr --remote <ssh-target> --provision [--yes] [--json]");
         println!("       herdr session attach <name>");
         println!("       herdr completion zsh");
         println!("       herdr update [--handoff]");
         println!("       herdr channel set <stable|preview>");
+        println!("       herdr server start");
         println!("       herdr server stop");
         println!("       herdr server reload-config");
         println!("       herdr api <subcommand> ...");
@@ -648,6 +665,10 @@ fn main() -> io::Result<()> {
             ),
             ("herdr update", "Download and install the latest version"),
             ("herdr completion zsh", "Generate shell completions for zsh"),
+            (
+                "herdr server start",
+                "Start the persistent server if it is not running",
+            ),
             (
                 "herdr server stop",
                 "Stop the running server via the API socket",
@@ -712,6 +733,9 @@ fn main() -> io::Result<()> {
         println!("  --no-session        Run monolithically (no server/client, escape hatch)");
         println!("  --session <name>    Use or create a named persistent session");
         println!("  --remote <target>   Attach through SSH to a remote Herdr server");
+        println!("  --provision         Provision and activate the matching remote Herdr");
+        println!("  --yes, -y           Approve unattended remote installation or restart");
+        println!("  --json              Print remote provision result as JSON");
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
@@ -753,6 +777,10 @@ fn main() -> io::Result<()> {
         "--session",
         "--remote",
         "--remote-keybindings",
+        "--provision",
+        "--yes",
+        "-y",
+        "--json",
         "--version",
         "-V",
         "--default-config",

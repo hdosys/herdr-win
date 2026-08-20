@@ -74,6 +74,7 @@ enum ServerRuntimeStatus {
     Running {
         version: Option<String>,
         protocol: Option<u32>,
+        binary: Option<String>,
         capabilities: Option<crate::api::schema::ServerCapabilities>,
     },
     NotRunning,
@@ -137,11 +138,15 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
 fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
     match server {
         ServerRuntimeStatus::Running {
-            version, protocol, ..
+            version,
+            protocol,
+            binary,
+            ..
         } => {
             println!("{indent}status: running");
             println!("{indent}version: {}", option_label(version.as_deref()));
             println!("{indent}protocol: {}", protocol_label(*protocol));
+            println!("{indent}binary: {}", option_label(binary.as_deref()));
             println!("{indent}compatible: {}", compatibility_label(*protocol));
             println!("{indent}socket: {}", api::socket_path().display());
         }
@@ -157,6 +162,7 @@ fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,
+            binary: status.binary,
             capabilities: status.capabilities,
         }),
         Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
@@ -224,6 +230,7 @@ struct ServerStatusJson {
     running: bool,
     version: Option<String>,
     protocol: Option<u32>,
+    binary: Option<String>,
     capabilities: Option<ServerCapabilitiesJson>,
     compatible: Option<bool>,
     socket: String,
@@ -257,12 +264,14 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
         ServerRuntimeStatus::Running {
             version,
             protocol,
+            binary,
             capabilities,
         } => ServerStatusJson {
             status: "running",
             running: true,
             version: version.clone(),
             protocol: *protocol,
+            binary: binary.clone(),
             capabilities: capabilities
                 .as_ref()
                 .map(|capabilities| ServerCapabilitiesJson {
@@ -279,6 +288,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             running: false,
             version: None,
             protocol: None,
+            binary: None,
             capabilities: None,
             compatible: None,
             socket: api::socket_path().display().to_string(),
@@ -321,4 +331,23 @@ fn print_status_help() {
     eprintln!("  herdr status [--json]         show local client and running server status");
     eprintln!("  herdr status server [--json]  show running server status");
     eprintln!("  herdr status client [--json]  show local client binary status");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_status_projects_running_binary_identity() {
+        let binary = r"C:\Program Files\Herdr\herdr.exe".to_string();
+        let value = serde_json::to_value(server_status_json(&ServerRuntimeStatus::Running {
+            version: Some(crate::build_info::version()),
+            protocol: Some(crate::protocol::PROTOCOL_VERSION),
+            binary: Some(binary.clone()),
+            capabilities: None,
+        }))
+        .unwrap();
+
+        assert_eq!(value["binary"], binary);
+    }
 }

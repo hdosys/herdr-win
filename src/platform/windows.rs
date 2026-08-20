@@ -1,7 +1,6 @@
 use std::{
-    cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
-    ffi::{c_void, OsStr},
+    ffi::{c_void, OsStr, OsString},
     mem::{size_of, MaybeUninit},
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
@@ -20,13 +19,17 @@ use windows_sys::{
     Win32::{
         Foundation::{
             CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
-            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
+            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
-        Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
-        Security::SECURITY_ATTRIBUTES,
+        Security::{
+            EqualSid, GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        },
         Storage::FileSystem::CreateDirectoryW,
         System::{
-            Console::GetConsoleWindow,
+            Console::{
+                FreeConsole, GetConsoleWindow, SetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+                STD_OUTPUT_HANDLE,
+            },
             DataExchange::{
                 CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
                 RegisterClipboardFormatW, SetClipboardData,
@@ -42,7 +45,7 @@ use windows_sys::{
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
                 JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
@@ -50,11 +53,16 @@ use windows_sys::{
                 MEMORY_BASIC_INFORMATION,
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
+            RemoteDesktop::{
+                ProcessIdToSessionId, WTSActive, WTSEnumerateSessionsW, WTSFreeMemory,
+                WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
+            },
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
-                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
+                OpenProcessToken, OpenThread, QueryFullProcessImageNameW, ResumeThread,
+                TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+                DETACHED_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
                 THREAD_SUSPEND_RESUME,
             },
         },
@@ -67,8 +75,9 @@ use windows_sys::{
                 },
             },
             Shell::{
-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
-                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+                CommandLineToArgvW, GetUserProfileDirectoryW, ShellExecuteW, Shell_NotifyIconW,
+                NIF_ICON, NIF_INFO, NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE,
+                NIM_MODIFY, NOTIFYICONDATAW,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
@@ -86,6 +95,17 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
 const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
 const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+const INTERACTIVE_SERVER_BOOTSTRAP_ARG: &str = "--herdr-private-interactive-server-bootstrap-v1";
+const INTERACTIVE_SERVER_BOOTSTRAP_FILE: &str = "bootstrap.json";
+const INTERACTIVE_SERVER_BOOTSTRAP_DIR: &str = "server-launch";
+const INTERACTIVE_SERVER_BOOTSTRAP_MAX_BYTES: u64 = 1024 * 1024;
+const INTERACTIVE_SERVER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
+const INTERACTIVE_SERVER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
+const INTERACTIVE_LAUNCH_SCRIPT: &str = include_str!("windows_interactive_launch.ps1");
+const INTERACTIVE_LAUNCH_PROGRAM_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_PROGRAM";
+const INTERACTIVE_LAUNCH_ARGUMENTS_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_ARGUMENTS";
+const INTERACTIVE_LAUNCH_WORKING_DIRECTORY_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_WORKING_DIRECTORY";
+const INTERACTIVE_LAUNCH_SESSION_ID_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_SESSION_ID";
 
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)
@@ -98,6 +118,8 @@ const PROCESS_RUNTIME_MARKER_CACHE_RETENTION: Duration = Duration::from_secs(60)
 const PROCESS_RUNTIME_MARKER_NEGATIVE_TTL: Duration = Duration::from_secs(1);
 
 static NEXT_PANE_RUNTIME_MARKER: AtomicU64 = AtomicU64::new(1);
+static NEXT_SERVER_BOOTSTRAP: AtomicU64 = AtomicU64::new(1);
+static INTERACTIVE_SERVER_NULL_HANDLE: OnceLock<std::fs::File> = OnceLock::new();
 static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRuntimeMarker>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
@@ -590,39 +612,37 @@ pub(crate) struct StatusCommandGuard {
     job: usize,
 }
 
+fn create_kill_on_close_job() -> std::io::Result<HANDLE> {
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let limits_size = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .map_err(|_| std::io::Error::other("job limits size exceeds u32"))?;
+    if unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast(),
+            limits_size,
+        )
+    } == 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            CloseHandle(job);
+        }
+        return Err(error);
+    }
+    Ok(job)
+}
+
 impl StatusCommandGuard {
     pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
-        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if job.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
-            Ok(size) => size,
-            Err(_) => {
-                unsafe {
-                    CloseHandle(job);
-                }
-                return Err(std::io::Error::other("job limits size exceeds u32"));
-            }
-        };
-        if unsafe {
-            SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_ref(&limits).cast(),
-                limits_size,
-            )
-        } == 0
-        {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
+        let job = create_kill_on_close_job()?;
 
         let Some(process) = child.raw_handle() else {
             unsafe {
@@ -784,136 +804,840 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
-pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InteractiveServerBootstrap {
+    current_directory: String,
+    inherited_environment: Vec<InteractiveServerEnvironmentValue>,
+    environment_changes: Vec<InteractiveServerEnvironmentChange>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InteractiveServerEnvironmentValue {
+    name: String,
+    value: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InteractiveServerEnvironmentChange {
+    name: String,
+    value: Option<String>,
+}
+
+struct PendingInteractiveServerBootstrap {
+    root: PathBuf,
+    path: PathBuf,
+    program: String,
+    arguments: String,
+    working_directory: String,
+    cleanup: bool,
+}
+
+fn interactive_server_inherited_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> std::io::Result<Vec<InteractiveServerEnvironmentValue>> {
+    environment
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = match unicode_windows_value(&name, "inherited environment variable name") {
+                Ok(name) => name,
+                Err(err) => return Some(Err(err)),
+            };
+            // cmd.exe carries per-drive current directories as hidden `=C:`
+            // entries. They cannot be restored with set_var, and the launch
+            // state already carries the exact current directory separately.
+            if name.starts_with('=') {
+                return None;
+            }
+            Some(
+                unicode_windows_value(&value, "inherited environment variable value")
+                    .map(|value| InteractiveServerEnvironmentValue { name, value }),
+            )
+        })
+        .collect()
+}
+
+impl PendingInteractiveServerBootstrap {
+    fn create(command: &std::process::Command) -> std::io::Result<Self> {
+        let arguments = command
+            .get_args()
+            .map(|argument| unicode_windows_value(argument, "server command argument"))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        if arguments.as_slice() != ["server"] {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "interactive server launch accepts only the server command",
+            ));
+        }
+
+        let program_path = PathBuf::from(command.get_program());
+        if !program_path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "interactive server executable path must be absolute",
+            ));
+        }
+        let program = unicode_windows_value(program_path.as_os_str(), "server executable path")?;
+        let current_directory = command
+            .get_current_dir()
+            .map(std::path::Path::to_path_buf)
+            .map(Ok)
+            .unwrap_or_else(std::env::current_dir)?;
+        let current_directory = std::path::absolute(current_directory)?;
+        let working_directory =
+            unicode_windows_value(current_directory.as_os_str(), "server working directory")?;
+
+        let inherited_environment = interactive_server_inherited_environment(std::env::vars_os())?;
+        let environment_changes = command
+            .get_envs()
+            .map(|(name, value)| {
+                Ok(InteractiveServerEnvironmentChange {
+                    name: unicode_windows_value(name, "environment variable name")?,
+                    value: value
+                        .map(|value| unicode_windows_value(value, "environment variable value"))
+                        .transpose()?,
+                })
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let bootstrap = InteractiveServerBootstrap {
+            current_directory: working_directory.clone(),
+            inherited_environment,
+            environment_changes,
+        };
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let counter = NEXT_SERVER_BOOTSTRAP.fetch_add(1, AtomicOrdering::Relaxed);
+        let base = interactive_server_bootstrap_base()?;
+        std::fs::create_dir_all(&base)?;
+        let root = base.join(format!(
+            "herdr-server-launch-{:x}-{timestamp:x}-{counter:x}",
+            std::process::id()
+        ));
+        create_remote_private_dir(&root).map_err(|err| {
+            std::io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to create private interactive server launch directory {}: {err}",
+                    root.display()
+                ),
+            )
+        })?;
+        let path = root.join(INTERACTIVE_SERVER_BOOTSTRAP_FILE);
+        let launch_arguments = format!(
+            "{} {}",
+            quote_windows_command_line_arg(INTERACTIVE_SERVER_BOOTSTRAP_ARG),
+            quote_windows_command_line_arg(&path.display().to_string())
+        );
+        let pending = Self {
+            root,
+            path,
+            program,
+            arguments: launch_arguments,
+            working_directory,
+            cleanup: true,
+        };
+        let result = (|| {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&pending.path)?;
+            serde_json::to_writer(&file, &bootstrap).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to encode interactive server launch state: {err}"),
+                )
+            })?;
+            file.sync_all()
+        })();
+        if let Err(err) = result {
+            return Err(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to write interactive server launch state {}: {err}",
+                    pending.path.display()
+                ),
+            ));
+        }
+        Ok(pending)
+    }
+
+    fn transfer_to_server(&mut self) {
+        self.cleanup = false;
+    }
+}
+
+fn interactive_server_bootstrap_base() -> std::io::Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+
+    let token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let mut required = 0;
+    // SAFETY: the token belongs to this process and `required` is writable.
+    unsafe {
+        GetUserProfileDirectoryW(token.as_raw_handle().cast(), null_mut(), &mut required);
+    }
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut profile = vec![0u16; required as usize];
+    // SAFETY: `profile` has the size requested by the first API call and the
+    // same valid token remains open for the duration of this call.
+    if unsafe {
+        GetUserProfileDirectoryW(
+            token.as_raw_handle().cast(),
+            profile.as_mut_ptr(),
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let end = profile
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(profile.len());
+    if end == 0 {
+        return Err(std::io::Error::other(
+            "Windows returned an empty current-user profile directory",
+        ));
+    }
+    let profile = PathBuf::from(std::ffi::OsString::from_wide(&profile[..end]));
+    let base = profile
+        .join("AppData")
+        .join("Local")
+        .join(crate::config::app_dir_name())
+        .join(INTERACTIVE_SERVER_BOOTSTRAP_DIR);
+    if !base.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server state path must be absolute",
+        ));
+    }
+    Ok(base)
+}
+
+impl Drop for PendingInteractiveServerBootstrap {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_dir(&self.root);
+        }
+    }
+}
+
+pub(crate) fn prepare_interactive_server_bootstrap(
+    mut args: Vec<String>,
+) -> std::io::Result<Vec<String>> {
+    if args.get(1).map(String::as_str) != Some(INTERACTIVE_SERVER_BOOTSTRAP_ARG) {
+        return Ok(args);
+    }
+    if args.len() != 3 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server bootstrap requires one state file",
+        ));
+    }
+
+    let path = validate_interactive_server_bootstrap_path(std::path::Path::new(&args[2]))?;
+    let metadata = std::fs::symlink_metadata(&path)?;
+    if !metadata.file_type().is_file() || metadata.len() > INTERACTIVE_SERVER_BOOTSTRAP_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server bootstrap state is not a bounded regular file",
+        ));
+    }
+    let file = std::fs::File::open(&path)?;
+    let bootstrap: InteractiveServerBootstrap = serde_json::from_reader(file).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("interactive server bootstrap state is invalid: {err}"),
+        )
+    })?;
+    validate_interactive_server_bootstrap(&bootstrap)?;
+
+    let root = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "validated interactive server bootstrap path has no parent",
+        )
+    })?;
+
+    let existing_names = std::env::vars_os()
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>();
+    for name in existing_names {
+        std::env::remove_var(name);
+    }
+    for value in bootstrap.inherited_environment {
+        std::env::set_var(value.name, value.value);
+    }
+    for change in bootstrap.environment_changes {
+        match change.value {
+            Some(value) => std::env::set_var(change.name, value),
+            None => std::env::remove_var(change.name),
+        }
+    }
+    std::env::set_current_dir(&bootstrap.current_directory)?;
     if current_job_kills_processes_on_close()? {
-        launch_server_daemon_with_wmi(command)
-    } else {
-        command.spawn().map(|child| child.id())
+        return Err(std::io::Error::other(
+            "interactive server bootstrap is still owned by a terminating process job",
+        ));
     }
+    detach_interactive_server_console()?;
+
+    std::fs::remove_file(&path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to consume interactive server bootstrap state {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    std::fs::remove_dir(root).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to remove interactive server bootstrap directory {}: {err}",
+                root.display()
+            ),
+        )
+    })?;
+
+    args.truncate(1);
+    args.push("server".to_string());
+    Ok(args)
 }
 
-fn launch_server_daemon_with_wmi(command: &std::process::Command) -> std::io::Result<u32> {
-    // WMI resolves the class from this Rust type name, including CIM casing.
-    #[allow(non_camel_case_types)]
-    #[derive(serde::Deserialize)]
-    struct Win32_Process;
-
-    // WMI serializes this embedded object using the matching CIM class name.
-    #[allow(non_camel_case_types)]
-    #[derive(serde::Serialize)]
-    struct Win32_ProcessStartup {
-        #[serde(rename = "CreateFlags")]
-        create_flags: u32,
-        #[serde(rename = "EnvironmentVariables")]
-        environment_variables: Vec<String>,
+fn validate_interactive_server_bootstrap_path(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    if !path.is_absolute()
+        || path.file_name() != Some(OsStr::new(INTERACTIVE_SERVER_BOOTSTRAP_FILE))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server bootstrap state path is invalid",
+        ));
     }
-
-    #[derive(serde::Serialize)]
-    struct CreateInput {
-        #[serde(rename = "CommandLine")]
-        command_line: String,
-        #[serde(rename = "CurrentDirectory")]
-        current_directory: String,
-        #[serde(rename = "ProcessStartupInformation")]
-        process_startup_information: Win32_ProcessStartup,
+    let base = interactive_server_bootstrap_base()?;
+    let root = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server bootstrap state has no parent directory",
+        )
+    })?;
+    let root_name = root.file_name().and_then(OsStr::to_str).unwrap_or_default();
+    if root.parent() != Some(base.as_path())
+        || !root_name.starts_with("herdr-server-launch-")
+        || !root_name
+            .trim_start_matches("herdr-server-launch-")
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server bootstrap state is outside its private launch directory",
+        ));
     }
-
-    #[derive(serde::Deserialize)]
-    struct CreateOutput {
-        #[serde(rename = "ProcessId")]
-        process_id: Option<u32>,
-        #[serde(rename = "ReturnValue")]
-        return_value: u32,
-    }
-
-    let current_directory = command
-        .get_current_dir()
-        .map(std::path::Path::to_path_buf)
-        .map(Ok)
-        .unwrap_or_else(std::env::current_dir)?;
-    let input = CreateInput {
-        command_line: windows_command_line(command)?,
-        current_directory: unicode_windows_value(
-            &current_directory.into_os_string(),
-            "working directory",
-        )?,
-        process_startup_information: Win32_ProcessStartup {
-            create_flags: DETACHED_PROCESS,
-            environment_variables: effective_command_environment(command)?,
-        },
-    };
-
-    let connection = wmi::WMIConnection::new()
-        .map_err(|err| std::io::Error::other(format!("failed to connect to WMI: {err}")))?;
-    let output: CreateOutput = connection
-        .exec_class_method::<Win32_Process, _>("Create", &input)
-        .map_err(|err| std::io::Error::other(format!("WMI Win32_Process.Create failed: {err}")))?;
-    if output.return_value != 0 {
-        return Err(std::io::Error::other(format!(
-            "WMI Win32_Process.Create returned error {}",
-            output.return_value
-        )));
-    }
-    output.process_id.ok_or_else(|| {
-        std::io::Error::other("WMI Win32_Process.Create succeeded without a process id")
-    })
+    Ok(path.to_path_buf())
 }
 
-fn windows_command_line(command: &std::process::Command) -> std::io::Result<String> {
-    std::iter::once(command.get_program())
-        .chain(command.get_args())
-        .map(|value| {
-            unicode_windows_value(value, "server command argument")
-                .map(|value| quote_windows_command_line_arg(&value))
-        })
-        .collect::<std::io::Result<Vec<_>>>()
-        .map(|parts| parts.join(" "))
+fn validate_interactive_server_bootstrap(
+    bootstrap: &InteractiveServerBootstrap,
+) -> std::io::Result<()> {
+    if !std::path::Path::new(&bootstrap.current_directory).is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server bootstrap working directory is not absolute",
+        ));
+    }
+    for value in &bootstrap.inherited_environment {
+        validate_interactive_server_environment_name(&value.name)?;
+        validate_interactive_server_environment_value(&value.value)?;
+    }
+    for change in &bootstrap.environment_changes {
+        validate_interactive_server_environment_name(&change.name)?;
+        if let Some(value) = &change.value {
+            validate_interactive_server_environment_value(value)?;
+        }
+    }
+    Ok(())
 }
 
-fn effective_command_environment(command: &std::process::Command) -> std::io::Result<Vec<String>> {
-    let mut environment = std::env::vars_os()
-        .map(|(key, value)| {
-            Ok((
-                unicode_windows_value(&key, "inherited environment variable name")?,
-                unicode_windows_value(&value, "inherited environment variable value")?,
-            ))
-        })
-        .collect::<std::io::Result<Vec<(String, String)>>>()?;
-    for (key, value) in command.get_envs() {
-        let key = unicode_windows_value(key, "environment variable name")?;
-        environment.retain(|(inherited, _)| windows_environment_key_cmp(inherited, &key).is_ne());
-        if let Some(value) = value {
-            environment.push((
-                key,
-                unicode_windows_value(value, "environment variable value")?,
+fn validate_interactive_server_environment_name(name: &str) -> std::io::Result<()> {
+    if name.is_empty() || name.contains(['=', '\0']) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server bootstrap contains an invalid environment variable name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_interactive_server_environment_value(value: &str) -> std::io::Result<()> {
+    if value.contains('\0') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server bootstrap contains an invalid environment variable value",
+        ));
+    }
+    Ok(())
+}
+
+fn detach_interactive_server_console() -> std::io::Result<()> {
+    if INTERACTIVE_SERVER_NULL_HANDLE.get().is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "interactive server standard handles are already detached",
+        ));
+    }
+
+    let null = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("NUL")?;
+    let handle = null.as_raw_handle().cast();
+    for (standard_handle, label) in [
+        (STD_INPUT_HANDLE, "stdin"),
+        (STD_OUTPUT_HANDLE, "stdout"),
+        (STD_ERROR_HANDLE, "stderr"),
+    ] {
+        if unsafe { SetStdHandle(standard_handle, handle) } == 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(std::io::Error::new(
+                err.kind(),
+                format!("failed to detach interactive server {label}: {err}"),
             ));
         }
     }
-    environment.sort_unstable_by(|(left, _), (right, _)| windows_environment_key_cmp(left, right));
-    Ok(environment
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect())
+
+    if !unsafe { GetConsoleWindow() }.is_null() && unsafe { FreeConsole() } == 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("failed to detach the interactive server console: {err}"),
+        ));
+    }
+    if !unsafe { GetConsoleWindow() }.is_null() {
+        return Err(std::io::Error::other(
+            "interactive server console remained attached",
+        ));
+    }
+
+    INTERACTIVE_SERVER_NULL_HANDLE.set(null).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "interactive server standard handles became concurrently detached",
+        )
+    })
 }
 
-fn windows_environment_key_cmp(left: &str, right: &str) -> Ordering {
-    let left_wide: Vec<u16> = left.encode_utf16().collect();
-    let right_wide: Vec<u16> = right.encode_utf16().collect();
-    // SAFETY: both pointers remain valid for the call and lengths count UTF-16 units.
-    match unsafe {
-        CompareStringOrdinal(
-            left_wide.as_ptr(),
-            left_wide.len() as i32,
-            right_wide.as_ptr(),
-            right_wide.len() as i32,
-            1,
-        )
-    } {
-        CSTR_LESS_THAN => Ordering::Less,
-        CSTR_EQUAL => Ordering::Equal,
-        CSTR_GREATER_THAN => Ordering::Greater,
-        _ => left.cmp(right),
+pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
+    let interactive_session = active_interactive_session_id()?;
+    let current_session = process_session_id(std::process::id())?;
+    if current_session == interactive_session && !current_job_kills_processes_on_close()? {
+        command.spawn().map(|child| child.id())
+    } else {
+        launch_server_daemon_in_interactive_session(command, interactive_session)
     }
+}
+
+fn launch_server_daemon_in_interactive_session(
+    command: &std::process::Command,
+    session_id: u32,
+) -> std::io::Result<u32> {
+    let session_id_for_task = i32::try_from(session_id).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive desktop session id exceeds Task Scheduler range",
+        )
+    })?;
+    let mut pending = PendingInteractiveServerBootstrap::create(command)?;
+    let encoded_script = encoded_powershell_script(INTERACTIVE_LAUNCH_SCRIPT);
+    let job = ChildProcessJob::new_kill_on_close()?;
+    let mut launcher = std::process::Command::new("powershell.exe");
+    launcher
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            &encoded_script,
+        ])
+        .env(INTERACTIVE_LAUNCH_PROGRAM_ENV, &pending.program)
+        .env(INTERACTIVE_LAUNCH_ARGUMENTS_ENV, &pending.arguments)
+        .env(
+            INTERACTIVE_LAUNCH_WORKING_DIRECTORY_ENV,
+            &pending.working_directory,
+        )
+        .env(
+            INTERACTIVE_LAUNCH_SESSION_ID_ENV,
+            session_id_for_task.to_string(),
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    use std::os::windows::process::CommandExt as _;
+    launcher.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+    let mut launcher = launcher.spawn().map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!("failed to start interactive server launcher: {err}"),
+        )
+    })?;
+    if let Err(err) = job.assign(&launcher) {
+        let _ = launcher.kill();
+        let _ = wait_child_bounded(&mut launcher, Duration::from_secs(5));
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("failed to contain interactive server launcher: {err}"),
+        ));
+    }
+    if let Err(err) = resume_suspended_process(Some(launcher.id())) {
+        let cleanup = job.terminate_and_wait(&mut launcher, Duration::from_secs(5));
+        return Err(match cleanup {
+            Ok(()) => std::io::Error::new(
+                err.kind(),
+                format!("failed to resume interactive server launcher: {err}"),
+            ),
+            Err(cleanup_err) => std::io::Error::other(format!(
+                "failed to resume interactive server launcher ({err}); cleanup also failed: {cleanup_err}"
+            )),
+        });
+    }
+    match wait_for_process_handle(&launcher, INTERACTIVE_SERVER_LAUNCH_TIMEOUT)? {
+        true => {}
+        false => {
+            return match job.terminate_and_wait(&mut launcher, Duration::from_secs(5)) {
+                Ok(()) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "interactive server launcher exceeded 20 seconds",
+                )),
+                Err(err) => Err(std::io::Error::other(format!(
+                    "interactive server launcher timed out and cleanup failed: {err}"
+                ))),
+            };
+        }
+    }
+    let output = launcher.wait_with_output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "interactive server launcher failed: {}",
+            stderr.trim()
+        )));
+    }
+    let stdout = String::from_utf8(output.stdout).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server launcher returned non-UTF-8 output",
+        )
+    })?;
+    let pid = parse_interactive_server_pid(&stdout)?;
+    let process = open_interactive_server_process(pid).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "interactive server process exited before validation",
+        )
+    })?;
+    let validation = (|| {
+        let actual_session = process_session_id(pid)?;
+        if actual_session != session_id {
+            return Err(std::io::Error::other(format!(
+                "interactive server launched in session {actual_session}, expected {session_id}"
+            )));
+        }
+        if !process_user_matches_current_user(&process)? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "interactive server did not launch as the current user",
+            ));
+        }
+        wait_for_interactive_bootstrap_consumption(&pending.path, &process)
+    })();
+    if let Err(err) = validation {
+        let cleanup = terminate_process_and_wait(&process, Duration::from_secs(5));
+        return Err(match cleanup {
+            Ok(()) => err,
+            Err(cleanup_err) => std::io::Error::other(format!(
+                "{err}; failed to terminate rejected interactive server process: {cleanup_err}"
+            )),
+        });
+    }
+    pending.transfer_to_server();
+    Ok(pid)
+}
+
+fn active_interactive_session_id() -> std::io::Result<u32> {
+    struct WtsSessionBuffer(*mut WTS_SESSION_INFOW);
+
+    impl Drop for WtsSessionBuffer {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    WTSFreeMemory(self.0.cast());
+                }
+            }
+        }
+    }
+
+    let mut sessions = null_mut();
+    let mut count = 0;
+    if unsafe { WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut sessions, &mut count) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let sessions = WtsSessionBuffer(sessions);
+    let entries: &[WTS_SESSION_INFOW] = if count == 0 {
+        &[]
+    } else if sessions.0.is_null() {
+        return Err(std::io::Error::other(
+            "Windows session enumeration returned a null buffer",
+        ));
+    } else {
+        unsafe { std::slice::from_raw_parts(sessions.0, count as usize) }
+    };
+    let active = entries
+        .iter()
+        .filter(|entry| entry.State == WTSActive && entry.SessionId != 0)
+        .map(|entry| entry.SessionId)
+        .collect::<Vec<_>>();
+    let [session_id] = active.as_slice() else {
+        let message = if active.is_empty() {
+            "no active interactive desktop session is available".to_string()
+        } else {
+            format!(
+                "multiple active interactive desktop sessions are available ({active:?}); refusing to guess"
+            )
+        };
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, message));
+    };
+    Ok(*session_id)
+}
+
+fn process_session_id(pid: u32) -> std::io::Result<u32> {
+    let mut session_id = 0;
+    if unsafe { ProcessIdToSessionId(pid, &mut session_id) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(session_id)
+}
+
+fn open_interactive_server_process(pid: u32) -> Option<ProcessHandle> {
+    ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE)
+}
+
+fn parse_interactive_server_pid(output: &str) -> std::io::Result<u32> {
+    const PREFIX: &str = "HERDR_INTERACTIVE_SERVER_PID=";
+    let matches = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(PREFIX))
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive server launcher did not return exactly one process id",
+        ));
+    }
+    matches[0]
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid != 0)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "interactive server launcher returned an invalid process id",
+            )
+        })
+}
+
+fn wait_for_interactive_bootstrap_consumption(
+    path: &std::path::Path,
+    process: &ProcessHandle,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + INTERACTIVE_SERVER_BOOTSTRAP_TIMEOUT;
+    loop {
+        if !path.exists() {
+            return Ok(());
+        }
+        if !process_handle_is_running(process)? {
+            return Err(std::io::Error::other(
+                "interactive server exited before consuming its launch state",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "interactive server did not consume its launch state within 5 seconds",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn process_handle_is_running(process: &ProcessHandle) -> std::io::Result<bool> {
+    let mut exit_code = 0;
+    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(exit_code == STILL_ACTIVE)
+}
+
+struct TokenUserBuffer(Vec<usize>);
+
+impl TokenUserBuffer {
+    fn read(token: HANDLE) -> std::io::Result<Self> {
+        let mut required = 0;
+        unsafe {
+            GetTokenInformation(token, TokenUser, null_mut(), 0, &mut required);
+        }
+        if required < size_of::<TOKEN_USER>() as u32 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let words = (required as usize).div_ceil(size_of::<usize>());
+        let mut buffer = vec![0usize; words];
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                required,
+                &mut required,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self(buffer))
+    }
+
+    fn sid(&self) -> *mut c_void {
+        unsafe { (*(self.0.as_ptr().cast::<TOKEN_USER>())).User.Sid }
+    }
+}
+
+fn open_process_token(process: HANDLE) -> std::io::Result<OwnedHandle> {
+    let mut token = null_mut();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(token.cast()) })
+}
+
+fn process_user_matches_current_user(process: &ProcessHandle) -> std::io::Result<bool> {
+    let current_token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let process_token = open_process_token(process.0)?;
+    let current_user = TokenUserBuffer::read(current_token.as_raw_handle().cast())?;
+    let process_user = TokenUserBuffer::read(process_token.as_raw_handle().cast())?;
+    Ok(unsafe { EqualSid(current_user.sid(), process_user.sid()) } != 0)
+}
+
+fn terminate_process_and_wait(process: &ProcessHandle, timeout: Duration) -> std::io::Result<()> {
+    if unsafe { TerminateProcess(process.0, 1) } == 0 {
+        let err = std::io::Error::last_os_error();
+        if process_handle_is_running(process)? {
+            return Err(err);
+        }
+    }
+
+    // A Task Scheduler process can deny SYNCHRONIZE to the same user's SSH
+    // logon token. The query handle can still observe the terminated state.
+    let deadline = Instant::now() + timeout;
+    while process_handle_is_running(process)? {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out waiting for the rejected interactive server to exit",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
+}
+
+fn wait_for_process_handle(
+    child: &std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<bool> {
+    wait_for_handle(child.as_raw_handle().cast(), timeout)
+}
+
+fn wait_for_handle(handle: HANDLE, timeout: Duration) -> std::io::Result<bool> {
+    let timeout_ms = timeout.as_millis().min((u32::MAX - 1) as u128) as u32;
+    match unsafe { WaitForSingleObject(handle, timeout_ms) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        WAIT_FAILED => Err(std::io::Error::last_os_error()),
+        result => Err(std::io::Error::other(format!(
+            "unexpected process wait result {result}"
+        ))),
+    }
+}
+
+pub(crate) fn wait_child_bounded(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    if wait_for_process_handle(child, timeout)? {
+        child.wait().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) struct ChildProcessJob(HANDLE);
+
+impl ChildProcessJob {
+    pub(crate) fn new_kill_on_close() -> std::io::Result<Self> {
+        create_kill_on_close_job().map(Self)
+    }
+
+    pub(crate) fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+        if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle().cast()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn terminate_and_wait(
+        &self,
+        child: &mut std::process::Child,
+        timeout: Duration,
+    ) -> std::io::Result<()> {
+        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if child.try_wait()?.is_none() {
+                return Err(error);
+            }
+            return Ok(());
+        }
+        match wait_child_bounded(child, timeout)? {
+            Some(_) => Ok(()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out waiting for contained process cleanup",
+            )),
+        }
+    }
+}
+
+impl Drop for ChildProcessJob {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+fn encoded_powershell_script(script: &str) -> String {
+    use base64::Engine as _;
+
+    let utf16 = script
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
 }
 
 fn unicode_windows_value(value: &OsStr, label: &str) -> std::io::Result<String> {
@@ -967,7 +1691,7 @@ pub fn current_process_is_detached_server_daemon() -> bool {
         return false;
     }
 
-    matches!(current_process_is_in_job(), Ok(false))
+    matches!(current_job_kills_processes_on_close(), Ok(false))
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
@@ -2516,6 +3240,8 @@ impl Drop for InputSourceRestore {
 mod tests {
     use std::{
         fs,
+        os::windows::process::CommandExt as _,
+        path::PathBuf,
         process::{Command, Stdio},
         sync::Arc,
         thread,
@@ -2525,6 +3251,7 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+    use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
 
     #[test]
     fn private_remote_directory_supports_long_paths() {
@@ -2775,69 +3502,168 @@ mod tests {
 
     const CONSOLE_TEST_CHILD_ENV: &str = "HERDR_TEST_CONSOLE_CHILD_MODE";
     const CONSOLE_TEST_PARENT_PID_ENV: &str = "HERDR_TEST_CONSOLE_PARENT_PID";
-    const WMI_DAEMON_TEST_CHILD_ENV: &str = "HERDR_TEST_WMI_DAEMON_CHILD";
+    const INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV: &str =
+        "HERDR_TEST_INTERACTIVE_BOOTSTRAP_BASE_CHILD";
+    const INTERACTIVE_DETACH_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_DETACH_CHILD";
+    const INTERACTIVE_REJECTION_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_REJECTION_CHILD";
 
     #[test]
-    fn windows_environment_keys_use_unicode_case_insensitive_ordering() {
+    fn interactive_server_pid_requires_one_exact_record() {
         assert_eq!(
-            super::windows_environment_key_cmp("hérdr", "HÉRDR"),
-            std::cmp::Ordering::Equal
+            super::parse_interactive_server_pid("HERDR_INTERACTIVE_SERVER_PID=42\n").unwrap(),
+            42
+        );
+        assert!(super::parse_interactive_server_pid("42\n").is_err());
+        assert!(super::parse_interactive_server_pid(
+            "HERDR_INTERACTIVE_SERVER_PID=41\nHERDR_INTERACTIVE_SERVER_PID=42\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait() {
+        if std::env::var_os(INTERACTIVE_REJECTION_TEST_CHILD_ENV).is_some() {
+            thread::sleep(Duration::from_secs(30));
+            return;
+        }
+
+        let test_exe = std::env::current_exe().expect("resolve test executable");
+        let mut child = Command::new(test_exe)
+            .arg("rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait")
+            .env(INTERACTIVE_REJECTION_TEST_CHILD_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn rejected interactive server test child");
+        let process = super::ProcessHandle::open(
+            child.id(),
+            super::PROCESS_QUERY_LIMITED_INFORMATION | super::PROCESS_TERMINATE,
+        )
+        .unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("open rejected interactive server test child without synchronize access");
+        });
+
+        super::terminate_process_and_wait(&process, Duration::from_secs(5))
+            .expect("terminate and wait for rejected interactive server test child");
+        let status = child
+            .wait()
+            .expect("reap rejected interactive server test child");
+        assert!(!status.success(), "rejected test child was not terminated");
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_omits_cmd_drive_environment() {
+        let inherited = super::interactive_server_inherited_environment([
+            (
+                std::ffi::OsString::from("=C:"),
+                std::ffi::OsString::from(r"C:\work"),
+            ),
+            (
+                std::ffi::OsString::from("HERDR_TEST_VALUE"),
+                std::ffi::OsString::from("kept"),
+            ),
+        ])
+        .expect("collect inherited environment");
+
+        assert_eq!(inherited.len(), 1);
+        assert_eq!(inherited[0].name, "HERDR_TEST_VALUE");
+        assert_eq!(inherited[0].value, "kept");
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_uses_session_stable_profile_base() {
+        let mut command = Command::new(std::env::current_exe().expect("resolve test executable"));
+        command.arg("server");
+
+        let pending = super::PendingInteractiveServerBootstrap::create(&command)
+            .expect("create interactive server bootstrap");
+        let expected_base = super::interactive_server_bootstrap_base()
+            .expect("resolve stable interactive server bootstrap base");
+        assert_eq!(pending.root.parent(), Some(expected_base.as_path()));
+        assert_eq!(
+            super::validate_interactive_server_bootstrap_path(&pending.path)
+                .expect("validate interactive server bootstrap path"),
+            pending.path
         );
     }
 
     #[test]
-    fn windows_wmi_daemon_preserves_environment_and_working_directory() {
-        if let Some(capture) = std::env::var_os(WMI_DAEMON_TEST_CHILD_ENV) {
-            let cwd = std::env::current_dir().expect("WMI daemon test working directory");
-            fs::write(
-                capture,
-                format!(
-                    "{}\n{}",
-                    cwd.display(),
-                    super::current_process_is_detached_server_daemon()
-                ),
-            )
-            .expect("write WMI daemon test capture");
+    fn interactive_server_bootstrap_base_ignores_process_environment() {
+        if let Some(fake_base) = std::env::var_os(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV) {
+            let bootstrap_base = super::interactive_server_bootstrap_base()
+                .expect("resolve interactive server bootstrap base");
+            assert!(!bootstrap_base.starts_with(PathBuf::from(fake_base)));
             return;
         }
 
-        let base = std::env::temp_dir().join(format!(
-            "herdr-wmi-daemon-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
+        let fake_base = std::env::temp_dir().join(format!(
+            "herdr-fake-session-environment-{}",
+            std::process::id()
         ));
-        fs::create_dir_all(&base).unwrap();
-        let capture = base.join("capture.txt");
+        let output = Command::new(std::env::current_exe().expect("resolve test executable"))
+            .arg(
+                "platform::windows::tests::interactive_server_bootstrap_base_ignores_process_environment",
+            )
+            .arg("--exact")
+            .env(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV, &fake_base)
+            .env("XDG_STATE_HOME", &fake_base)
+            .env("LOCALAPPDATA", &fake_base)
+            .env("USERPROFILE", &fake_base)
+            .env("HOME", &fake_base)
+            .env("TEMP", &fake_base)
+            .env("TMP", &fake_base)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run interactive bootstrap base child test");
+        assert!(
+            output.status.success(),
+            "bootstrap base followed process environment: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_detaches_its_console() {
+        if std::env::var_os(INTERACTIVE_DETACH_TEST_CHILD_ENV).is_some() {
+            assert!(
+                !unsafe { GetConsoleWindow() }.is_null(),
+                "interactive bootstrap test child did not start with a console"
+            );
+            super::detach_interactive_server_console().expect("detach interactive server console");
+            assert!(
+                unsafe { GetConsoleWindow() }.is_null(),
+                "interactive server retained its console"
+            );
+            return;
+        }
+
         let test_exe = std::env::current_exe().expect("resolve test executable");
         let mut child = Command::new(test_exe);
         child
-            .arg("windows_wmi_daemon_preserves_environment_and_working_directory")
-            .current_dir(&base)
-            .env(WMI_DAEMON_TEST_CHILD_ENV, &capture)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-
-        let pid = super::launch_server_daemon_with_wmi(&child)
-            .expect("launch detached process through WMI");
-        assert_ne!(pid, 0, "WMI returned an invalid process id");
-
-        let expected = format!("{}\ntrue", base.display());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if fs::read_to_string(&capture).is_ok_and(|captured| captured == expected) {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "WMI daemon child did not write the expected capture"
-            );
-            thread::sleep(Duration::from_millis(50));
+            .arg("interactive_server_bootstrap_detaches_its_console")
+            .env(INTERACTIVE_DETACH_TEST_CHILD_ENV, "1")
+            .creation_flags(CREATE_NEW_CONSOLE);
+        let mut child = child.spawn().expect("spawn interactive detach test child");
+        let job = super::ChildProcessJob::new_kill_on_close().expect("create detach test job");
+        if let Err(err) = job.assign(&child) {
+            let _ = child.kill();
+            let _ = super::wait_child_bounded(&mut child, Duration::from_secs(5));
+            panic!("assign interactive detach test child: {err}");
         }
-        let _ = fs::remove_dir_all(base);
+        let status = match super::wait_child_bounded(&mut child, Duration::from_secs(5))
+            .expect("wait for interactive detach test child")
+        {
+            Some(status) => status,
+            None => {
+                job.terminate_and_wait(&mut child, Duration::from_secs(5))
+                    .expect("terminate timed-out interactive detach test child");
+                panic!("interactive detach test child exceeded five seconds");
+            }
+        };
+        assert!(status.success(), "interactive detach test child failed");
     }
 
     fn console_process_ids() -> Vec<u32> {

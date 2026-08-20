@@ -25,13 +25,15 @@ const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Poll interval when waiting for the server socket to appear.
 const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Maximum time one Windows readiness connection may wait for Welcome.
+const CLIENT_PROTOCOL_READINESS_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Timeout for checking the stable JSON API before attaching to the binary protocol socket.
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Private daemon-start hint used to seed a fresh headless server from the
 /// directory where the user ran `herdr`.
 pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
-
 // ---------------------------------------------------------------------------
 // Server detection
 // ---------------------------------------------------------------------------
@@ -91,12 +93,12 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
     }
 }
 
-fn read_server_status() -> io::Result<Option<crate::api::RuntimeStatus>> {
+pub(crate) fn read_server_status() -> io::Result<Option<crate::api::RuntimeStatus>> {
     crate::api::read_runtime_status_at(&crate::api::socket_path(), STATUS_REQUEST_TIMEOUT)
 }
 
 #[cfg(windows)]
-fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
+fn client_protocol_accepts_hello(socket_path: &Path, read_timeout: Duration) -> io::Result<bool> {
     if !socket_path.exists() {
         return Ok(false);
     }
@@ -117,19 +119,43 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
         Err(err) => return Err(err),
     };
 
-    let hello = crate::protocol::ClientMessage::Hello {
-        version: crate::protocol::PROTOCOL_VERSION,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        requested_encoding: crate::protocol::RenderEncoding::SemanticFrame,
-        keybindings: crate::protocol::ClientKeybindings::Server,
-        launch_mode: crate::protocol::ClientLaunchMode::App,
-    };
+    let hello = client_protocol_readiness_hello();
 
     match crate::protocol::write_message(&mut stream, &hello) {
-        Ok(()) => Ok(true),
+        Ok(()) => {}
+        Err(crate::protocol::FramingError::Io(err))
+            if matches!(
+                err.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::NotFound
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::ConnectionReset
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(err) => return Err(io::Error::other(err.to_string())),
+    }
+
+    let mut reader = crate::ipc::LocalStreamDeadlineReader::new(&mut stream, read_timeout);
+    let welcome = crate::protocol::read_message(&mut reader, crate::protocol::MAX_FRAME_SIZE);
+    client_protocol_welcome_is_ready(welcome)
+}
+
+#[cfg(windows)]
+fn client_protocol_welcome_is_ready(
+    welcome: Result<crate::protocol::ServerMessage, crate::protocol::FramingError>,
+) -> io::Result<bool> {
+    match welcome {
+        Ok(crate::protocol::ServerMessage::Welcome {
+            version,
+            error: None,
+            ..
+        }) => Ok(version == crate::protocol::PROTOCOL_VERSION),
+        Ok(crate::protocol::ServerMessage::Welcome { error: Some(_), .. }) => Ok(false),
+        Ok(_) | Err(crate::protocol::FramingError::UnexpectedEof) => Ok(false),
         Err(crate::protocol::FramingError::Io(err))
             if matches!(
                 err.kind(),
@@ -144,6 +170,88 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
             Ok(false)
         }
         Err(err) => Err(io::Error::other(err.to_string())),
+    }
+}
+
+#[cfg(windows)]
+fn client_protocol_readiness_hello() -> crate::protocol::ClientMessage {
+    crate::protocol::ClientMessage::Hello {
+        version: crate::protocol::PROTOCOL_VERSION,
+        cols: 80,
+        rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        requested_encoding: crate::protocol::RenderEncoding::SemanticFrame,
+        keybindings: crate::protocol::ClientKeybindings::Server,
+        // Readiness must validate the handshake without becoming the foreground
+        // app client that starts the pending startup workspace.
+        launch_mode: crate::protocol::ClientLaunchMode::TerminalAttach,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn readiness_probe_cannot_become_foreground_app_client() {
+        let crate::protocol::ClientMessage::Hello { launch_mode, .. } =
+            client_protocol_readiness_hello()
+        else {
+            panic!("expected readiness hello");
+        };
+        assert_eq!(
+            launch_mode,
+            crate::protocol::ClientLaunchMode::TerminalAttach
+        );
+    }
+
+    #[test]
+    fn readiness_probe_requires_matching_accepted_welcome() {
+        assert!(
+            client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
+                version: crate::protocol::PROTOCOL_VERSION,
+                encoding: crate::protocol::RenderEncoding::SemanticFrame,
+                error: None,
+            }))
+            .unwrap()
+        );
+        assert!(
+            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
+                version: crate::protocol::PROTOCOL_VERSION + 1,
+                encoding: crate::protocol::RenderEncoding::SemanticFrame,
+                error: None,
+            }))
+            .unwrap()
+        );
+        assert!(
+            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
+                version: crate::protocol::PROTOCOL_VERSION,
+                encoding: crate::protocol::RenderEncoding::SemanticFrame,
+                error: Some("rejected".into()),
+            }))
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn readiness_probe_treats_no_welcome_as_not_ready() {
+        assert!(
+            !client_protocol_welcome_is_ready(Err(crate::protocol::FramingError::Io(
+                io::ErrorKind::TimedOut.into()
+            )))
+            .unwrap()
+        );
+        assert!(!client_protocol_welcome_is_ready(Err(
+            crate::protocol::FramingError::UnexpectedEof
+        ))
+        .unwrap());
+    }
+
+    #[test]
+    fn explicit_server_start_uses_the_requested_binary() {
+        let exe = PathBuf::from(r"C:\remote-sidecar\herdr.exe");
+        assert_eq!(server_daemon_program_for_test(exe.clone()), exe);
     }
 }
 
@@ -207,6 +315,24 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     Ok(pid)
 }
 
+pub fn start_server_daemon_with_exe(exe: PathBuf) -> io::Result<()> {
+    let socket_path = client_socket_path();
+    if is_server_listening_at(&socket_path) {
+        validate_running_server_compatibility()?;
+        return Ok(());
+    }
+    let mut command = build_server_daemon_command(exe);
+    crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
+        io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
+    })?;
+    wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT)
+}
+
+#[cfg(test)]
+fn server_daemon_program_for_test(exe: PathBuf) -> PathBuf {
+    build_server_daemon_command(exe).get_program().into()
+}
+
 fn build_server_daemon_command(exe: PathBuf) -> Command {
     let mut command = Command::new(&exe);
     command
@@ -216,6 +342,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     crate::platform::detach_server_daemon_command(&mut command);
+    crate::remote::configure_remote_sidecar_child(&mut command);
 
     match std::env::current_dir() {
         Ok(cwd) => {
@@ -249,7 +376,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
 
     while std::time::Instant::now() < deadline {
         #[cfg(windows)]
-        if client_protocol_accepts_hello(socket_path)? {
+        if client_protocol_accepts_hello(
+            socket_path,
+            CLIENT_PROTOCOL_READINESS_ATTEMPT_TIMEOUT
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        )? {
             info!(path = %socket_path.display(), "server client protocol ready");
             return Ok(());
         }

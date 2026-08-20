@@ -259,7 +259,8 @@ impl App {
         #[cfg(windows)]
         {
             if !params.force
-                && crate::worktree::checkout_has_dirty_files(&space.checkout_path).unwrap_or(false)
+                && crate::worktree::checkout_has_dirty_files(&space.repo_root, &space.checkout_path)
+                    .unwrap_or(false)
             {
                 Self::send_api_response(
                     respond_to,

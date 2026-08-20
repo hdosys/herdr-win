@@ -45,6 +45,7 @@ The table is intentionally capability-level. The patch files contain the exact i
 | OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps active retries active and exposes only actionable terminal failures. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
 | Cross-platform docs checks | **Maintained here** · [#3041](https://github.com/herdrdev/herdr/issues/3041) · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
+| Mounted worktree lifecycle | **Maintained here** · [#3044](https://github.com/herdrdev/herdr/issues/3044) · [`0008`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0008-worktree-scoped-git-trust.patch) | Scopes Git ownership trust to the exact repository and checkout selected by a Herdr worktree operation, without persistent or wildcard configuration. |
 
 Upstream PR #2329 ships in Herdr v0.8.2. The refreshed mailbox `0003` therefore contains only Windows target-host detection, provisioning, activation, and exact interactive-session launch. Shared client attach, image transport, and SSH bridge behavior now come directly from upstream. The original Windows-host work builds on [nsxdavid's `feat/windows-remote-attach` branch](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
 
@@ -68,6 +69,7 @@ flowchart LR
         P4 --> P5["0005<br/>OpenCode lifecycle"]
         P5 --> P6["0006<br/>Hardened downloads"]
         P6 --> P7["0007<br/>Portable docs check"]
+        P7 --> P8["0008<br/>Scoped Git trust"]
     end
 
     subgraph V["Validated distribution"]
@@ -77,7 +79,7 @@ flowchart LR
     end
 
     B --> P1
-    P7 --> R
+    P8 --> R
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only application order. Each patch is a full-index, binary-safe mailbox with one logical responsibility.

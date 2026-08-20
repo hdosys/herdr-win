@@ -4,3 +4,4 @@
 0005-opencode-retry-notifications.patch
 0006-harden-curl-transfers.patch
 0007-docs-parity-native-paths.patch
+0008-worktree-scoped-git-trust.patch

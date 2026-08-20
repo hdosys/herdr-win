@@ -13,6 +13,7 @@ than one monolith or a patch for every development commit:
 4. OpenCode retry lifecycle correlation.
 5. Hardened cross-platform runtime `curl` transfers.
 6. Cross-platform documentation parity test paths.
+7. Process-local Git trust for explicitly selected worktree paths.
 
 When a feature evolves, refresh its existing mailbox in place. Add a new patch
 only when the change has a genuinely independent owner, verification plan, and

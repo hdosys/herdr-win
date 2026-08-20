@@ -151,6 +151,26 @@ pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn worktree_git_config_args(repo_root: &Path, checkout: Option<&Path>) -> Vec<String> {
+    // Worktree operations already resolve an explicit local repository boundary. Trust only
+    // those exact paths for this Git child instead of persisting configuration or using `*`.
+    let mut args = vec![
+        "-c".to_string(),
+        format!("safe.directory={}", repo_root.display()),
+    ];
+    if let Some(checkout) = checkout.filter(|checkout| *checkout != repo_root) {
+        args.push("-c".to_string());
+        args.push(format!("safe.directory={}", checkout.display()));
+    }
+    args
+}
+
+fn worktree_git_command(repo_root: &Path, checkout: Option<&Path>) -> std::process::Command {
+    let mut command = crate::noninteractive_process::command("git");
+    command.args(worktree_git_config_args(repo_root, checkout));
+    command
+}
+
 pub(crate) fn default_checkout_path(root: &Path, repo_name: &str, branch: &str) -> PathBuf {
     root.join(repo_name).join(branch_to_path_slug(branch))
 }
@@ -160,12 +180,13 @@ pub(crate) fn build_worktree_remove_command(
     path: &Path,
     force: bool,
 ) -> WorktreeCommand {
-    let mut args = vec![
+    let mut args = worktree_git_config_args(repo_root, None);
+    args.extend([
         "-C".to_string(),
         repo_root.display().to_string(),
         "worktree".to_string(),
         "remove".to_string(),
-    ];
+    ]);
     if force {
         args.push("--force".to_string());
     }
@@ -197,9 +218,9 @@ pub(crate) fn worktree_dirty_remove_message(path: &Path) -> String {
 }
 
 #[cfg(any(windows, test))]
-pub(crate) fn checkout_has_dirty_files(path: &Path) -> Result<bool, String> {
+pub(crate) fn checkout_has_dirty_files(repo_root: &Path, path: &Path) -> Result<bool, String> {
     let path_arg = path.display().to_string();
-    let output = crate::noninteractive_process::command("git")
+    let output = worktree_git_command(repo_root, Some(path))
         .args([
             "-C",
             &path_arg,
@@ -231,18 +252,20 @@ pub(crate) fn build_worktree_add_new_branch_command(
     branch: &str,
     base: &str,
 ) -> WorktreeCommand {
+    let mut args = worktree_git_config_args(repo_root, None);
+    args.extend([
+        "-C".to_string(),
+        repo_root.display().to_string(),
+        "worktree".to_string(),
+        "add".to_string(),
+        "-b".to_string(),
+        branch.to_string(),
+        path.display().to_string(),
+        base.to_string(),
+    ]);
     WorktreeCommand {
         program: "git".to_string(),
-        args: vec![
-            "-C".to_string(),
-            repo_root.display().to_string(),
-            "worktree".to_string(),
-            "add".to_string(),
-            "-b".to_string(),
-            branch.to_string(),
-            path.display().to_string(),
-            base.to_string(),
-        ],
+        args,
     }
 }
 
@@ -251,21 +274,23 @@ pub(crate) fn build_worktree_add_existing_branch_command(
     path: &Path,
     branch: &str,
 ) -> WorktreeCommand {
+    let mut args = worktree_git_config_args(repo_root, None);
+    args.extend([
+        "-C".to_string(),
+        repo_root.display().to_string(),
+        "worktree".to_string(),
+        "add".to_string(),
+        path.display().to_string(),
+        branch.to_string(),
+    ]);
     WorktreeCommand {
         program: "git".to_string(),
-        args: vec![
-            "-C".to_string(),
-            repo_root.display().to_string(),
-            "worktree".to_string(),
-            "add".to_string(),
-            path.display().to_string(),
-            branch.to_string(),
-        ],
+        args,
     }
 }
 
 pub(crate) fn local_branch_exists(repo_root: &Path, branch: &str) -> Result<bool, String> {
-    let output = crate::noninteractive_process::command("git")
+    let output = worktree_git_command(repo_root, None)
         .arg("-C")
         .arg(repo_root)
         .args(["show-ref", "--verify", "--quiet"])
@@ -375,7 +400,7 @@ fn leftover_worktree_checkout_matches_repo(repo_root: &Path, path: &Path) -> boo
 }
 
 fn git_common_worktrees_dir(repo_root: &Path) -> Option<PathBuf> {
-    let output = crate::noninteractive_process::command("git")
+    let output = worktree_git_command(repo_root, None)
         .arg("-C")
         .arg(repo_root)
         .args(["rev-parse", "--git-common-dir"])
@@ -471,7 +496,7 @@ pub(crate) fn parse_worktree_list_porcelain(output: &str) -> Vec<ExistingWorktre
 }
 
 pub(crate) fn list_existing_worktrees(repo_root: &Path) -> Result<Vec<ExistingWorktree>, String> {
-    let output = crate::noninteractive_process::command("git")
+    let output = worktree_git_command(repo_root, None)
         .arg("-C")
         .arg(repo_root)
         .args(["worktree", "list", "--porcelain"])
@@ -712,6 +737,26 @@ prunable stale
     }
 
     #[test]
+    fn worktree_git_trust_is_scoped_to_exact_selected_paths() {
+        assert_eq!(
+            worktree_git_config_args(
+                Path::new("/repo/herdr"),
+                Some(Path::new("/worktrees/herdr/fix")),
+            ),
+            vec![
+                "-c",
+                "safe.directory=/repo/herdr",
+                "-c",
+                "safe.directory=/worktrees/herdr/fix",
+            ]
+        );
+        assert_eq!(
+            worktree_git_config_args(Path::new("/repo/herdr"), Some(Path::new("/repo/herdr"))),
+            vec!["-c", "safe.directory=/repo/herdr"]
+        );
+    }
+
+    #[test]
     fn checkout_dirty_detection_reports_clean_and_dirty_worktrees() {
         let repo = create_committed_repo("worktree-dirty-detection-repo");
         let checkout = unique_temp_path("worktree-dirty-detection-checkout");
@@ -728,9 +773,9 @@ prunable stale
             ],
         );
 
-        assert_eq!(checkout_has_dirty_files(&checkout), Ok(false));
+        assert_eq!(checkout_has_dirty_files(&repo, &checkout), Ok(false));
         std::fs::write(checkout.join("README.md"), "dirty\n").unwrap();
-        assert_eq!(checkout_has_dirty_files(&checkout), Ok(true));
+        assert_eq!(checkout_has_dirty_files(&repo, &checkout), Ok(true));
 
         let remove = build_worktree_remove_command(&repo, &checkout, true);
         run_worktree_command(&remove).unwrap();
@@ -748,6 +793,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",
@@ -767,6 +814,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",
@@ -802,6 +851,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",
@@ -825,6 +876,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",

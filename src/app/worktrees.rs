@@ -641,7 +641,8 @@ impl App {
                 }
                 #[cfg(windows)]
                 if !remove.force_confirmation
-                    && crate::worktree::checkout_has_dirty_files(&remove.path).unwrap_or(false)
+                    && crate::worktree::checkout_has_dirty_files(&remove.repo_root, &remove.path)
+                        .unwrap_or(false)
                 {
                     remove.force_confirmation = true;
                     remove.error = None;
@@ -667,7 +668,16 @@ impl App {
                 .iter()
                 .position(|ws| ws.id == workspace_id)
             {
-                self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
+                if !self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx) {
+                    if let Some(remove) = self.state.worktree_remove.as_mut() {
+                        remove.removing = false;
+                        remove.error = Some(
+                            "Could not stop the worktree terminal. Close it and retry removal."
+                                .into(),
+                        );
+                    }
+                    return;
+                }
             }
         }
 
@@ -751,7 +761,8 @@ impl App {
         }
         #[cfg(windows)]
         if !remove.force_confirmation
-            && crate::worktree::checkout_has_dirty_files(&remove.path).unwrap_or(false)
+            && crate::worktree::checkout_has_dirty_files(&remove.repo_root, &remove.path)
+                .unwrap_or(false)
         {
             remove.force_confirmation = true;
             remove.error = None;
@@ -968,6 +979,7 @@ impl App {
     }
 
     pub(crate) fn close_removed_linked_worktree_workspace(&mut self, ws_idx: usize) {
+        let removed_workspace_was_active = self.state.active == Some(ws_idx);
         let parent_key = self
             .state
             .workspaces
@@ -979,6 +991,9 @@ impl App {
         self.state.selected = ws_idx;
         self.state.close_selected_workspace();
 
+        if !removed_workspace_was_active {
+            return;
+        }
         let Some(parent_key) = parent_key else {
             return;
         };
@@ -995,15 +1010,18 @@ impl App {
     pub(crate) fn shutdown_workspace_terminal_runtimes_for_worktree_remove(
         &mut self,
         ws_idx: usize,
-    ) {
+    ) -> bool {
+        let mut complete = true;
         for terminal_id in self.state.terminal_ids_for_workspace(ws_idx) {
             tracing::debug!(
                 workspace_index = ws_idx,
                 terminal_id = %terminal_id,
                 "shutting down terminal runtime before worktree removal"
             );
-            self.shutdown_terminal_runtime(terminal_id);
+            let terminal_complete = self.shutdown_terminal_runtime(terminal_id);
+            complete &= terminal_complete;
         }
+        complete
     }
 }
 

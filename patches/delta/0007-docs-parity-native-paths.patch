@@ -1,0 +1,25 @@
+From fc3518f713d51d2bd6509c9b15451eefd1495e25 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 16:44:59 +0200
+Subject: [PATCH 6/6] test(docs): accept native path separators
+
+---
+ scripts/test_docs_translation_parity.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/test_docs_translation_parity.py b/scripts/test_docs_translation_parity.py
+index 9a8aa378fc68b269af7414a88caf7303b57601c9..30679a63bd5dcbd467a3cb35bcac519cebe51100 100644
+--- a/scripts/test_docs_translation_parity.py
++++ b/scripts/test_docs_translation_parity.py
+@@ -56,7 +56,7 @@ class DocsTranslationParityTests(unittest.TestCase):
+             errors = check_docs_translation_parity(root)
+ 
+             self.assertEqual(len(errors), 1)
+-            self.assertIn("ja/cli-reference.mdx", errors[0])
++            self.assertIn(str(root / "ja" / "cli-reference.mdx"), errors[0])
+             self.assertIn("heading outline differs", errors[0])
+ 
+     def test_parity_reports_missing_and_stale_files(self) -> None:
+-- 
+2.55.0.windows.3
+

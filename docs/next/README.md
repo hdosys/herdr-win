@@ -44,6 +44,7 @@ The table is intentionally capability-level. The patch files contain the exact i
 | Managed Windows snapshots | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, and process-safe uninstall from one verified candidate. |
 | OpenCode lifecycle reporting | **Maintained here** · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps active retries active and exposes only actionable terminal failures. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
+| Cross-platform docs checks | **Maintained here** · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
 
 Upstream PR #2329 ships in Herdr v0.8.2. The refreshed mailbox `0003` therefore contains only Windows target-host detection, provisioning, activation, and exact interactive-session launch. Shared client attach, image transport, and SSH bridge behavior now come directly from upstream. The original Windows-host work builds on [nsxdavid's `feat/windows-remote-attach` branch](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
 
@@ -66,6 +67,7 @@ flowchart LR
         P3 --> P4["0004<br/>Windows distribution"]
         P4 --> P5["0005<br/>OpenCode lifecycle"]
         P5 --> P6["0006<br/>Hardened downloads"]
+        P6 --> P7["0007<br/>Portable docs check"]
     end
 
     subgraph V["Validated distribution"]
@@ -75,7 +77,7 @@ flowchart LR
     end
 
     B --> P1
-    P6 --> R
+    P7 --> R
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only application order. Each patch is a full-index, binary-safe mailbox with one logical responsibility.

@@ -12,6 +12,7 @@ than one monolith or a patch for every development commit:
 3. Windows managed distribution, installer lifecycle, and checked-in fork update handling.
 4. OpenCode retry lifecycle correlation.
 5. Hardened cross-platform runtime `curl` transfers.
+6. Cross-platform documentation parity test paths.
 
 When a feature evolves, refresh its existing mailbox in place. Add a new patch
 only when the change has a genuinely independent owner, verification plan, and

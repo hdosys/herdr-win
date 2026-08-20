@@ -1,7 +1,7 @@
 From d84cce9b80b5999eb859bea65ec326396c536d36 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
-Subject: [PATCH 3/5] feat(windows): manage fork distribution
+Subject: [PATCH 3/6] feat(windows): manage fork distribution
 
 ---
  Cargo.toml                                    |   12 +

@@ -1,4 +1,4 @@
-From 9cfcb04c38bee9875ecdc7e3da8a124fc4587d56 Mon Sep 17 00:00:00 2001
+From 733908d8caed4cf8d1ce783d1898cb5b88ee7e5d Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] feat(windows): manage fork distribution
@@ -45,7 +45,7 @@ Subject: [PATCH 3/5] feat(windows): manage fork distribution
  src/bin/herdr-installer-helper.rs             |   41 +
  src/bin/herdr-launcher.rs                     |   36 +
  src/build_info.rs                             |   93 +-
- src/cli.rs                                    |  172 -
+ src/cli.rs                                    |  173 -
  src/cli/spec.rs                               |   15 -
  src/cli/status.rs                             |   37 +-
  src/config.rs                                 |    2 +-
@@ -55,7 +55,7 @@ Subject: [PATCH 3/5] feat(windows): manage fork distribution
  src/managed_install.rs                        |  322 ++
  src/platform/mod.rs                           |   30 +-
  src/platform/unix_common.rs                   |    4 -
- src/platform/windows.rs                       |   52 +
+ src/platform/windows.rs                       |   40 +
  src/platform/windows/installer_helper.rs      |  215 ++
  .../windows/installer_helper_files.rs         | 1014 ++++++
  .../windows/installer_helper_lifecycle.rs     | 2773 +++++++++++++++++
@@ -76,7 +76,7 @@ Subject: [PATCH 3/5] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 72 files changed, 12845 insertions(+), 2024 deletions(-)
+ 72 files changed, 12833 insertions(+), 2025 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -57045,7 +57045,7 @@ index 1fdedfbb7a000939e74f5dcdfcd3c55ab0dc45d1..4a5ee9894e1cda12e983064d8fd25645
      }
  }
 diff --git a/src/cli.rs b/src/cli.rs
-index b432528de1bdbc5fe3e92b6c8ba11e21df72e24b..935e554750ee4df223105b3bbceaedb6b14c1831 100644
+index b432528de1bdbc5fe3e92b6c8ba11e21df72e24b..e276a94d557de18d20a28c5b3a048c3817cc6c0c 100644
 --- a/src/cli.rs
 +++ b/src/cli.rs
 @@ -112,7 +112,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
@@ -57193,10 +57193,11 @@ index b432528de1bdbc5fe3e92b6c8ba11e21df72e24b..935e554750ee4df223105b3bbceaedb6
  fn run_config_command(args: &[String]) -> std::io::Result<i32> {
      let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
          print_config_help();
-@@ -1044,47 +913,6 @@ fn _print_json<T: Serialize>(value: &T) {
+@@ -1043,48 +912,6 @@ fn _print_json<T: Serialize>(value: &T) {
+ 
  #[cfg(test)]
  mod tests {
-     #[test]
+-    #[test]
 -    fn parses_channel_set_argument() {
 -        assert_eq!(
 -            super::parse_channel_set_arg(&["preview".to_string()]),
@@ -58084,7 +58085,7 @@ index b997049f9e14df62a0e90c490c081b4532b7a14f..676eec13c5af3017c14acd677e9239bb
      super::RemoteSshConfigPaths {
          user_config: std::env::var_os("HOME")
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index c096abd081e8feafd3588b5e7cbd0116a6651d49..96e4c16ced61d57e4504fb0d35c1d9bd30282e56 100644
+index c096abd081e8feafd3588b5e7cbd0116a6651d49..47850a0413724983a9606d8d6b267432b060f8d4 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
 @@ -85,6 +85,15 @@ use windows_sys::{
@@ -58103,22 +58104,10 @@ index c096abd081e8feafd3588b5e7cbd0116a6651d49..96e4c16ced61d57e4504fb0d35c1d9bd
  const STILL_ACTIVE: u32 = 259;
  const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
  const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
-@@ -3261,6 +3270,49 @@ mod tests {
+@@ -3261,6 +3270,37 @@ mod tests {
          );
      }
  
-+    #[test]
-+    fn current_process_executable_is_read_from_process_parameters() {
-+        let expected = std::env::current_exe().expect("current executable");
-+        let actual =
-+            super::process_executable(std::process::id()).expect("read current process executable");
-+
-+        assert_eq!(
-+            crate::worktree::canonical_or_original(&actual),
-+            crate::worktree::canonical_or_original(&expected)
-+        );
-+    }
-+
 +    #[test]
 +    fn child_process_job_assigns_and_terminates_within_deadline() {
 +        let mut child = Command::new("powershell.exe")

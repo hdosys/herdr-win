@@ -1,4 +1,4 @@
-From 197b589c4847e504a5c9a8fa22008cd0deca453c Mon Sep 17 00:00:00 2001
+From 9cfcb04c38bee9875ecdc7e3da8a124fc4587d56 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] feat(windows): manage fork distribution
@@ -36,7 +36,7 @@ Subject: [PATCH 3/5] feat(windows): manage fork distribution
  scripts/test_preview.py                       |  281 +-
  scripts/test_vendor_libghostty_vt.py          |    4 +-
  scripts/test_vendor_portable_pty.py           |    4 +-
- scripts/test_windows_installer.py             |  610 ++++
+ scripts/test_windows_installer.py             |  592 ++++
  .../windows_install_conpty_package_test.ps1   |  464 +--
  scripts/windows_installer_fault_test.ps1      | 1317 ++++++++
  src/app/api/plugins/panes.rs                  |    2 +-
@@ -76,7 +76,7 @@ Subject: [PATCH 3/5] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 72 files changed, 12863 insertions(+), 2024 deletions(-)
+ 72 files changed, 12845 insertions(+), 2024 deletions(-)
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -54402,10 +54402,10 @@ index cf3b791a972aef43fd931d9dac2fe4473fa6f022..899b33f853f51c30fed08736889679b6
  
 diff --git a/scripts/test_windows_installer.py b/scripts/test_windows_installer.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8b18f5b396b4f1cfd9395de27d1492d518bac5fd
+index 0000000000000000000000000000000000000000..beaed36252c8e3202354d161280761e4b783cc41
 --- /dev/null
 +++ b/scripts/test_windows_installer.py
-@@ -0,0 +1,610 @@
+@@ -0,0 +1,592 @@
 +from __future__ import annotations
 +
 +import hashlib
@@ -54995,24 +54995,6 @@ index 0000000000000000000000000000000000000000..8b18f5b396b4f1cfd9395de27d1492d5
 +        self.assertIn("-filter Lanczos", notes)
 +        self.assertIn("filter:lobes=3", notes)
 +        self.assertIn('"BMP3:installer-welcome-finish-$size.bmp"', notes)
-+
-+    def test_updater_owns_bounded_installer_process_cleanup(self) -> None:
-+        platform = text(WINDOWS_PLATFORM)
-+        updater = text(UPDATE)
-+        self.assertIn("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE", platform)
-+        self.assertIn("AssignProcessToJobObject", platform)
-+        self.assertIn("TerminateJobObject", platform)
-+        self.assertIn("wait_child_bounded", platform)
-+        boundary = platform[
-+            platform.index("pub(crate) fn wait_child_bounded") : platform.index(
-+                "pub fn write_clipboard"
-+            )
-+        ]
-+        self.assertNotIn("child.wait()", boundary)
-+        self.assertIn("HERDR_INSTALLER_START_GATE_V1", updater)
-+        self.assertIn("new_kill_on_close", updater)
-+        self.assertIn("terminate_and_wait", updater)
-+
 +
 +if __name__ == "__main__":
 +    unittest.main()

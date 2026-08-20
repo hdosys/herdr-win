@@ -1,4 +1,4 @@
-From 733908d8caed4cf8d1ce783d1898cb5b88ee7e5d Mon Sep 17 00:00:00 2001
+From d84cce9b80b5999eb859bea65ec326396c536d36 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/5] feat(windows): manage fork distribution
@@ -55478,7 +55478,7 @@ index f4c4fc6078de94f84a598a8271d1eb8b1708b5e6..331dec1946e78838302c93b9325a825c
  }
 diff --git a/scripts/windows_installer_fault_test.ps1 b/scripts/windows_installer_fault_test.ps1
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf701a2c473976f532885510d9dd10d0114f7e7c
+index 0000000000000000000000000000000000000000..f0e72500d7e55d5cb6aa02d8b187e0b5e89feb9a
 --- /dev/null
 +++ b/scripts/windows_installer_fault_test.ps1
 @@ -0,0 +1,1317 @@
@@ -56048,10 +56048,10 @@ index 0000000000000000000000000000000000000000..bf701a2c473976f532885510d9dd10d0
 +            Remove-Item -LiteralPath $installer -Force
 +        }
 +        New-Item -ItemType Directory -Path (Join-Path $skillRoot "previous-resources") -Force | Out-Null
-+        [IO.File]::Copy($skillSource, $skillPath, $true)
++        Copy-TestCanonicalText -Source $skillSource -Destination $skillPath
 +        [IO.File]::WriteAllText((Join-Path $skillRoot "previous-resources\old.txt"), "previous resource")
 +        New-Item -ItemType Directory -Path (Join-Path $claudeSkillRoot "previous-resources") -Force | Out-Null
-+        [IO.File]::Copy($skillSource, $claudeSkillPath, $true)
++        Copy-TestCanonicalText -Source $skillSource -Destination $claudeSkillPath
 +        [IO.File]::WriteAllText((Join-Path $claudeSkillRoot "previous-resources\old.txt"), "previous resource")
 +
 +        & $packager `
@@ -56331,10 +56331,10 @@ index 0000000000000000000000000000000000000000..bf701a2c473976f532885510d9dd10d0
 +        Remove-Item -LiteralPath $modifiedInstaller -Force
 +    }
 +    New-Item -ItemType Directory -Path (Join-Path $skillRoot "previous-resources") -Force | Out-Null
-+    [IO.File]::Copy($skillSource, $skillPath, $true)
++    Copy-TestCanonicalText -Source $skillSource -Destination $skillPath
 +    [IO.File]::WriteAllText((Join-Path $skillRoot "previous-resources\old.txt"), "previous resource")
 +    New-Item -ItemType Directory -Path (Join-Path $claudeSkillRoot "previous-resources") -Force | Out-Null
-+    [IO.File]::Copy($skillSource, $claudeSkillPath, $true)
++    Copy-TestCanonicalText -Source $skillSource -Destination $claudeSkillPath
 +    [IO.File]::WriteAllText((Join-Path $claudeSkillRoot "previous-resources\old.txt"), "previous resource")
 +    & $packager `
 +        -StageDir $StageDir `

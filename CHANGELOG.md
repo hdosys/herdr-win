@@ -5,6 +5,13 @@
 
 ## Unreleased
 
+## [2026.08.21.1] - 2026-08-21
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
+### Fixed
+- Windows SSH attach and provisioning no longer hang while preparing the remote PowerShell bootstrap when SSH also needs standard input.
+
 ## [2026.08.20.5] - 2026-08-20
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

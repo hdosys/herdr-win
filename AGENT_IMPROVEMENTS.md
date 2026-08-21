@@ -96,3 +96,13 @@ configuration repository.
   pinned action when available, without trusting the whole tap or weakening action
   pinning. Expected benefit: keep release annotations actionable. Owner:
   `.github/workflows/release.yml`.
+
+- **Status: proposed. Document one clean sparse checkout for WinGet PR updates.**
+  Evidence: a full `winget-pkgs` clone entered a 630,078-file checkout and hit the
+  600-second limit at 68 percent; a later `--no-checkout` sparse setup represented
+  omitted paths as staged deletions. Starting with `git clone --filter=blob:none
+  --sparse --single-branch --branch <pr-branch>` produced the exact clean PR head in
+  84.050 seconds, and selecting the package cone took 3.143 seconds. Add that exact
+  path to the existing release contribution procedure before manifest edits.
+  Expected benefit: remove ten-minute checkout waits and avoid dirty-index risk
+  during routine external package updates. Owner: `CONTRIBUTING.md`.

@@ -60,7 +60,8 @@ tests remain the detailed implementation truth.
   files and ends with the exact first command plus separate user-invoked links to the
   fork guide and official upstream project. It never opens Herdr or a browser
   automatically. The installed payload and portable ZIP include the same license as
-  `LICENSE.txt`. A portable ZIP remains a supported manual alternative.
+  `LICENSE.txt`. Their Windows executables require no separately installed Microsoft
+  Visual C++ Redistributable. A portable ZIP remains a supported manual alternative.
 - The managed installer copies upstream's canonical Herdr skill to
   `%USERPROFILE%\.agents\skills\herdr\SKILL.md`. When Claude Code is detected,
   it also copies the skill below `CLAUDE_CONFIG_DIR` or

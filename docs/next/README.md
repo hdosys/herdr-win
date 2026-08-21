@@ -91,7 +91,7 @@ An upstream refresh is deliberate: select the latest stable release, replay the 
 
 ## Install and cross-platform use
 
-Each release is one cross-platform snapshot for Windows x86_64, Linux amd64/arm64, and macOS amd64/arm64. Windows additionally ships the managed per-user setup and portable ZIP; every matching binary can run as a client or remote endpoint on the same wire protocol.
+Each release is one cross-platform snapshot for Windows x86_64, Linux amd64/arm64, and macOS amd64/arm64. Windows additionally ships the managed per-user setup and portable ZIP; those executables require no separately installed Microsoft Visual C++ Redistributable. Every matching binary can run as a client or remote endpoint on the same wire protocol.
 
 This supports mixed development environments directly: run the managed client and server on Windows, or use a matching Linux or macOS client to control a Herdr server on a Windows workstation or VM. The Linux and macOS builds can also run as remote endpoints when a Windows client connects in the other direction.
 

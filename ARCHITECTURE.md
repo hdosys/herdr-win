@@ -349,8 +349,10 @@ behavior; code and tests remain the detailed implementation truth.
 - The promoted release tag is `v<CalVer>`. Linux and macOS publish raw executables named
   `herdr-win_v<CalVer>_{linux,macos}_{amd64,arm64}` for direct remote installation.
   Windows keeps `herdr-win_v<CalVer>_windows_amd64.zip` and the corresponding
-  `_setup.exe`. The manifest's upstream-compatible target keys remain separate from
-  these fork-presented filenames.
+  `_setup.exe`. The three packaged Rust executables statically link the MSVC runtime,
+  so the per-user setup and portable archive require no separately installed Visual
+  C++ redistributable. The manifest's upstream-compatible target keys remain separate
+  from these fork-presented filenames.
 - Promotion publishes those six target artifacts without candidate checksum
   sidecars. Candidate sidecars remain internal verification inputs; GitHub records
   SHA-256 for every immutable release asset and the update manifest carries the same

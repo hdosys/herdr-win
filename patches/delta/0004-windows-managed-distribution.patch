@@ -1,9 +1,10 @@
-From d84cce9b80b5999eb859bea65ec326396c536d36 Mon Sep 17 00:00:00 2001
+From 2b5ea0454eb614a4064d2dd02161cdb15226047b Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/7] feat(windows): manage fork distribution
 
 ---
+ .cargo/config.toml                            |    2 +
  Cargo.toml                                    |   12 +
  README.zh-CN.md                               |    2 +-
  build.rs                                      |   60 +-
@@ -76,7 +77,8 @@ Subject: [PATCH 3/7] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 72 files changed, 12833 insertions(+), 2025 deletions(-)
+ 73 files changed, 12835 insertions(+), 2025 deletions(-)
+ create mode 100644 .cargo/config.toml
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-205x393.bmp
@@ -103,6 +105,14 @@ Subject: [PATCH 3/7] feat(windows): manage fork distribution
  create mode 100644 src/platform/windows/managed_install.rs
  delete mode 100644 website/install.ps1
 
+diff --git a/.cargo/config.toml b/.cargo/config.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac2b23f81468463fa64b8d33becb590396eecf20
+--- /dev/null
++++ b/.cargo/config.toml
+@@ -0,0 +1,2 @@
++[target.x86_64-pc-windows-msvc]
++rustflags = ["-C", "target-feature=+crt-static"]
 diff --git a/Cargo.toml b/Cargo.toml
 index 8c13a0b19bf03cbb8691fcc016f89958f46c667b..564969077aa9a20b573b5c022c4c981639704b80 100644
 --- a/Cargo.toml
@@ -65418,7 +65428,7 @@ index b211e63d0f4d27f8e3a7278404a7e90e67fbc87d..d139ca2d078cc133d015538e365261ff
      fn marking_current_version_seen_preserves_latest_notes() {
          let path = std::env::temp_dir().join(format!(
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59dae53d0fe 100644
+index 336ab6c634917a69738862d5d1af524bb814a66b..6035cdde047e64fa6bf6760dcb0c568eec7da5b5 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -28,8 +28,6 @@ const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
@@ -65441,7 +65451,7 @@ index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59d
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
  pub(crate) enum RemoteKeybindings {
      Local,
-@@ -2831,6 +2833,8 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
+@@ -2903,6 +2905,8 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
      let output = crate::noninteractive_process::curl_command()
          .args([
              "-sfL",
@@ -65450,7 +65460,7 @@ index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59d
              "--retry",
              "3",
              "--connect-timeout",
-@@ -2875,7 +2879,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2947,7 +2951,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
          let build_id = crate::build_info::build_id().ok_or_else(|| {
              io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
          })?;
@@ -65459,7 +65469,7 @@ index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59d
          let manifest: RemotePreviewManifest =
              serde_json::from_slice(&manifest_bytes).map_err(|err| {
                  io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
-@@ -2894,7 +2898,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+@@ -2966,7 +2970,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
      }
  
      let current_version = current_version();
@@ -65468,7 +65478,7 @@ index cbd06b47e68755284dc2a1c6c603dff9a9a1ee58..db25bae5bdedea1e65414c40d377e59d
      let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
          .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
      let release = manifest.release_for_version(&current_version).ok_or_else(|| {
-@@ -3563,7 +3567,7 @@ fn run_client_process(
+@@ -3635,7 +3639,7 @@ fn run_client_process(
      reattach_command: &str,
      keybindings: RemoteKeybindings,
  ) -> io::Result<()> {

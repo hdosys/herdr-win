@@ -13,6 +13,7 @@ from scripts.local_windows_installer import (
     _bundle_manifest,
     _candidate_build_id,
     _cargo_build_arguments,
+    _dynamic_msvc_runtime_imports,
     _git_arguments,
     _hashes,
     parse_identity,
@@ -94,6 +95,22 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             if value == "--bin"
         ]
         self.assertEqual(bins, ["herdr", "herdr-launcher", "herdr-installer-helper"])
+
+    def test_dynamic_msvc_runtime_imports_are_rejected_case_insensitively(
+        self,
+    ) -> None:
+        dependencies = """
+            kernel32.dll
+            VCRUNTIME140.dll
+            vcruntime140_1.DLL
+            MSVCP140.dll
+            api-ms-win-crt-runtime-l1-1-0.dll
+        """
+
+        self.assertEqual(
+            _dynamic_msvc_runtime_imports(dependencies),
+            ["MSVCP140.DLL", "VCRUNTIME140.DLL", "VCRUNTIME140_1.DLL"],
+        )
 
     def test_git_commands_trust_only_the_selected_checkout(self) -> None:
         checkout = Path("C:/selected-worktree")

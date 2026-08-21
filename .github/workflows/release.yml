@@ -323,6 +323,22 @@ jobs:
           HERDR_RELEASE_VERSION: ${{ steps.release_identity.outputs.release_version }}
         run: cargo build --release --locked --target ${{ env.WINDOWS_TARGET }} --bins
 
+      - name: Verify self-contained Windows executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pattern = '(?im)^\s*(?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll\s*$'
+          foreach ($name in @("herdr.exe", "herdr-launcher.exe", "herdr-installer-helper.exe")) {
+            $path = Join-Path $PWD "source\target\$env:WINDOWS_TARGET\release\$name"
+            $dependencies = (& dumpbin.exe /DEPENDENTS $path | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed for $path"
+            }
+            if ($dependencies -match $pattern) {
+              throw "$name requires a non-inbox MSVC runtime: $($Matches[0].Trim())"
+            }
+          }
+
       - name: Verify system ConPTY fallback
         shell: pwsh
         run: |

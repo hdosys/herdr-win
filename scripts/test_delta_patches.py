@@ -203,6 +203,17 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertNotIn("https://herdr.dev/preview.json", added)
         self.assertNotIn("https://herdr.dev/install.ps1", added)
 
+    def test_windows_distribution_statically_links_the_msvc_runtime(self) -> None:
+        patch = (DELTA_ROOT / "0004-windows-managed-distribution.patch").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("diff --git a/.cargo/config.toml b/.cargo/config.toml", patch)
+        self.assertIn("+[target.x86_64-pc-windows-msvc]", patch)
+        self.assertIn(
+            '+rustflags = ["-C", "target-feature=+crt-static"]', patch
+        )
+
     def test_public_readme_mirror_and_manual_build_promotion_contract(self) -> None:
         readme_bytes = (PROJECT_ROOT / "README.md").read_bytes()
         self.assertEqual(
@@ -429,6 +440,9 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertNotIn('Uninstall\\Herdr"', workflow)
         build_section, promotion_section = workflow.split("\n  publish:\n", 1)
         self.assertIn("cargo build --release", build_section)
+        self.assertIn("Verify self-contained Windows executables", build_section)
+        self.assertEqual(build_section.count("dumpbin.exe /DEPENDENTS"), 1)
+        self.assertIn("(?:VCRUNTIME|MSVCP)", build_section)
         self.assertIn("herdr-installer-helper.exe", build_section)
         self.assertEqual(build_section.count('"-InstallerHelperExe", $installerHelper'), 2)
         self.assertEqual(build_section.count('"-ReleaseVersion", $env:RELEASE_VERSION'), 2)

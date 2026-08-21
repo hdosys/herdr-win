@@ -32,6 +32,9 @@ DEFAULT_CARGO_TARGET = (
 )
 BUILD_ID_RE = re.compile(r"^[0-9a-f]{12}\.[0-9a-f]{12}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
+    r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
+)
 LOCAL_VERSION_RE = re.compile(
     r"^herdr-win local \(Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
@@ -247,6 +250,29 @@ def _cargo_build_arguments(cargo_target: Path, jobs: int) -> list[str]:
     ]
 
 
+def _dynamic_msvc_runtime_imports(dependencies: str) -> list[str]:
+    return sorted(
+        {
+            match.group(1).upper()
+            for match in DYNAMIC_MSVC_RUNTIME_IMPORT.finditer(dependencies)
+        }
+    )
+
+
+def _verify_self_contained_windows_executables(paths: Sequence[Path]) -> None:
+    for path in paths:
+        dependencies = _run(
+            "dumpbin.exe",
+            ["/DEPENDENTS", str(path)],
+            timeout=30,
+        ).stdout
+        imports = _dynamic_msvc_runtime_imports(dependencies)
+        if imports:
+            raise LocalInstallerError(
+                f"{path.name} requires a non-inbox MSVC runtime: {', '.join(imports)}"
+            )
+
+
 def _available_cpu_count() -> int:
     process_cpu_count = getattr(os, "process_cpu_count", os.cpu_count)
     return process_cpu_count() or 1
@@ -382,8 +408,14 @@ def validate_bundle(source: Path, path: Path) -> InstallerIdentity:
     if _hashes(bundle) != recorded_hashes:
         raise LocalInstallerError("installer input bundle files or hashes changed")
     stage = _safe_path(bundle / "stage", "bundle stage", directory=True)
-    launcher = bundle / "herdr-launcher.exe"
-    _safe_path(bundle / "herdr-installer-helper.exe", "bundle helper", directory=False)
+    runtime = _safe_path(stage / "herdr.exe", "bundle runtime", directory=False)
+    launcher = _safe_path(
+        bundle / "herdr-launcher.exe", "bundle launcher", directory=False
+    )
+    helper = _safe_path(
+        bundle / "herdr-installer-helper.exe", "bundle helper", directory=False
+    )
+    _verify_self_contained_windows_executables((runtime, launcher, helper))
     _validate_stage(source, stage)
     if _identity(stage, launcher) != recorded_identity:
         raise LocalInstallerError("bundle manifest does not match executable identities")
@@ -395,6 +427,13 @@ def prepare(options: argparse.Namespace) -> None:
     stage = _safe_path(options.stage_dir, "--stage-dir", directory=True)
     launcher = _safe_path(options.launcher_exe, "--launcher-exe", directory=False)
     helper = _safe_path(options.installer_helper_exe, "--installer-helper-exe", directory=False)
+    _verify_self_contained_windows_executables(
+        (
+            _safe_path(stage / "herdr.exe", "staged runtime", directory=False),
+            launcher,
+            helper,
+        )
+    )
     _validate_stage(source, stage)
     identity = _identity(stage, launcher)
     INPUT_ROOT.mkdir(parents=True, exist_ok=True)

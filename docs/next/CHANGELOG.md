@@ -5,6 +5,13 @@
 
 ## Unreleased
 
+## [2026.08.21.2] - 2026-08-21
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
+### Fixed
+- Windows setup and portable archives now run on clean Windows systems without requiring a separately installed Microsoft Visual C++ Redistributable.
+
 ## [2026.08.21.1] - 2026-08-21
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

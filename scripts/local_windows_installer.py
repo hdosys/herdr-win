@@ -112,10 +112,23 @@ def _safe_path(path: Path, label: str, *, directory: bool) -> Path:
     return resolved
 
 
+def _git_arguments(path: Path, arguments: Sequence[str]) -> list[str]:
+    safe_directory = path.resolve().as_posix()
+    return [
+        "-c",
+        "core.longpaths=true",
+        "-c",
+        f"safe.directory={safe_directory}",
+        "-C",
+        str(path),
+        *arguments,
+    ]
+
+
 def _git(path: Path, arguments: Sequence[str]) -> str:
     return _run(
         "git",
-        ["-c", "core.longpaths=true", "-C", str(path), *arguments],
+        _git_arguments(path, arguments),
         timeout=10,
     ).stdout.strip()
 
@@ -185,30 +198,14 @@ def _source_build_identity(source: Path) -> tuple[str, str]:
     source_commit = _git(source, ["rev-parse", "HEAD"])
     tracked_diff = _run(
         "git",
-        [
-            "-c",
-            "core.longpaths=true",
-            "-C",
-            str(source),
-            "diff",
-            "--binary",
-            "--no-ext-diff",
-            "HEAD",
-        ],
+        _git_arguments(source, ["diff", "--binary", "--no-ext-diff", "HEAD"]),
         timeout=10,
     ).stdout
     untracked_output = _run(
         "git",
-        [
-            "-c",
-            "core.longpaths=true",
-            "-C",
-            str(source),
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ],
+        _git_arguments(
+            source, ["ls-files", "--others", "--exclude-standard", "-z"]
+        ),
         timeout=10,
     ).stdout
     untracked_files: list[tuple[str, bytes]] = []

@@ -13,6 +13,7 @@ from scripts.local_windows_installer import (
     _bundle_manifest,
     _candidate_build_id,
     _cargo_build_arguments,
+    _git_arguments,
     _hashes,
     parse_identity,
 )
@@ -93,6 +94,23 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             if value == "--bin"
         ]
         self.assertEqual(bins, ["herdr", "herdr-launcher", "herdr-installer-helper"])
+
+    def test_git_commands_trust_only_the_selected_checkout(self) -> None:
+        checkout = Path("C:/selected-worktree")
+
+        self.assertEqual(
+            _git_arguments(checkout, ["status", "--short"]),
+            [
+                "-c",
+                "core.longpaths=true",
+                "-c",
+                f"safe.directory={checkout.resolve().as_posix()}",
+                "-C",
+                str(checkout),
+                "status",
+                "--short",
+            ],
+        )
 
 
 if __name__ == "__main__":

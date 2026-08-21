@@ -327,10 +327,22 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw "vswhere.exe is unavailable"
+          }
+          $dumpbin = @(& $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe") |
+            Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($dumpbin) -or
+              -not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
+            throw "dumpbin.exe is unavailable"
+          }
           $pattern = '(?im)^\s*(?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll\s*$'
           foreach ($name in @("herdr.exe", "herdr-launcher.exe", "herdr-installer-helper.exe")) {
             $path = Join-Path $PWD "source\target\$env:WINDOWS_TARGET\release\$name"
-            $dependencies = (& dumpbin.exe /DEPENDENTS $path | Out-String)
+            $dependencies = (& $dumpbin /DEPENDENTS $path | Out-String)
             if ($LASTEXITCODE -ne 0) {
               throw "dumpbin failed for $path"
             }

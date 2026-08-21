@@ -8,6 +8,9 @@ Despite its historical name, `herdr-win` is not Windows-only. It is an unofficia
 
 Every release candidate builds matching Windows, Linux, and macOS binaries from one exact reviewed Herdr release and the same ordered patch queue. That keeps clients, servers, and provisioned remote runtimes on one compatible protocol while preserving the normal `herdr` command and workflow.
 
+> [!IMPORTANT]
+> GitHub's **ahead/behind** banner compares commit ancestry, not release-source freshness. This repository's `master` is a control branch for the patch queue and release automation, not a mirror of upstream `master`. Each build starts from the reviewed stable commit in [`BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) and applies [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series). Because a refresh updates those owners without merging or rebasing upstream `master`, the displayed "behind" count can remain unchanged. GitHub's **Sync fork** action is not this project's refresh mechanism.
+
 [Demo](#see-it-in-action) · [Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
 
 ## See it in action
@@ -156,7 +159,7 @@ For general commands, configuration, and agent integrations, use the [official H
 
 Thank you for the native Windows foundation and the remote-client work merged in [#2329](https://github.com/herdrdev/herdr/pull/2329). herdr-win exists to make remaining Windows behavior easy to inspect, test, and remove from this fork as equivalent support lands upstream. The Windows remote-host follow-up is tracked in [Discussion #2409](https://github.com/herdrdev/herdr/discussions/2409).
 
-The five files in `patches/delta/series` are the complete maintained product delta. Each is self-contained, so its behavior does not need to be reconstructed from this fork's development history.
+The files listed in `patches/delta/series` are the complete maintained product delta. Each is self-contained, so its behavior does not need to be reconstructed from this fork's development history.
 
 1. Start at the exact commit in [`BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE).
 2. Apply [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) in order with `git am --3way`.

@@ -125,6 +125,21 @@ promotion approval. After approval, one session owns the complete promotion path
    the named mailbox, keeps later mailboxes byte-identical, and writes the mailbox
    only after a complete candidate replay matches the tested tree. A conflict or
    mismatch leaves the checked-in mailbox unchanged.
+   For an explicitly approved new responsibility, append one higher-numbered
+   mailbox from a candidate containing exactly one WIP commit over the current
+   queue:
+
+   ```powershell
+   python scripts/delta_workflow.py finalize `
+     --worktree <durable-absolute-worktree-path> `
+     --mailbox <new-series-entry.patch> `
+     --expected-tree <tested-tree-id> `
+     --new-mailbox
+   ```
+
+   This mode derives commit metadata from that WIP commit, renumbers existing
+   format-patch subjects, appends the series entry, and restores every delta input
+   if exact replay verification fails.
 3. Run the inventory tests below. A matching tree transfers the source evidence to
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.

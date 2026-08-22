@@ -221,6 +221,56 @@ class DeltaWorkflowTests(unittest.TestCase):
                 source_tree,
             )
 
+    def test_finalize_appends_one_new_mailbox_and_renumbers_series(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+            worktree = worktrees / "new-mailbox"
+            start_delta_worktree("new-mailbox", worktree, fixture.control)
+
+            (worktree / "third.txt").write_bytes(b"third\n")
+            run_git(worktree, ["add", "third.txt"])
+            run_git(
+                worktree,
+                ["commit", "-m", "feat: third", "-m", "Refs example/repo#123"],
+            )
+            source_head = run_git(worktree, ["rev-parse", "HEAD"])
+            source_tree = run_git(worktree, ["rev-parse", "HEAD^{tree}"])
+
+            result = finalize_delta_mailbox(
+                worktree,
+                "0003-third.patch",
+                source_tree,
+                fixture.control,
+                new_mailbox=True,
+            )
+
+            delta_root = fixture.control / "patches" / "delta"
+            self.assertEqual(result.source_head, source_head)
+            self.assertEqual(result.replay_tree, source_tree)
+            self.assertEqual(
+                (delta_root / "series").read_text(encoding="utf-8").splitlines(),
+                ["0001-first.patch", "0002-second.patch", "0003-third.patch"],
+            )
+            self.assertIn(
+                "Subject: [PATCH 1/3] feat: first",
+                (delta_root / "0001-first.patch").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "Subject: [PATCH 2/3] feat: second",
+                (delta_root / "0002-second.patch").read_text(encoding="utf-8"),
+            )
+            new_mailbox = (delta_root / "0003-third.patch").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("Subject: [PATCH 3/3] feat: third", new_mailbox)
+            self.assertIn("Refs example/repo#123", new_mailbox)
+            self.assertEqual(
+                verify_replay_tree(source_tree, fixture.control).tree,
+                source_tree,
+            )
+
     def test_finalize_rejects_a_tree_not_at_source_head(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture = DeltaFixture(Path(temp_dir))

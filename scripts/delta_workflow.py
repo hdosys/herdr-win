@@ -429,6 +429,26 @@ def _read_mailbox_metadata(
     )
 
 
+def _read_commit_metadata(worktree: Path, commit: str) -> MailboxMetadata:
+    fields = _run_git(
+        worktree,
+        ["show", "-s", "--format=%an%x00%ae%x00%aI%x00%B", commit],
+        cwd=worktree,
+    ).stdout.split("\0", 3)
+    if len(fields) != 4:
+        raise DeltaWorkflowError(f"could not read source commit metadata from {commit}")
+    author_name, author_email, author_date, commit_message = fields
+    commit_message = commit_message.rstrip("\n")
+    if not author_name or not author_email or not author_date or not commit_message:
+        raise DeltaWorkflowError(f"source commit {commit} has incomplete metadata")
+    return MailboxMetadata(
+        author_name=author_name,
+        author_email=author_email,
+        author_date=author_date,
+        commit_message=f"{commit_message}\n",
+    )
+
+
 def _commit_tree(
     project_root: Path,
     tree: str,
@@ -507,11 +527,163 @@ def _atomic_replace(path: Path, content: bytes) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _renumber_mailbox_subject(
+    path: Path,
+    content: bytes,
+    position: int,
+    old_count: int,
+    new_count: int,
+) -> bytes:
+    old = f"Subject: [PATCH {position}/{old_count}] ".encode()
+    if content.count(old) != 1:
+        raise DeltaWorkflowError(
+            f"{path} must contain exactly one {old.decode()!r} header"
+        )
+    return content.replace(
+        old,
+        f"Subject: [PATCH {position}/{new_count}] ".encode(),
+        1,
+    )
+
+
+def _finalize_new_delta_mailbox(
+    worktree: Path,
+    mailbox: str,
+    expected_tree: str,
+    replay: ReplayResult,
+    project_root: Path,
+) -> FinalizeResult:
+    if PATCH_RE.fullmatch(mailbox) is None:
+        raise DeltaWorkflowError(f"invalid new mailbox name: {mailbox!r}")
+    if mailbox in replay.mailboxes:
+        raise DeltaWorkflowError(f"new mailbox is already listed in series: {mailbox}")
+
+    delta_root = project_root / "patches" / "delta"
+    mailbox_path = delta_root / mailbox
+    if mailbox_path.exists():
+        raise DeltaWorkflowError(f"new mailbox path already exists: {mailbox_path}")
+    new_number = int(mailbox[:4])
+    if new_number <= max(int(entry[:4]) for entry in replay.mailboxes):
+        raise DeltaWorkflowError("a new mailbox must append a higher logical slot")
+
+    source_head, source_tree = _require_source_worktree(
+        project_root,
+        worktree,
+        expected_tree,
+        replay,
+    )
+    source_parents = _run_git(
+        worktree,
+        ["rev-list", "--parents", "-n", "1", source_head],
+        cwd=worktree,
+    ).stdout.split()
+    if len(source_parents) != 2:
+        raise DeltaWorkflowError("new mailbox source must contain exactly one WIP commit")
+    source_parent_tree = _run_git(
+        worktree,
+        ["rev-parse", f"{source_parents[1]}^{{tree}}"],
+        cwd=worktree,
+    ).stdout.strip()
+    if source_parent_tree != replay.tree:
+        raise DeltaWorkflowError(
+            "new mailbox source must be one WIP commit over the current queue"
+        )
+
+    old_count = len(replay.mailboxes)
+    new_count = old_count + 1
+    metadata = _read_commit_metadata(worktree, source_head)
+    candidate = _candidate_mailbox(
+        project_root,
+        replay.tree,
+        expected_tree,
+        metadata,
+        new_count,
+        new_count,
+    ).encode("utf-8")
+
+    original_mailboxes: dict[Path, bytes] = {}
+    renumbered_mailboxes: dict[Path, bytes] = {}
+    for position, entry in enumerate(replay.mailboxes, start=1):
+        path = delta_root / entry
+        original = path.read_bytes()
+        _read_mailbox_metadata(path, position, old_count)
+        original_mailboxes[path] = original
+        renumbered_mailboxes[path] = _renumber_mailbox_subject(
+            path,
+            original,
+            position,
+            old_count,
+            new_count,
+        )
+
+    series_path = delta_root / "series"
+    original_series = series_path.read_bytes()
+    separator = b"" if original_series.endswith(b"\n") else b"\n"
+    candidate_series = original_series + separator + mailbox.encode() + b"\n"
+
+    with tempfile.TemporaryDirectory(prefix="herdr-delta-finalize-new-") as temp_dir:
+        candidate_paths: list[Path] = []
+        for path in original_mailboxes:
+            candidate_path = Path(temp_dir) / path.name
+            candidate_path.write_bytes(renumbered_mailboxes[path])
+            candidate_paths.append(candidate_path)
+        candidate_path = Path(temp_dir) / mailbox
+        candidate_path.write_bytes(candidate)
+        candidate_paths.append(candidate_path)
+        candidate_tree = _tree_after_patches(
+            project_root,
+            replay.base,
+            candidate_paths,
+        )
+    if candidate_tree != expected_tree:
+        difference = _run_git(
+            project_root,
+            ["diff", "--stat", expected_tree, candidate_tree],
+            check=False,
+        ).stdout.strip()
+        detail = f"\n{difference}" if difference else ""
+        raise DeltaWorkflowError(
+            "new mailbox does not reproduce the tested source tree: "
+            f"expected {expected_tree}, found {candidate_tree}{detail}"
+        )
+    _run_git(project_root, ["diff", "--check", replay.base, candidate_tree])
+
+    for path, original in original_mailboxes.items():
+        if path.read_bytes() != original:
+            raise DeltaWorkflowError(f"mailbox changed concurrently: {path.name}")
+    if series_path.read_bytes() != original_series or mailbox_path.exists():
+        raise DeltaWorkflowError("delta series changed concurrently")
+
+    try:
+        for path, content in renumbered_mailboxes.items():
+            _atomic_replace(path, content)
+        _atomic_replace(mailbox_path, candidate)
+        _atomic_replace(series_path, candidate_series)
+        verified = verify_replay_tree(expected_tree, project_root)
+    except (DeltaWorkflowError, OSError) as error:
+        _atomic_replace(series_path, original_series)
+        for path, content in original_mailboxes.items():
+            _atomic_replace(path, content)
+        mailbox_path.unlink(missing_ok=True)
+        raise DeltaWorkflowError(
+            f"restored delta after new mailbox finalization failed: {error}"
+        ) from error
+
+    return FinalizeResult(
+        mailbox=mailbox,
+        source_head=source_head,
+        source_tree=source_tree,
+        replay_tree=verified.tree,
+    )
+
+
 def finalize_delta_mailbox(
     worktree: Path,
     mailbox: str,
     expected_tree: str,
     project_root: Path = PROJECT_ROOT,
+    *,
+    new_mailbox: bool = False,
 ) -> FinalizeResult:
     """Fold one tested WIP tree into one mailbox and prove exact queue replay."""
 
@@ -521,6 +693,14 @@ def finalize_delta_mailbox(
     _require_tree_object(project_root, expected_tree, "--expected-tree")
 
     replay = replay_delta_tree(project_root)
+    if new_mailbox:
+        return _finalize_new_delta_mailbox(
+            worktree,
+            mailbox,
+            expected_tree,
+            replay,
+            project_root,
+        )
     if mailbox not in replay.mailboxes:
         raise DeltaWorkflowError(f"--mailbox is not listed in series: {mailbox}")
     source_head, source_tree = _require_source_worktree(
@@ -779,6 +959,11 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="exact tested Git tree ID that final replay must reproduce",
     )
+    finalize.add_argument(
+        "--new-mailbox",
+        action="store_true",
+        help="append one higher-numbered mailbox from exactly one WIP commit",
+    )
     return parser
 
 
@@ -811,6 +996,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 options.worktree,
                 options.mailbox,
                 options.expected_tree,
+                new_mailbox=options.new_mailbox,
             )
             print(f"mailbox: {result.mailbox}")
             print(f"source-head: {result.source_head}")

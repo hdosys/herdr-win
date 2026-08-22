@@ -101,11 +101,13 @@ behavior; code and tests remain the detailed implementation truth.
   user `curl` configuration, pass URLs as option values, require TLS 1.2 or newer
   HTTPS for initial requests and redirects, disable URL globbing, and allow at most
   five redirects; callers retain any narrower timeout, size, and digest checks.
-- Mailbox 0009 owns opt-in Agent auto-start for a new persistent session and the
-  Windows-native focused Rust test path used to verify it. Auto-start reuses the
-  existing managed Agent launch owner, waits for the first pane's shell readiness,
-  and is never armed when saved session state exists. Native Agent resume remains
-  the only path for restored sessions.
+- Mailbox 0009 owns opt-in Agent auto-start for every genuinely new tab in a
+  persistent session and the Windows-native focused Rust test path used to verify
+  it. Initial workspace creation and the shared UI, CLI, and API tab-create path
+  queue only each new tab's root pane while the existing managed Agent launch owner
+  waits for shell readiness. Restore, reattach, config reload itself, live handoff,
+  `--no-session`, and pane split paths never queue auto-start. Native Agent resume
+  remains the only Agent launch path for restored tabs.
 
 ## Managed Windows Distribution
 

@@ -173,11 +173,13 @@ tests remain the detailed implementation truth.
 ## Interaction and Status
 
 - Keyboard-first terminal operation remains complete end to end.
-- `[session] auto_start_agent` is an opt-in fresh-session convenience that starts
-  one supported interactive Agent through Herdr's existing managed launch path.
-  It is unset by default and runs only for a new persistent session with no saved
-  state. Saved-session Agent resume, client attach, config reload, live handoff,
-  and `--no-session` never trigger it, and Herdr never writes the setting itself.
+- `[session] auto_start_agent` is an opt-in new-tab convenience that starts one
+  supported interactive Agent in the root pane of every genuinely new tab through
+  Herdr's existing managed launch path. It is unset by default and applies to the
+  initial tab of a new persistent session plus later tabs created through the UI,
+  CLI, or API. Restored or reattached tabs, config reload itself, live handoff,
+  `--no-session`, and split panes never trigger it. Exiting or interrupting the
+  Agent returns to the tab's underlying shell, and Herdr never writes the setting.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at

@@ -1,4 +1,4 @@
-From a152f3bf24b1710c5f3e5c9b7ba3fc1893cb0573 Mon Sep 17 00:00:00 2001
+From 4e0adbae5afe93f279bb8df987fefe7cb9d466da Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/8] feat(session): auto-start configured agent
@@ -9,7 +9,9 @@ Refs herdrdev/herdr#321
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
  justfile                                      |   8 +-
- src/app/agents.rs                             | 192 +++++++++++++++++-
+ src/app/agents.rs                             | 219 +++++++++++++++++-
+ src/app/api/panes.rs                          |  30 +++
+ src/app/api/tabs.rs                           |  10 +-
  src/app/creation.rs                           |   1 +
  src/app/mod.rs                                |  45 +++-
  src/app/runtime.rs                            |   3 +
@@ -21,10 +23,10 @@ Refs herdrdev/herdr#321
  src/platform/mod.rs                           |  33 ++-
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 16 files changed, 373 insertions(+), 5 deletions(-)
+ 18 files changed, 439 insertions(+), 6 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index 4048b9fef48bda76a7063882fb053f84ec68a3ed..85036bc97ca0a98c39e1b035a6bc08c018a303a2 100644
+index 4048b9fef48bda76a7063882fb053f84ec68a3ed..62bcdd8c1e1c18a373ab93c53b0cc95828f03056 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
 @@ -2,11 +2,15 @@
@@ -32,7 +34,7 @@ index 4048b9fef48bda76a7063882fb053f84ec68a3ed..85036bc97ca0a98c39e1b035a6bc08c0
  ## Unreleased
  
 +### Added
-+- New persistent sessions can start one configured interactive Agent in their first pane with `[session] auto_start_agent`.
++- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`.
 +
  ### Changed
  - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
@@ -44,29 +46,29 @@ index 4048b9fef48bda76a7063882fb053f84ec68a3ed..85036bc97ca0a98c39e1b035a6bc08c0
  ## [0.8.2] - 2026-08-19
  
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
-index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..a7e91105d9023e39dde94bd6ed6148926b9472e0 100644
+index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..e8692102772b7e4be77d9163b3298d27d134243e 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx
 +++ b/docs/next/website/src/content/docs/configuration.mdx
 @@ -480,6 +480,17 @@ kitty_graphics = true
  
  Enable it only when testing terminal image behavior.
  
-+## Start an Agent in a new session
++## Start an Agent in every new tab
 +
-+To start one supported interactive Agent in the first pane of every new persistent session, opt in with its `herdr agent start --kind` label:
++To start one supported interactive Agent in the root pane of every genuinely new tab in a persistent session, opt in with its `herdr agent start --kind` label:
 +
 +```toml
 +[session]
 +auto_start_agent = "opencode"
 +```
 +
-+The setting is unset by default. It runs only when a session has no saved state. It does not run again for a restored session, client attach, config reload, live handoff, or `--no-session`. Herdr reads this value from your config and never adds or rewrites it.
++The setting is unset by default. It applies to the initial tab of a new persistent session and later tabs created through the UI, CLI, or API. It does not run for restored or reattached tabs, config reload itself, live handoff, `--no-session`, or split panes. Auto-start uses the normal managed Agent path, so exiting or interrupting the Agent returns to the tab's underlying shell. Herdr reads this value from your config and never adds or rewrites it.
 +
  ## Agent session restore
  
  Herdr resumes supported Agent conversations after a server restart by default:
 diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
-index 60cc83c35a009e9c2d2e36ba7896da262e401660..3ab37f1da7450a7af7827b2bc856b35008991e65 100644
+index 60cc83c35a009e9c2d2e36ba7896da262e401660..fc7f40a4fabcafca274ec0e52f76c0a4aac0dc81 100644
 --- a/docs/next/website/src/data/config-reference.json
 +++ b/docs/next/website/src/data/config-reference.json
 @@ -1147,6 +1147,12 @@
@@ -77,7 +79,7 @@ index 60cc83c35a009e9c2d2e36ba7896da262e401660..3ab37f1da7450a7af7827b2bc856b350
 +          "key": "session.auto_start_agent",
 +          "type": "string",
 +          "default": "unset",
-+          "description": "Start one supported interactive Agent in the first pane when a persistent session has no saved state."
++          "description": "Start one supported interactive Agent in the root pane of each new tab in a persistent session."
 +        },
          {
            "key": "session.resume_agents_on_restore",
@@ -103,7 +105,7 @@ index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977
  # Enforce deterministic UI hot-path architecture boundaries
  ui-hot-path-architecture-test:
 diff --git a/src/app/agents.rs b/src/app/agents.rs
-index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4fe263ffd7 100644
+index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0693f1cca 100644
 --- a/src/app/agents.rs
 +++ b/src/app/agents.rs
 @@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
@@ -111,20 +113,16 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4f
  use bytes::Bytes;
  
 -use super::{terminal_targets::TerminalTargetError, App};
-+use super::{terminal_targets::TerminalTargetError, App, PendingSessionAutoStartAgent};
++use super::{terminal_targets::TerminalTargetError, App, PendingTabAutoStartAgent};
  use crate::api::schema::AgentStartParams;
  
  const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
-@@ -142,6 +142,145 @@ impl App {
+@@ -142,6 +142,152 @@ impl App {
              })
      }
  
-+    pub(super) fn queue_session_auto_start_agent(&mut self, ws_idx: usize) {
-+        let Some(pending) = self.pending_session_auto_start_agent.take() else {
-+            return;
-+        };
-+        let PendingSessionAutoStartAgent::AwaitingWorkspace(kind) = pending else {
-+            self.pending_session_auto_start_agent = Some(pending);
++    pub(super) fn queue_tab_auto_start_agent(&mut self, ws_idx: usize, tab_idx: usize) {
++        let Some(kind) = self.tab_auto_start_agent else {
 +            return;
 +        };
 +        let label = crate::detect::agent_label(kind);
@@ -132,136 +130,147 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4f
 +            .state
 +            .workspaces
 +            .get(ws_idx)
-+            .and_then(|workspace| workspace.tabs.first())
++            .and_then(|workspace| workspace.tabs.get(tab_idx))
 +            .map(|tab| tab.root_pane)
 +        else {
 +            tracing::warn!(
 +                agent = label,
-+                "new session has no initial pane for agent auto-start"
++                "new tab has no root pane for agent auto-start"
 +            );
 +            return;
 +        };
 +        let Some(pane_id) = self.public_pane_id(ws_idx, root_pane) else {
 +            tracing::warn!(
 +                agent = label,
-+                "new session initial pane has no public id for agent auto-start"
++                "new tab root pane has no public id for agent auto-start"
 +            );
 +            return;
 +        };
-+        self.pending_session_auto_start_agent = Some(PendingSessionAutoStartAgent::AwaitingShell {
-+            kind,
-+            pane_id,
-+            deadline: Instant::now() + DEFAULT_AGENT_START_TIMEOUT,
-+        });
-+        self.try_start_session_auto_start_agent(Instant::now());
++        self.pending_tab_auto_start_agents
++            .push(PendingTabAutoStartAgent {
++                kind,
++                name: format!("{label}-p{}", root_pane.raw()),
++                pane_id,
++                deadline: Instant::now() + DEFAULT_AGENT_START_TIMEOUT,
++            });
++        self.try_start_tab_auto_start_agents(Instant::now());
 +    }
 +
-+    pub(crate) fn session_auto_start_deadline(&self) -> Option<Instant> {
-+        match self.pending_session_auto_start_agent.as_ref()? {
-+            PendingSessionAutoStartAgent::AwaitingWorkspace(_) => None,
-+            PendingSessionAutoStartAgent::AwaitingShell { deadline, .. } => Some(*deadline),
-+        }
++    pub(crate) fn tab_auto_start_deadline(&self) -> Option<Instant> {
++        self.pending_tab_auto_start_agents
++            .iter()
++            .map(|pending| pending.deadline)
++            .min()
 +    }
 +
-+    pub(crate) fn try_start_session_auto_start_agent(&mut self, now: Instant) -> bool {
-+        let Some(PendingSessionAutoStartAgent::AwaitingShell {
++    pub(crate) fn try_start_tab_auto_start_agents(&mut self, now: Instant) -> bool {
++        let mut changed = false;
++        let pending_agents = std::mem::take(&mut self.pending_tab_auto_start_agents);
++        for PendingTabAutoStartAgent {
 +            kind,
++            name,
 +            pane_id,
 +            deadline,
-+        }) = self.pending_session_auto_start_agent.as_ref()
-+        else {
-+            return false;
-+        };
-+        let kind = *kind;
-+        let pane_id = pane_id.clone();
-+        let deadline = *deadline;
-+        let label = crate::detect::agent_label(kind);
++        } in pending_agents
++        {
++            let label = crate::detect::agent_label(kind);
 +
-+        if now >= deadline {
-+            self.pending_session_auto_start_agent = None;
-+            tracing::warn!(
-+                agent = label,
-+                pane_id,
-+                "timed out waiting for the new session shell before agent auto-start"
-+            );
-+            return false;
-+        }
-+
-+        let Some((ws_idx, internal_pane_id)) = self.parse_current_public_pane_id(&pane_id) else {
-+            self.pending_session_auto_start_agent = None;
-+            tracing::warn!(
-+                agent = label,
-+                pane_id,
-+                "new session agent auto-start pane is no longer available"
-+            );
-+            return false;
-+        };
-+        let Some(terminal_id) = self
-+            .state
-+            .workspaces
-+            .get(ws_idx)
-+            .and_then(|workspace| workspace.terminal_id(internal_pane_id))
-+            .cloned()
-+        else {
-+            self.pending_session_auto_start_agent = None;
-+            tracing::warn!(
-+                agent = label,
-+                pane_id,
-+                "new session agent auto-start pane has no terminal"
-+            );
-+            return false;
-+        };
-+        let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
-+            self.pending_session_auto_start_agent = None;
-+            tracing::warn!(
-+                agent = label,
-+                pane_id,
-+                "new session agent auto-start pane has no live terminal"
-+            );
-+            return false;
-+        };
-+        let Some(shell_name) = available_shell_name(runtime) else {
-+            return false;
-+        };
-+        if !crate::platform::initial_pane_shell_ready_for_input(
-+            &shell_name,
-+            runtime.content_seq() > 0,
-+            runtime.has_reported_cwd(),
-+        ) {
-+            return false;
-+        }
-+
-+        self.pending_session_auto_start_agent = None;
-+        let params = AgentStartParams {
-+            name: label.to_string(),
-+            kind: label.to_string(),
-+            pane_id,
-+            args: Vec::new(),
-+            timeout_ms: None,
-+        };
-+
-+        match self.start_agent(params) {
-+            Ok((agent, _)) => {
-+                tracing::info!(agent = label, pane_id = %agent.pane_id, "started configured agent in new session");
-+                true
-+            }
-+            Err(err) => {
-+                let error = self.agent_start_error_body(err);
++            if now >= deadline {
 +                tracing::warn!(
 +                    agent = label,
-+                    code = error.code,
-+                    message = error.message,
-+                    "failed to start configured agent in new session"
++                    pane_id,
++                    "timed out waiting for the new tab shell before agent auto-start"
 +                );
-+                false
++                continue;
++            }
++
++            let Some((ws_idx, internal_pane_id)) = self.parse_current_public_pane_id(&pane_id)
++            else {
++                tracing::warn!(
++                    agent = label,
++                    pane_id,
++                    "new tab agent auto-start pane is no longer available"
++                );
++                continue;
++            };
++            let Some(terminal_id) = self
++                .state
++                .workspaces
++                .get(ws_idx)
++                .and_then(|workspace| workspace.terminal_id(internal_pane_id))
++                .cloned()
++            else {
++                tracing::warn!(
++                    agent = label,
++                    pane_id,
++                    "new tab agent auto-start pane has no terminal"
++                );
++                continue;
++            };
++            let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
++                tracing::warn!(
++                    agent = label,
++                    pane_id,
++                    "new tab agent auto-start pane has no live terminal"
++                );
++                continue;
++            };
++            let Some(shell_name) = available_shell_name(runtime) else {
++                self.pending_tab_auto_start_agents
++                    .push(PendingTabAutoStartAgent {
++                        kind,
++                        name,
++                        pane_id,
++                        deadline,
++                    });
++                continue;
++            };
++            if !crate::platform::initial_pane_shell_ready_for_input(
++                &shell_name,
++                runtime.content_seq() > 0,
++                runtime.has_reported_cwd(),
++            ) {
++                self.pending_tab_auto_start_agents
++                    .push(PendingTabAutoStartAgent {
++                        kind,
++                        name,
++                        pane_id,
++                        deadline,
++                    });
++                continue;
++            }
++
++            let params = AgentStartParams {
++                name,
++                kind: label.to_string(),
++                pane_id,
++                args: Vec::new(),
++                timeout_ms: None,
++            };
++
++            match self.start_agent(params) {
++                Ok((agent, _)) => {
++                    tracing::info!(agent = label, pane_id = %agent.pane_id, "started configured agent in new tab");
++                    changed = true;
++                }
++                Err(err) => {
++                    let error = self.agent_start_error_body(err);
++                    tracing::warn!(
++                        agent = label,
++                        code = error.code,
++                        message = error.message,
++                        "failed to start configured agent in new tab"
++                    );
++                }
 +            }
 +        }
++        changed
 +    }
 +
      pub(super) fn start_agent(
          &mut self,
          params: AgentStartParams,
-@@ -469,6 +608,7 @@ pub(super) enum AgentRenameError {
+@@ -469,6 +615,7 @@ pub(super) enum AgentRenameError {
  #[cfg(test)]
  mod tests {
      use super::valid_agent_name;
@@ -269,13 +278,13 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4f
  
      #[test]
      fn agent_names_use_a_small_cli_safe_grammar() {
-@@ -488,4 +628,54 @@ mod tests {
+@@ -488,4 +635,74 @@ mod tests {
              assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
          }
      }
 +
 +    #[tokio::test]
-+    async fn new_session_agent_auto_start_reuses_managed_launch_once() {
++    async fn new_tab_agent_auto_start_reuses_managed_launch_for_each_root() {
 +        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
 +        let mut app = super::super::App::new(
 +            &crate::config::Config::default(),
@@ -284,97 +293,200 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4f
 +            api_rx,
 +            crate::api::EventHub::default(),
 +        );
-+        let workspace = crate::workspace::Workspace::test_new("auto-start");
-+        let root_pane = workspace.tabs[0].root_pane;
++        let mut workspace = crate::workspace::Workspace::test_new("auto-start");
++        let second_tab = workspace.test_add_tab(None);
++        let first_root = workspace.tabs[0].root_pane;
++        let second_root = workspace.tabs[second_tab].root_pane;
 +        app.state.workspaces = vec![workspace];
 +        app.state.ensure_test_terminals();
 +        app.state.active = Some(0);
-+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&root_pane]
++        app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
++
++        let first_terminal = app.state.workspaces[0].tabs[0].panes[&first_root]
 +            .attached_terminal_id
 +            .clone();
-+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
-+        app.pending_session_auto_start_agent = Some(
-+            super::super::PendingSessionAutoStartAgent::AwaitingWorkspace(
-+                crate::detect::Agent::OpenCode,
-+            ),
-+        );
-+
-+        app.queue_session_auto_start_agent(0);
-+
-+        assert!(!app.try_start_session_auto_start_agent(Instant::now()));
-+        assert!(app.pending_session_auto_start_agent.is_some());
-+        assert!(receiver.try_recv().is_err());
-+
++        let second_terminal = app.state.workspaces[0].tabs[second_tab].panes[&second_root]
++            .attached_terminal_id
++            .clone();
++        let (first_runtime, mut first_receiver) =
++            crate::terminal::TerminalRuntime::test_with_channel(80, 24);
++        let (second_runtime, mut second_receiver) =
++            crate::terminal::TerminalRuntime::test_with_channel(80, 24);
 +        app.terminal_runtimes
-+            .get(&terminal_id)
-+            .unwrap()
-+            .test_process_pty_bytes(b"$ ");
-+        assert!(app.try_start_session_auto_start_agent(Instant::now()));
-+        assert!(app.pending_session_auto_start_agent.is_none());
-+        assert_eq!(
-+            app.state.terminals[&terminal_id].agent_name.as_deref(),
-+            Some("opencode")
-+        );
-+        receiver
-+            .try_recv()
-+            .expect("managed launch should submit the configured agent command");
++            .insert(first_terminal.clone(), first_runtime);
++        app.terminal_runtimes
++            .insert(second_terminal.clone(), second_runtime);
 +
-+        assert!(!app.try_start_session_auto_start_agent(Instant::now()));
-+        assert!(receiver.try_recv().is_err());
++        app.queue_tab_auto_start_agent(0, 0);
++        app.queue_tab_auto_start_agent(0, second_tab);
++
++        assert!(!app.try_start_tab_auto_start_agents(Instant::now()));
++        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
++        assert!(first_receiver.try_recv().is_err());
++        assert!(second_receiver.try_recv().is_err());
++
++        for terminal_id in [&first_terminal, &second_terminal] {
++            app.terminal_runtimes
++                .get(terminal_id)
++                .unwrap()
++                .test_process_pty_bytes(b"$ ");
++        }
++        assert!(app.try_start_tab_auto_start_agents(Instant::now()));
++        assert!(app.pending_tab_auto_start_agents.is_empty());
++        assert_eq!(
++            app.state.terminals[&first_terminal].agent_name.as_deref(),
++            Some(format!("opencode-p{}", first_root.raw()).as_str())
++        );
++        assert_eq!(
++            app.state.terminals[&second_terminal].agent_name.as_deref(),
++            Some(format!("opencode-p{}", second_root.raw()).as_str())
++        );
++        first_receiver
++            .try_recv()
++            .expect("managed launch should submit the initial tab agent command");
++        second_receiver
++            .try_recv()
++            .expect("managed launch should submit the later tab agent command");
++
++        assert!(!app.try_start_tab_auto_start_agents(Instant::now()));
++        assert!(first_receiver.try_recv().is_err());
++        assert!(second_receiver.try_recv().is_err());
 +    }
  }
+diff --git a/src/app/api/panes.rs b/src/app/api/panes.rs
+index 6615fa0a198eeac5bba0671c78ba99573d2f2be2..5118382806722a9e80d810ce852cc86dffea56ed 100644
+--- a/src/app/api/panes.rs
++++ b/src/app/api/panes.rs
+@@ -1924,6 +1924,36 @@ mod tests {
+         (app, public_pane_id)
+     }
+ 
++    #[tokio::test]
++    async fn pane_split_does_not_queue_configured_tab_agent() {
++        use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
++        use crate::config::ShellModeConfig;
++
++        let (mut app, public_pane_id) = app_with_test_workspace();
++        app.tab_auto_start_agent = Some(Agent::OpenCode);
++        app.state.default_shell = exiting_test_command().into();
++        app.state.shell_mode = ShellModeConfig::NonLogin;
++
++        let response = app.handle_pane_split(
++            "split".into(),
++            PaneSplitParams {
++                workspace_id: None,
++                target_pane_id: Some(public_pane_id),
++                direction: SplitDirection::Right,
++                ratio: None,
++                cwd: None,
++                focus: false,
++                right_click: Default::default(),
++                env: Default::default(),
++            },
++        );
++
++        let response: SuccessResponse = serde_json::from_str(&response).unwrap();
++        assert!(matches!(response.result, ResponseResult::PaneInfo { .. }));
++        assert!(app.pending_tab_auto_start_agents.is_empty());
++        shutdown_test_runtimes(&mut app);
++    }
++
+     #[test]
+     fn pane_input_set_changes_only_the_target_pane() {
+         let (mut app, public_pane_id) = app_with_test_workspace();
+diff --git a/src/app/api/tabs.rs b/src/app/api/tabs.rs
+index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392e7108812 100644
+--- a/src/app/api/tabs.rs
++++ b/src/app/api/tabs.rs
+@@ -117,6 +117,7 @@ impl App {
+                     self.state.switch_workspace_tab(ws_idx, tab_idx);
+                     self.state.mode = Mode::Terminal;
+                 }
++                self.queue_tab_auto_start_agent(ws_idx, tab_idx);
+                 self.schedule_session_save();
+                 self.emit_tab_created_events(ws_idx, tab_idx);
+                 encode_success(
+@@ -456,10 +457,11 @@ mod tests {
+     }
+ 
+     #[tokio::test]
+-    async fn tab_create_follows_cached_focused_pane_cwd_without_runtime() {
++    async fn tab_create_follows_cached_cwd_and_queues_configured_agent_for_root() {
+         let event_hub = crate::api::EventHub::default();
+         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+         let mut app = App::new(&Config::default(), true, None, api_rx, event_hub);
++        app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
+         app.state.default_shell = exiting_test_command().into();
+         app.state.shell_mode = ShellModeConfig::NonLogin;
+         let workspace = Workspace::test_new("tabs");
+@@ -489,12 +491,18 @@ mod tests {
+         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+         assert!(matches!(success.result, ResponseResult::TabCreated { .. }));
+         let created = &app.state.workspaces[0].tabs[1];
++        let created_root = created.root_pane;
+         let created_terminal_id = created.terminal_id(created.root_pane).unwrap();
+         let created_cwd = &app.state.terminals.get(created_terminal_id).unwrap().cwd;
+         assert_eq!(
+             crate::worktree::canonical_or_original(created_cwd),
+             crate::worktree::canonical_or_original(&cached_cwd)
+         );
++        assert_eq!(app.pending_tab_auto_start_agents.len(), 1);
++        assert_eq!(
++            app.pending_tab_auto_start_agents[0].pane_id,
++            app.public_pane_id(0, created_root).unwrap()
++        );
+         shutdown_test_runtimes(&mut app);
+     }
+ }
 diff --git a/src/app/creation.rs b/src/app/creation.rs
-index d531e7337084c8fca2235ceb4b37da6990271773..a44a47123c82088a205b85dac865e89d8a54e0be 100644
+index d531e7337084c8fca2235ceb4b37da6990271773..c1da07558c06b3867ab03bea3b82b22a20574191 100644
 --- a/src/app/creation.rs
 +++ b/src/app/creation.rs
 @@ -270,6 +270,7 @@ impl App {
              self.state.switch_workspace(idx);
              self.state.mode = Mode::Terminal;
          }
-+        self.queue_session_auto_start_agent(idx);
++        self.queue_tab_auto_start_agent(idx, 0);
          self.schedule_session_save();
          Ok(idx)
      }
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..ad084c7d27fd6275a9f26a2702a8407162363ffb 100644
+index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..476cb1c0e3549dcc6051a94bf866d8acf652da13 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
-@@ -137,6 +137,7 @@ pub struct App {
+@@ -137,6 +137,8 @@ pub struct App {
      pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
      pub(crate) agent_metadata_deadline: Option<Instant>,
      pub(crate) pending_agent_resume_deadline: Option<Instant>,
-+    pub(crate) pending_session_auto_start_agent: Option<PendingSessionAutoStartAgent>,
++    pub(crate) tab_auto_start_agent: Option<crate::detect::Agent>,
++    pub(crate) pending_tab_auto_start_agents: Vec<PendingTabAutoStartAgent>,
      pub(crate) selection_autoscroll_deadline: Option<Instant>,
      pub(crate) selection_highlight_clear_deadline: Option<Instant>,
      pub(crate) session_save_deadline: Option<Instant>,
-@@ -167,6 +168,16 @@ pub struct App {
+@@ -167,6 +169,14 @@ pub struct App {
      prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
  }
  
 +#[derive(Debug)]
-+pub(crate) enum PendingSessionAutoStartAgent {
-+    AwaitingWorkspace(crate::detect::Agent),
-+    AwaitingShell {
-+        kind: crate::detect::Agent,
-+        pane_id: String,
-+        deadline: Instant,
-+    },
++pub(crate) struct PendingTabAutoStartAgent {
++    kind: crate::detect::Agent,
++    name: String,
++    pane_id: String,
++    deadline: Instant,
 +}
 +
  pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
  pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
  
-@@ -385,6 +396,16 @@ fn resolve_effective_theme(
+@@ -385,6 +395,15 @@ fn resolve_effective_theme(
      )
  }
  
-+fn pending_session_auto_start_agent(
++fn configured_tab_auto_start_agent(
 +    config: &Config,
 +    no_session: bool,
-+    has_saved_session: bool,
 +) -> Option<crate::detect::Agent> {
-+    (!no_session && !has_saved_session)
++    (!no_session)
 +        .then(|| config.session_auto_start_agent())
 +        .flatten()
 +}
@@ -382,7 +494,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..ad084c7d27fd6275a9f26a2702a84071
  impl App {
      pub fn new(
          config: &Config,
-@@ -398,6 +419,14 @@ impl App {
+@@ -398,6 +417,12 @@ impl App {
          let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
          let render_notify = Arc::new(Notify::new());
          let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
@@ -391,13 +503,11 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..ad084c7d27fd6275a9f26a2702a84071
 +        } else {
 +            crate::persist::load()
 +        };
-+        let pending_session_auto_start_agent =
-+            pending_session_auto_start_agent(config, no_session, saved_session.is_some())
-+                .map(PendingSessionAutoStartAgent::AwaitingWorkspace);
++        let tab_auto_start_agent = configured_tab_auto_start_agent(config, no_session);
  
          // Try to restore previous session
          let mut restored_terminals = std::collections::HashMap::new();
-@@ -420,7 +449,7 @@ impl App {
+@@ -420,7 +445,7 @@ impl App {
                  0.5_f32,
                  std::collections::HashSet::new(),
              )
@@ -406,43 +516,54 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..ad084c7d27fd6275a9f26a2702a84071
              let history = config
                  .experimental
                  .pane_history
-@@ -782,6 +811,7 @@ impl App {
+@@ -782,6 +807,8 @@ impl App {
              loaded_host_cursor: config.ui.host_cursor,
              agent_metadata_deadline: None,
              pending_agent_resume_deadline: None,
-+            pending_session_auto_start_agent,
++            tab_auto_start_agent,
++            pending_tab_auto_start_agents: Vec::new(),
              session_save_deadline: None,
              session_save_thread: None,
              detached_process_children: Vec::new(),
-@@ -2761,6 +2791,19 @@ mod tests {
+@@ -1437,6 +1464,10 @@ impl App {
+         let invalid_section =
+             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+ 
++        if !invalid_section("session") {
++            self.tab_auto_start_agent = configured_tab_auto_start_agent(config, self.no_session);
++        }
++
+         if !invalid_section("keys") {
+             match config.live_keybinds_with_diagnostics() {
+                 Ok((live, keybind_diagnostics)) => {
+@@ -2761,6 +2792,18 @@ mod tests {
          assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
      }
  
 +    #[test]
-+    fn session_agent_auto_start_is_pending_only_without_saved_state() {
++    fn tab_agent_auto_start_is_configured_only_for_persistent_sessions() {
 +        let mut config = Config::default();
 +        config.session.auto_start_agent = Some("opencode".into());
 +
 +        assert_eq!(
-+            pending_session_auto_start_agent(&config, false, false),
++            configured_tab_auto_start_agent(&config, false),
 +            Some(Agent::OpenCode)
 +        );
-+        assert_eq!(pending_session_auto_start_agent(&config, false, true), None);
-+        assert_eq!(pending_session_auto_start_agent(&config, true, false), None);
++        assert_eq!(configured_tab_auto_start_agent(&config, true), None);
 +    }
 +
      #[test]
      fn startup_uses_configured_sidebar_state() {
          let mut config = Config::default();
 diff --git a/src/app/runtime.rs b/src/app/runtime.rs
-index 8367a22350ff01dc3683f4930d2efef2a8178bf8..1ac4ab08c7199171a7bb04eb8ad05df5eaf9af93 100644
+index 8367a22350ff01dc3683f4930d2efef2a8178bf8..e7464b4d32faaced0892a0d5e1bca5cb33c45a14 100644
 --- a/src/app/runtime.rs
 +++ b/src/app/runtime.rs
 @@ -297,6 +297,8 @@ impl App {
              self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
          }
  
-+        changed |= self.try_start_session_auto_start_agent(now);
++        changed |= self.try_start_tab_auto_start_agents(now);
 +
          if self
              .config_diagnostic_deadline
@@ -451,7 +572,7 @@ index 8367a22350ff01dc3683f4930d2efef2a8178bf8..1ac4ab08c7199171a7bb04eb8ad05df5
              self.next_auto_update_check,
              self.next_agent_manifest_update_check,
              self.agent_metadata_deadline,
-+            self.session_auto_start_deadline(),
++            self.tab_auto_start_deadline(),
              self.pending_agent_resume_deadline,
              self.session_save_deadline,
              self.selection_autoscroll_deadline,
@@ -536,15 +657,15 @@ index 898cf07715b2576caca00fa865c296fe80c9db49..baab49580367a5485bcaa0b54ec837a4
  
      #[test]
 diff --git a/src/config/model.rs b/src/config/model.rs
-index e06fd6a35abcaccdd21883b19e304e8229cb205d..f675b2c4d9d410c87466e9238b5d893469e053aa 100644
+index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d18759a4bc 100644
 --- a/src/config/model.rs
 +++ b/src/config/model.rs
 @@ -241,6 +241,9 @@ pub struct TerminalConfig {
  #[derive(Debug, Deserialize)]
  #[serde(default)]
  pub struct SessionConfig {
-+    /// Start this supported interactive agent in the first pane when a persistent
-+    /// session has no saved state. Unset by default.
++    /// Start this supported interactive agent in the root pane of each new tab in
++    /// a persistent session. Unset by default.
 +    pub auto_start_agent: Option<String>,
      /// Resume supported AI-agent panes into their native conversation sessions
      /// when restoring a Herdr session. Default: true.
@@ -592,15 +713,15 @@ index e06fd6a35abcaccdd21883b19e304e8229cb205d..f675b2c4d9d410c87466e9238b5d8934
  
      #[test]
 diff --git a/src/main.rs b/src/main.rs
-index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..9c85a99f5a288425c5fdc7de82c1933ab709fed3 100644
+index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..25c95856b17515739a5d89faf354ec807d8d9dd2 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -419,6 +419,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
  # droid = "off"
  
  [session]
-+# Start one supported interactive Agent in the first pane when a persistent
-+# session has no saved state. Uses the same kind labels as `herdr agent start`.
++# Start one supported interactive Agent in the root pane of each new tab in a
++# persistent session. Uses the same kind labels as `herdr agent start`.
 +# auto_start_agent = "opencode"
  # Resume supported AI-agent panes into their native conversation sessions after
  # a Herdr server restart. Requires official integrations that report session refs.
@@ -674,14 +795,14 @@ index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4c
  pub(crate) fn interactive_unix_shell_command(
      argv: &[String],
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..5bb67dabae35a3a762933e58bc44fa8ab998c726 100644
+index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..f801c1985fe4bb85e98349ae497df937b0ce162d 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
 @@ -4718,6 +4718,8 @@ impl HeadlessServer {
          // No resize polling needed — server has no terminal.
          // Client resize messages drive size changes instead.
  
-+        changed |= self.app.try_start_session_auto_start_agent(now);
++        changed |= self.app.try_start_tab_auto_start_agents(now);
 +
          if self
              .app

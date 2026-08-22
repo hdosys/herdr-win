@@ -534,6 +534,14 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString 
 pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
     let shell_name = shell_name.to_ascii_lowercase();
     let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
+    let (program, args) = argv.split_first()?;
+    if args.is_empty() {
+        return Some(if powershell {
+            format!("cmd.exe /d /c {program}")
+        } else {
+            program.clone()
+        });
+    }
     let script = powershell_agent_script(argv)?;
     if powershell {
         Some(script)
@@ -544,20 +552,19 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
 
 fn powershell_agent_script(argv: &[String]) -> Option<String> {
     let (program, args) = argv.split_first()?;
-    if args.is_empty() {
-        return Some(format!("& {}", super::quote_powershell_arg(program)));
-    }
-
+    let mut command = format!(
+        "& {{$herdrExtensions=if($env:PATHEXT){{@($env:PATHEXT -split ';')}}else{{@('.COM','.EXE','.BAT','.CMD')}};$herdrCommand=Get-Command -Name {} -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {{$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}}|Select-Object -First 1;if($null -eq $herdrCommand){{throw 'agent executable not found'}};$p=Start-Process -FilePath $herdrCommand.Path",
+        super::quote_powershell_arg(program)
+    );
     let command_line = args
         .iter()
         .map(|arg| quote_windows_command_line_arg(arg))
         .collect::<Vec<_>>()
         .join(" ");
-    Some(format!(
-        "$p=Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait -PassThru",
-        super::quote_powershell_arg(program),
-        super::quote_powershell_arg(&command_line),
-    ))
+    command.push_str(" -ArgumentList ");
+    command.push_str(&super::quote_powershell_arg(&command_line));
+    command.push_str(" -NoNewWindow -Wait -PassThru}");
+    Some(command)
 }
 
 fn quote_windows_command_line_arg(value: &str) -> String {
@@ -3317,12 +3324,16 @@ mod tests {
     }
 
     #[test]
-    fn powershell_agent_command_omits_argument_list_when_no_arguments_are_passed() {
+    fn argument_free_agent_commands_stay_concise_and_use_native_resolution() {
         let argv = vec!["opencode".into()];
 
         assert_eq!(
             super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
-            Some("& opencode")
+            Some("cmd.exe /d /c opencode")
+        );
+        assert_eq!(
+            super::interactive_shell_command(&argv, "cmd.exe").as_deref(),
+            Some("opencode")
         );
     }
 
@@ -3381,7 +3392,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             String::from_utf16(&utf16).unwrap(),
-            "$p=Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru"
+            "& {$herdrExtensions=if($env:PATHEXT){@($env:PATHEXT -split ';')}else{@('.COM','.EXE','.BAT','.CMD')};$herdrCommand=Get-Command -Name pi -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}|Select-Object -First 1;if($null -eq $herdrCommand){throw 'agent executable not found'};$p=Start-Process -FilePath $herdrCommand.Path -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru}"
         );
     }
 
@@ -3401,6 +3412,12 @@ mod tests {
         fs::write(
             &helper,
             "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
+        )
+        .unwrap();
+        fs::write(base.join("pi"), "#!/bin/sh\nexit 1\n").unwrap();
+        fs::write(
+            base.join("pi.ps1"),
+            "& \"$PSScriptRoot\\pi.cmd\" @args\nexit $LASTEXITCODE\n",
         )
         .unwrap();
         let argv = vec![

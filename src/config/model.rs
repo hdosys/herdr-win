@@ -241,6 +241,9 @@ pub struct TerminalConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
+    /// Start this supported interactive agent in the root pane of each new tab in
+    /// a persistent session. Unset by default.
+    pub auto_start_agent: Option<String>,
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
@@ -249,6 +252,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            auto_start_agent: None,
             resume_agents_on_restore: true,
         }
     }
@@ -1267,16 +1271,32 @@ new_cwd = "~/Projects"
     }
 
     #[test]
-    fn resume_agents_on_restore_defaults_on_and_parses() {
+    fn session_config_defaults_parse_and_validate() {
         let default_config = Config::default();
+        assert!(default_config.session.auto_start_agent.is_none());
         assert!(default_config.session.resume_agents_on_restore);
 
         let toml = r#"
 [session]
+auto_start_agent = "opencode"
 resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.session.auto_start_agent.as_deref(), Some("opencode"));
         assert!(!config.session.resume_agents_on_restore);
+        assert!(config.collect_diagnostics().is_empty());
+
+        let config: Config = toml::from_str(
+            r#"
+[session]
+auto_start_agent = "not-an-agent"
+"#,
+        )
+        .unwrap();
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.contains("session.auto_start_agent")));
     }
 
     #[test]

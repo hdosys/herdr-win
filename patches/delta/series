@@ -5,3 +5,4 @@
 0006-harden-curl-transfers.patch
 0007-docs-parity-native-paths.patch
 0008-worktree-scoped-git-trust.patch
+0009-session-agent-autostart.patch

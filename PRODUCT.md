@@ -173,6 +173,11 @@ tests remain the detailed implementation truth.
 ## Interaction and Status
 
 - Keyboard-first terminal operation remains complete end to end.
+- `[session] auto_start_agent` is an opt-in fresh-session convenience that starts
+  one supported interactive Agent through Herdr's existing managed launch path.
+  It is unset by default and runs only for a new persistent session with no saved
+  state. Saved-session Agent resume, client attach, config reload, live handoff,
+  and `--no-session` never trigger it, and Herdr never writes the setting itself.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at
@@ -192,7 +197,8 @@ tests remain the detailed implementation truth.
   Persistent server launch targets exactly one active desktop session owned by the
   SSH user and verifies the launched process session. It fails closed when that
   session is absent or ambiguous and leaves no persistent scheduled task. The
-  server and pane processes remain independent of the initiating SSH channel.
+  server releases its transient interactive console before serving, and the server
+  and pane processes remain independent of the initiating SSH channel.
 - `herdr --remote <target> --provision` is the explicit configuration-management
   path. Unattended use requires `--yes` and may add `--json`. It deploys a matching
   runtime, rejects invalid remote configuration before server activation, starts a

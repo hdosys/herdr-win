@@ -1,0 +1,706 @@
+From a152f3bf24b1710c5f3e5c9b7ba3fc1893cb0573 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 18:22:00 +0200
+Subject: [PATCH 8/8] feat(session): auto-start configured agent
+
+Refs herdrdev/herdr#321
+---
+ docs/next/CHANGELOG.md                        |   4 +
+ .../src/content/docs/configuration.mdx        |  11 +
+ .../website/src/data/config-reference.json    |   6 +
+ justfile                                      |   8 +-
+ src/app/agents.rs                             | 192 +++++++++++++++++-
+ src/app/creation.rs                           |   1 +
+ src/app/mod.rs                                |  45 +++-
+ src/app/runtime.rs                            |   3 +
+ src/config.rs                                 |  20 ++
+ src/config/io.rs                              |  18 ++
+ src/config/model.rs                           |  22 +-
+ src/main.rs                                   |   3 +
+ src/pane.rs                                   |   6 +
+ src/platform/mod.rs                           |  33 ++-
+ src/server/headless.rs                        |   2 +
+ src/terminal/runtime.rs                       |   4 +
+ 16 files changed, 373 insertions(+), 5 deletions(-)
+
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index 4048b9fef48bda76a7063882fb053f84ec68a3ed..85036bc97ca0a98c39e1b035a6bc08c018a303a2 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -2,11 +2,15 @@
+ 
+ ## Unreleased
+ 
++### Added
++- New persistent sessions can start one configured interactive Agent in their first pane with `[session] auto_start_agent`.
++
+ ### Changed
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
+ 
+ ### Fixed
+ - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
++- Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ 
+ ## [0.8.2] - 2026-08-19
+ 
+diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
+index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..a7e91105d9023e39dde94bd6ed6148926b9472e0 100644
+--- a/docs/next/website/src/content/docs/configuration.mdx
++++ b/docs/next/website/src/content/docs/configuration.mdx
+@@ -480,6 +480,17 @@ kitty_graphics = true
+ 
+ Enable it only when testing terminal image behavior.
+ 
++## Start an Agent in a new session
++
++To start one supported interactive Agent in the first pane of every new persistent session, opt in with its `herdr agent start --kind` label:
++
++```toml
++[session]
++auto_start_agent = "opencode"
++```
++
++The setting is unset by default. It runs only when a session has no saved state. It does not run again for a restored session, client attach, config reload, live handoff, or `--no-session`. Herdr reads this value from your config and never adds or rewrites it.
++
+ ## Agent session restore
+ 
+ Herdr resumes supported Agent conversations after a server restart by default:
+diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
+index 60cc83c35a009e9c2d2e36ba7896da262e401660..3ab37f1da7450a7af7827b2bc856b35008991e65 100644
+--- a/docs/next/website/src/data/config-reference.json
++++ b/docs/next/website/src/data/config-reference.json
+@@ -1147,6 +1147,12 @@
+       "id": "session",
+       "title": "Session",
+       "keys": [
++        {
++          "key": "session.auto_start_agent",
++          "type": "string",
++          "default": "unset",
++          "description": "Start one supported interactive Agent in the first pane when a persistent session has no saved state."
++        },
+         {
+           "key": "session.resume_agents_on_restore",
+           "type": "boolean",
+diff --git a/justfile b/justfile
+index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977cea22e31 100644
+--- a/justfile
++++ b/justfile
+@@ -9,8 +9,14 @@ test:
+     just plugin-marketplace-test
+ 
+ # Run one nextest filter, e.g. `just test-one codex_stale_working`
++[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
++[windows]
++test-one filter:
++    cargo nextest run --locked --bin herdr "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
++
++[unix]
+ test-one filter:
+-    cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
++    cargo nextest run --locked "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
+ 
+ # Enforce deterministic UI hot-path architecture boundaries
+ ui-hot-path-architecture-test:
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index b2aac01cf404b98824ecdda9fb509238a1ffcc07..598e0ed1474e8ff9d4cb98a4879ccf4fe263ffd7 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
+ 
+ use bytes::Bytes;
+ 
+-use super::{terminal_targets::TerminalTargetError, App};
++use super::{terminal_targets::TerminalTargetError, App, PendingSessionAutoStartAgent};
+ use crate::api::schema::AgentStartParams;
+ 
+ const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
+@@ -142,6 +142,145 @@ impl App {
+             })
+     }
+ 
++    pub(super) fn queue_session_auto_start_agent(&mut self, ws_idx: usize) {
++        let Some(pending) = self.pending_session_auto_start_agent.take() else {
++            return;
++        };
++        let PendingSessionAutoStartAgent::AwaitingWorkspace(kind) = pending else {
++            self.pending_session_auto_start_agent = Some(pending);
++            return;
++        };
++        let label = crate::detect::agent_label(kind);
++        let Some(root_pane) = self
++            .state
++            .workspaces
++            .get(ws_idx)
++            .and_then(|workspace| workspace.tabs.first())
++            .map(|tab| tab.root_pane)
++        else {
++            tracing::warn!(
++                agent = label,
++                "new session has no initial pane for agent auto-start"
++            );
++            return;
++        };
++        let Some(pane_id) = self.public_pane_id(ws_idx, root_pane) else {
++            tracing::warn!(
++                agent = label,
++                "new session initial pane has no public id for agent auto-start"
++            );
++            return;
++        };
++        self.pending_session_auto_start_agent = Some(PendingSessionAutoStartAgent::AwaitingShell {
++            kind,
++            pane_id,
++            deadline: Instant::now() + DEFAULT_AGENT_START_TIMEOUT,
++        });
++        self.try_start_session_auto_start_agent(Instant::now());
++    }
++
++    pub(crate) fn session_auto_start_deadline(&self) -> Option<Instant> {
++        match self.pending_session_auto_start_agent.as_ref()? {
++            PendingSessionAutoStartAgent::AwaitingWorkspace(_) => None,
++            PendingSessionAutoStartAgent::AwaitingShell { deadline, .. } => Some(*deadline),
++        }
++    }
++
++    pub(crate) fn try_start_session_auto_start_agent(&mut self, now: Instant) -> bool {
++        let Some(PendingSessionAutoStartAgent::AwaitingShell {
++            kind,
++            pane_id,
++            deadline,
++        }) = self.pending_session_auto_start_agent.as_ref()
++        else {
++            return false;
++        };
++        let kind = *kind;
++        let pane_id = pane_id.clone();
++        let deadline = *deadline;
++        let label = crate::detect::agent_label(kind);
++
++        if now >= deadline {
++            self.pending_session_auto_start_agent = None;
++            tracing::warn!(
++                agent = label,
++                pane_id,
++                "timed out waiting for the new session shell before agent auto-start"
++            );
++            return false;
++        }
++
++        let Some((ws_idx, internal_pane_id)) = self.parse_current_public_pane_id(&pane_id) else {
++            self.pending_session_auto_start_agent = None;
++            tracing::warn!(
++                agent = label,
++                pane_id,
++                "new session agent auto-start pane is no longer available"
++            );
++            return false;
++        };
++        let Some(terminal_id) = self
++            .state
++            .workspaces
++            .get(ws_idx)
++            .and_then(|workspace| workspace.terminal_id(internal_pane_id))
++            .cloned()
++        else {
++            self.pending_session_auto_start_agent = None;
++            tracing::warn!(
++                agent = label,
++                pane_id,
++                "new session agent auto-start pane has no terminal"
++            );
++            return false;
++        };
++        let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
++            self.pending_session_auto_start_agent = None;
++            tracing::warn!(
++                agent = label,
++                pane_id,
++                "new session agent auto-start pane has no live terminal"
++            );
++            return false;
++        };
++        let Some(shell_name) = available_shell_name(runtime) else {
++            return false;
++        };
++        if !crate::platform::initial_pane_shell_ready_for_input(
++            &shell_name,
++            runtime.content_seq() > 0,
++            runtime.has_reported_cwd(),
++        ) {
++            return false;
++        }
++
++        self.pending_session_auto_start_agent = None;
++        let params = AgentStartParams {
++            name: label.to_string(),
++            kind: label.to_string(),
++            pane_id,
++            args: Vec::new(),
++            timeout_ms: None,
++        };
++
++        match self.start_agent(params) {
++            Ok((agent, _)) => {
++                tracing::info!(agent = label, pane_id = %agent.pane_id, "started configured agent in new session");
++                true
++            }
++            Err(err) => {
++                let error = self.agent_start_error_body(err);
++                tracing::warn!(
++                    agent = label,
++                    code = error.code,
++                    message = error.message,
++                    "failed to start configured agent in new session"
++                );
++                false
++            }
++        }
++    }
++
+     pub(super) fn start_agent(
+         &mut self,
+         params: AgentStartParams,
+@@ -469,6 +608,7 @@ pub(super) enum AgentRenameError {
+ #[cfg(test)]
+ mod tests {
+     use super::valid_agent_name;
++    use std::time::Instant;
+ 
+     #[test]
+     fn agent_names_use_a_small_cli_safe_grammar() {
+@@ -488,4 +628,54 @@ mod tests {
+             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
+         }
+     }
++
++    #[tokio::test]
++    async fn new_session_agent_auto_start_reuses_managed_launch_once() {
++        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
++        let mut app = super::super::App::new(
++            &crate::config::Config::default(),
++            true,
++            None,
++            api_rx,
++            crate::api::EventHub::default(),
++        );
++        let workspace = crate::workspace::Workspace::test_new("auto-start");
++        let root_pane = workspace.tabs[0].root_pane;
++        app.state.workspaces = vec![workspace];
++        app.state.ensure_test_terminals();
++        app.state.active = Some(0);
++        let terminal_id = app.state.workspaces[0].tabs[0].panes[&root_pane]
++            .attached_terminal_id
++            .clone();
++        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
++        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
++        app.pending_session_auto_start_agent = Some(
++            super::super::PendingSessionAutoStartAgent::AwaitingWorkspace(
++                crate::detect::Agent::OpenCode,
++            ),
++        );
++
++        app.queue_session_auto_start_agent(0);
++
++        assert!(!app.try_start_session_auto_start_agent(Instant::now()));
++        assert!(app.pending_session_auto_start_agent.is_some());
++        assert!(receiver.try_recv().is_err());
++
++        app.terminal_runtimes
++            .get(&terminal_id)
++            .unwrap()
++            .test_process_pty_bytes(b"$ ");
++        assert!(app.try_start_session_auto_start_agent(Instant::now()));
++        assert!(app.pending_session_auto_start_agent.is_none());
++        assert_eq!(
++            app.state.terminals[&terminal_id].agent_name.as_deref(),
++            Some("opencode")
++        );
++        receiver
++            .try_recv()
++            .expect("managed launch should submit the configured agent command");
++
++        assert!(!app.try_start_session_auto_start_agent(Instant::now()));
++        assert!(receiver.try_recv().is_err());
++    }
+ }
+diff --git a/src/app/creation.rs b/src/app/creation.rs
+index d531e7337084c8fca2235ceb4b37da6990271773..a44a47123c82088a205b85dac865e89d8a54e0be 100644
+--- a/src/app/creation.rs
++++ b/src/app/creation.rs
+@@ -270,6 +270,7 @@ impl App {
+             self.state.switch_workspace(idx);
+             self.state.mode = Mode::Terminal;
+         }
++        self.queue_session_auto_start_agent(idx);
+         self.schedule_session_save();
+         Ok(idx)
+     }
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..ad084c7d27fd6275a9f26a2702a8407162363ffb 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -137,6 +137,7 @@ pub struct App {
+     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
+     pub(crate) agent_metadata_deadline: Option<Instant>,
+     pub(crate) pending_agent_resume_deadline: Option<Instant>,
++    pub(crate) pending_session_auto_start_agent: Option<PendingSessionAutoStartAgent>,
+     pub(crate) selection_autoscroll_deadline: Option<Instant>,
+     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
+     pub(crate) session_save_deadline: Option<Instant>,
+@@ -167,6 +168,16 @@ pub struct App {
+     prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
+ }
+ 
++#[derive(Debug)]
++pub(crate) enum PendingSessionAutoStartAgent {
++    AwaitingWorkspace(crate::detect::Agent),
++    AwaitingShell {
++        kind: crate::detect::Agent,
++        pane_id: String,
++        deadline: Instant,
++    },
++}
++
+ pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
+ pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
+ 
+@@ -385,6 +396,16 @@ fn resolve_effective_theme(
+     )
+ }
+ 
++fn pending_session_auto_start_agent(
++    config: &Config,
++    no_session: bool,
++    has_saved_session: bool,
++) -> Option<crate::detect::Agent> {
++    (!no_session && !has_saved_session)
++        .then(|| config.session_auto_start_agent())
++        .flatten()
++}
++
+ impl App {
+     pub fn new(
+         config: &Config,
+@@ -398,6 +419,14 @@ impl App {
+         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
+         let render_notify = Arc::new(Notify::new());
+         let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
++        let saved_session = if no_session {
++            None
++        } else {
++            crate::persist::load()
++        };
++        let pending_session_auto_start_agent =
++            pending_session_auto_start_agent(config, no_session, saved_session.is_some())
++                .map(PendingSessionAutoStartAgent::AwaitingWorkspace);
+ 
+         // Try to restore previous session
+         let mut restored_terminals = std::collections::HashMap::new();
+@@ -420,7 +449,7 @@ impl App {
+                 0.5_f32,
+                 std::collections::HashSet::new(),
+             )
+-        } else if let Some(snap) = crate::persist::load() {
++        } else if let Some(snap) = saved_session {
+             let history = config
+                 .experimental
+                 .pane_history
+@@ -782,6 +811,7 @@ impl App {
+             loaded_host_cursor: config.ui.host_cursor,
+             agent_metadata_deadline: None,
+             pending_agent_resume_deadline: None,
++            pending_session_auto_start_agent,
+             session_save_deadline: None,
+             session_save_thread: None,
+             detached_process_children: Vec::new(),
+@@ -2761,6 +2791,19 @@ mod tests {
+         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+     }
+ 
++    #[test]
++    fn session_agent_auto_start_is_pending_only_without_saved_state() {
++        let mut config = Config::default();
++        config.session.auto_start_agent = Some("opencode".into());
++
++        assert_eq!(
++            pending_session_auto_start_agent(&config, false, false),
++            Some(Agent::OpenCode)
++        );
++        assert_eq!(pending_session_auto_start_agent(&config, false, true), None);
++        assert_eq!(pending_session_auto_start_agent(&config, true, false), None);
++    }
++
+     #[test]
+     fn startup_uses_configured_sidebar_state() {
+         let mut config = Config::default();
+diff --git a/src/app/runtime.rs b/src/app/runtime.rs
+index 8367a22350ff01dc3683f4930d2efef2a8178bf8..1ac4ab08c7199171a7bb04eb8ad05df5eaf9af93 100644
+--- a/src/app/runtime.rs
++++ b/src/app/runtime.rs
+@@ -297,6 +297,8 @@ impl App {
+             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
+         }
+ 
++        changed |= self.try_start_session_auto_start_agent(now);
++
+         if self
+             .config_diagnostic_deadline
+             .is_some_and(|deadline| now >= deadline)
+@@ -623,6 +625,7 @@ impl App {
+             self.next_auto_update_check,
+             self.next_agent_manifest_update_check,
+             self.agent_metadata_deadline,
++            self.session_auto_start_deadline(),
+             self.pending_agent_resume_deadline,
+             self.session_save_deadline,
+             self.selection_autoscroll_deadline,
+diff --git a/src/config.rs b/src/config.rs
+index cf62e8ffcf31698205dae8e54ba1490d1668fba2..d65e65edeb0569f3b7d6e8538efc1ac1c0b74403 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -91,11 +91,31 @@ impl Config {
+             .chain(self.ui.sound.diagnostics())
+             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
+             .chain(window_title_diagnostics(&self.ui.window_title))
++            .chain(self.invalid_session_auto_start_agent_diagnostic())
+             .chain(self.invalid_sidebar_bounds_diagnostic())
+             .chain(self.invalid_headless_size_diagnostic())
+             .collect()
+     }
+ 
++    pub(crate) fn session_auto_start_agent(&self) -> Option<crate::detect::Agent> {
++        self.session
++            .auto_start_agent
++            .as_deref()
++            .and_then(crate::detect::parse_agent_label)
++    }
++
++    pub(crate) fn invalid_session_auto_start_agent_diagnostic(&self) -> Option<String> {
++        self.session
++            .auto_start_agent
++            .as_deref()
++            .filter(|agent| crate::detect::parse_agent_label(agent).is_none())
++            .map(|agent| {
++                format!(
++                    "unsupported agent kind in session.auto_start_agent: {agent:?}; ignoring auto-start"
++                )
++            })
++    }
++
+     pub(crate) fn headless_size(&self) -> (u16, u16) {
+         if self.invalid_headless_size_diagnostic().is_some() {
+             (DEFAULT_HEADLESS_COLS, DEFAULT_HEADLESS_ROWS)
+diff --git a/src/config/io.rs b/src/config/io.rs
+index 898cf07715b2576caca00fa865c296fe80c9db49..baab49580367a5485bcaa0b54ec837a4fea9b960 100644
+--- a/src/config/io.rs
++++ b/src/config/io.rs
+@@ -351,6 +351,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
+     );
+ 
+     diagnostics.extend(config.theme.diagnostics());
++    diagnostics.extend(config.invalid_session_auto_start_agent_diagnostic());
+ 
+     Ok(LoadedConfig {
+         config,
+@@ -864,14 +865,31 @@ mod tests {
+         let loaded = load_live_config_from_str(
+             r#"
+ [session]
++auto_start_agent = "opencode"
+ resume_agents_on_restore = true
+ "#,
+         )
+         .unwrap();
+ 
++        assert_eq!(
++            loaded.config.session.auto_start_agent.as_deref(),
++            Some("opencode")
++        );
+         assert!(loaded.config.session.resume_agents_on_restore);
+         assert!(loaded.diagnostics.is_empty());
+         assert!(loaded.invalid_sections.is_empty());
++
++        let loaded = load_live_config_from_str(
++            r#"
++[session]
++auto_start_agent = "not-an-agent"
++"#,
++        )
++        .unwrap();
++        assert!(loaded
++            .diagnostics
++            .iter()
++            .any(|diagnostic| diagnostic.contains("session.auto_start_agent")));
+     }
+ 
+     #[test]
+diff --git a/src/config/model.rs b/src/config/model.rs
+index e06fd6a35abcaccdd21883b19e304e8229cb205d..f675b2c4d9d410c87466e9238b5d893469e053aa 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -241,6 +241,9 @@ pub struct TerminalConfig {
+ #[derive(Debug, Deserialize)]
+ #[serde(default)]
+ pub struct SessionConfig {
++    /// Start this supported interactive agent in the first pane when a persistent
++    /// session has no saved state. Unset by default.
++    pub auto_start_agent: Option<String>,
+     /// Resume supported AI-agent panes into their native conversation sessions
+     /// when restoring a Herdr session. Default: true.
+     pub resume_agents_on_restore: bool,
+@@ -249,6 +252,7 @@ pub struct SessionConfig {
+ impl Default for SessionConfig {
+     fn default() -> Self {
+         Self {
++            auto_start_agent: None,
+             resume_agents_on_restore: true,
+         }
+     }
+@@ -1267,16 +1271,32 @@ new_cwd = "~/Projects"
+     }
+ 
+     #[test]
+-    fn resume_agents_on_restore_defaults_on_and_parses() {
++    fn session_config_defaults_parse_and_validate() {
+         let default_config = Config::default();
++        assert!(default_config.session.auto_start_agent.is_none());
+         assert!(default_config.session.resume_agents_on_restore);
+ 
+         let toml = r#"
+ [session]
++auto_start_agent = "opencode"
+ resume_agents_on_restore = false
+ "#;
+         let config: Config = toml::from_str(toml).unwrap();
++        assert_eq!(config.session.auto_start_agent.as_deref(), Some("opencode"));
+         assert!(!config.session.resume_agents_on_restore);
++        assert!(config.collect_diagnostics().is_empty());
++
++        let config: Config = toml::from_str(
++            r#"
++[session]
++auto_start_agent = "not-an-agent"
++"#,
++        )
++        .unwrap();
++        assert!(config
++            .collect_diagnostics()
++            .iter()
++            .any(|diagnostic| diagnostic.contains("session.auto_start_agent")));
+     }
+ 
+     #[test]
+diff --git a/src/main.rs b/src/main.rs
+index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..9c85a99f5a288425c5fdc7de82c1933ab709fed3 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -419,6 +419,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # droid = "off"
+ 
+ [session]
++# Start one supported interactive Agent in the first pane when a persistent
++# session has no saved state. Uses the same kind labels as `herdr agent start`.
++# auto_start_agent = "opencode"
+ # Resume supported AI-agent panes into their native conversation sessions after
+ # a Herdr server restart. Requires official integrations that report session refs.
+ # resume_agents_on_restore = true
+diff --git a/src/pane.rs b/src/pane.rs
+index 7997ff24d25f51f95fafea2db8aac7a627fd534e..5104b68e5d1618ada6574fc0e0eed66fd234253f 100644
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -2965,6 +2965,12 @@ impl PaneRuntime {
+         crate::platform::process_cwd(pid)
+     }
+ 
++    pub(crate) fn has_reported_cwd(&self) -> bool {
++        self.reported_cwd
++            .lock()
++            .is_ok_and(|reported_cwd| reported_cwd.is_some())
++    }
++
+     pub fn child_pid(&self) -> Option<u32> {
+         let pid = self.child_pid.load(Ordering::Acquire);
+         (pid > 0).then_some(pid)
+diff --git a/src/platform/mod.rs b/src/platform/mod.rs
+index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4cba595633 100644
+--- a/src/platform/mod.rs
++++ b/src/platform/mod.rs
+@@ -279,7 +279,6 @@ fn normalized_process_name(name: &str) -> String {
+         .to_ascii_lowercase()
+ }
+ 
+-#[cfg(any(target_os = "linux", target_os = "macos"))]
+ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
+     matches!(
+         normalized_process_name(name).as_str(),
+@@ -287,6 +286,38 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
+     )
+ }
+ 
++pub(crate) fn initial_pane_shell_ready_for_input(
++    shell_name: &str,
++    content_seen: bool,
++    cwd_reported: bool,
++) -> bool {
++    if cfg!(windows) && is_powershell_process_name(shell_name) {
++        cwd_reported
++    } else {
++        content_seen
++    }
++}
++
++#[cfg(test)]
++mod initial_shell_readiness_tests {
++    use super::initial_pane_shell_ready_for_input;
++
++    #[test]
++    fn session_auto_start_waits_for_windows_powershell_prompt() {
++        assert!(!initial_pane_shell_ready_for_input("cmd.exe", false, false));
++        assert!(initial_pane_shell_ready_for_input("cmd.exe", true, false));
++        assert_eq!(
++            initial_pane_shell_ready_for_input("powershell.exe", true, false),
++            !cfg!(windows)
++        );
++        assert!(initial_pane_shell_ready_for_input(
++            "powershell.exe",
++            true,
++            true
++        ));
++    }
++}
++
+ #[cfg(any(target_os = "linux", target_os = "macos"))]
+ pub(crate) fn interactive_unix_shell_command(
+     argv: &[String],
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..5bb67dabae35a3a762933e58bc44fa8ab998c726 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -4718,6 +4718,8 @@ impl HeadlessServer {
+         // No resize polling needed — server has no terminal.
+         // Client resize messages drive size changes instead.
+ 
++        changed |= self.app.try_start_session_auto_start_agent(now);
++
+         if self
+             .app
+             .config_diagnostic_deadline
+diff --git a/src/terminal/runtime.rs b/src/terminal/runtime.rs
+index 5051a46b3c1a8458371e4ad017b342297904f5dd..afb190d09162f6e2b78b9488376ddc68a14dfb7c 100644
+--- a/src/terminal/runtime.rs
++++ b/src/terminal/runtime.rs
+@@ -551,6 +551,10 @@ impl TerminalRuntime {
+         self.0.cwd()
+     }
+ 
++    pub(crate) fn has_reported_cwd(&self) -> bool {
++        self.0.has_reported_cwd()
++    }
++
+     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
+         self.0.follow_cwd()
+     }
+-- 
+2.55.0.windows.3
+

@@ -78,6 +78,19 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Give concurrent local installer candidates one supported
+  isolated namespace.** Evidence: two source-disjoint sessions agreed to separate
+  build resources, but an ad hoc `runpy` constant override did not change the
+  builder function globals and overwrote the canonical verified setup twice. The
+  owning session then spent 33.833 and 31.547 seconds restoring its installer from
+  the unchanged validated bundle. Add one validated isolation option that moves
+  the ignored bundle, tool, and setup outputs together for non-deliverable
+  concurrent candidates while keeping the default fixed setup path authoritative
+  for the final user artifact. Expected benefit: prevent cross-session artifact
+  invalidation without monkeypatching the builder or serializing disjoint source
+  work. Owner: `scripts/local_windows_installer.py`, its focused tests, and the
+  Candidate procedure in `CONTRIBUTING.md`.
+
 - **Status: proposed. Share the release-profile Cargo cache between focused native
   checks and candidate installer builds.** Evidence: the exact Windows detach test
   compiled for 148.667 seconds in its worktree target, then the installer command

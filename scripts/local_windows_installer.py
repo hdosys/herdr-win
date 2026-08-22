@@ -52,6 +52,34 @@ class InstallerIdentity:
     base_version: str
 
 
+@dataclass(frozen=True)
+class InstallerPaths:
+    target_root: Path
+    input_root: Path
+    output_path: Path
+    nsis_cache: Path
+
+
+DEFAULT_PATHS = InstallerPaths(
+    target_root=TARGET_ROOT,
+    input_root=INPUT_ROOT,
+    output_path=OUTPUT_PATH,
+    nsis_cache=NSIS_CACHE,
+)
+
+
+def _isolated_candidate_paths(build_id: str) -> InstallerPaths:
+    if BUILD_ID_RE.fullmatch(build_id) is None:
+        raise LocalInstallerError(f"invalid candidate build ID {build_id!r}")
+    target_root = TARGET_ROOT / "isolated" / build_id
+    return InstallerPaths(
+        target_root=target_root,
+        input_root=target_root / "installer-inputs",
+        output_path=target_root / "release" / OUTPUT_PATH.name,
+        nsis_cache=target_root / "tools" / "nsis-3.12",
+    )
+
+
 def _run(
     command: Path | str,
     arguments: Sequence[str],
@@ -398,12 +426,14 @@ def _bundle_manifest(bundle: Path) -> tuple[InstallerIdentity, dict[str, str]]:
     return identity, hashes
 
 
-def validate_bundle(source: Path, path: Path) -> InstallerIdentity:
+def validate_bundle(
+    source: Path, path: Path, *, input_root: Path = INPUT_ROOT
+) -> InstallerIdentity:
     bundle = _safe_path(path, "--input-bundle", directory=True)
     try:
-        bundle.relative_to(INPUT_ROOT.resolve())
+        bundle.relative_to(input_root.resolve())
     except ValueError as error:
-        raise LocalInstallerError(f"input bundle must remain below {INPUT_ROOT}") from error
+        raise LocalInstallerError(f"input bundle must remain below {input_root}") from error
     recorded_identity, recorded_hashes = _bundle_manifest(bundle)
     if _hashes(bundle) != recorded_hashes:
         raise LocalInstallerError("installer input bundle files or hashes changed")
@@ -422,7 +452,9 @@ def validate_bundle(source: Path, path: Path) -> InstallerIdentity:
     return recorded_identity
 
 
-def prepare(options: argparse.Namespace) -> None:
+def prepare(
+    options: argparse.Namespace, *, paths: InstallerPaths = DEFAULT_PATHS
+) -> None:
     source = _source_root(options.source_worktree)
     stage = _safe_path(options.stage_dir, "--stage-dir", directory=True)
     launcher = _safe_path(options.launcher_exe, "--launcher-exe", directory=False)
@@ -436,16 +468,19 @@ def prepare(options: argparse.Namespace) -> None:
     )
     _validate_stage(source, stage)
     identity = _identity(stage, launcher)
-    INPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    destination = INPUT_ROOT / identity.build_id
+    paths.input_root.mkdir(parents=True, exist_ok=True)
+    destination = paths.input_root / identity.build_id
     if destination.exists():
-        if validate_bundle(source, destination) != identity:
+        if (
+            validate_bundle(source, destination, input_root=paths.input_root)
+            != identity
+        ):
             raise LocalInstallerError("existing bundle uses another identity")
         print(f"bundle={destination}")
         print("reused=yes")
         return
 
-    temporary = INPUT_ROOT / f".{identity.build_id}.prepare-{uuid.uuid4().hex}"
+    temporary = paths.input_root / f".{identity.build_id}.prepare-{uuid.uuid4().hex}"
     temporary.mkdir()
     try:
         (temporary / "stage").mkdir()
@@ -466,7 +501,7 @@ def prepare(options: argparse.Namespace) -> None:
             encoding="utf-8",
             newline="\n",
         )
-        validate_bundle(source, temporary)
+        validate_bundle(source, temporary, input_root=paths.input_root)
         temporary.rename(destination)
     finally:
         if temporary.exists():
@@ -475,11 +510,13 @@ def prepare(options: argparse.Namespace) -> None:
     print("reused=no")
 
 
-def build(options: argparse.Namespace) -> None:
+def build(
+    options: argparse.Namespace, *, paths: InstallerPaths = DEFAULT_PATHS
+) -> None:
     source = _source_root(options.source_worktree)
     bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
-    identity = validate_bundle(source, bundle)
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    identity = validate_bundle(source, bundle, input_root=paths.input_root)
+    paths.output_path.parent.mkdir(parents=True, exist_ok=True)
     powershell = _windows_powershell()
     started = time.monotonic()
     result = _run(
@@ -505,9 +542,9 @@ def build(options: argparse.Namespace) -> None:
             "-BaseVersion",
             identity.base_version,
             "-OutputPath",
-            str(OUTPUT_PATH),
+            str(paths.output_path),
             "-NsisCacheDir",
-            str(NSIS_CACHE),
+            str(paths.nsis_cache),
         ],
         cwd=source,
         timeout=300,
@@ -570,10 +607,15 @@ def candidate(options: argparse.Namespace) -> None:
     source = _source_root(options.source_worktree)
     cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
     build_id, base_commit = _source_build_identity(source)
+    paths = (
+        _isolated_candidate_paths(build_id) if options.isolated else DEFAULT_PATHS
+    )
     jobs = _available_cpu_count()
     print(f"build_id={build_id}")
     print(f"cargo_jobs={jobs}")
     print(f"cargo_target={cargo_target}")
+    if options.isolated:
+        print(f"isolation_root={paths.target_root}")
 
     cargo_started = time.monotonic()
     cargo_result = _run(
@@ -607,7 +649,9 @@ def candidate(options: argparse.Namespace) -> None:
         "candidate installer helper",
         directory=False,
     )
-    temporary_parent = _directory(TARGET_ROOT / "tmp", "candidate temporary root")
+    temporary_parent = _directory(
+        paths.target_root / "tmp", "candidate temporary root"
+    )
     with tempfile.TemporaryDirectory(
         prefix=f"candidate-{build_id}-", dir=temporary_parent
     ) as temporary:
@@ -633,14 +677,16 @@ def candidate(options: argparse.Namespace) -> None:
                 stage_dir=stage,
                 launcher_exe=launcher,
                 installer_helper_exe=helper,
-            )
+            ),
+            paths=paths,
         )
 
     build(
         argparse.Namespace(
             source_worktree=source,
-            input_bundle=INPUT_ROOT / build_id,
-        )
+            input_bundle=paths.input_root / build_id,
+        ),
+        paths=paths,
     )
     print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
 
@@ -663,6 +709,11 @@ def _parser() -> argparse.ArgumentParser:
     candidate_command.add_argument("--source-worktree", required=True, type=Path)
     candidate_command.add_argument(
         "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
+    )
+    candidate_command.add_argument(
+        "--isolated",
+        action="store_true",
+        help="place non-deliverable candidate outputs in a build-scoped namespace",
     )
     return parser
 

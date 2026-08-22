@@ -78,28 +78,22 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Give concurrent local installer candidates one supported
-  isolated namespace.** Evidence: two source-disjoint sessions agreed to separate
-  build resources, but an ad hoc `runpy` constant override did not change the
-  builder function globals and overwrote the canonical verified setup twice. The
-  owning session then spent 33.833 and 31.547 seconds restoring its installer from
-  the unchanged validated bundle. Add one validated isolation option that moves
-  the ignored bundle, tool, and setup outputs together for non-deliverable
-  concurrent candidates while keeping the default fixed setup path authoritative
-  for the final user artifact. Expected benefit: prevent cross-session artifact
-  invalidation without monkeypatching the builder or serializing disjoint source
-  work. Owner: `scripts/local_windows_installer.py`, its focused tests, and the
-  Candidate procedure in `CONTRIBUTING.md`.
+- **Status: done. Give concurrent local installer candidates one supported
+  isolated namespace.** `candidate --isolated` now derives one namespace from the
+  validated build ID and places its temporary stage, bundle, pinned NSIS tool, and
+  setup below that ignored root. The default fixed setup remains the only user
+  deliverable. Evidence: a complete isolated candidate finished in 148.276 seconds
+  while the canonical setup SHA-256 remained exactly unchanged before and after.
+  Owner: `scripts/local_windows_installer.py`, its focused tests, and the Candidate
+  procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Share the release-profile Cargo cache between focused native
-  checks and candidate installer builds.** Evidence: the exact Windows detach test
-  compiled for 148.667 seconds in its worktree target, then the installer command
-  separately compiled release payloads for 137.657 seconds; the first installer was
-  written 703.921 seconds after task checkpointing. Document one exact focused-test
-  command that uses `--release` and the same explicit `--target-dir` passed to
-  `local_windows_installer.py candidate`. Expected benefit: compile dependencies
-  once while preserving the pre-artifact behavior check and real installer gate.
-  Owner: the Candidate procedure in `CONTRIBUTING.md`.
+- **Status: done. Share the release-profile Cargo cache between focused native
+  checks and candidate installer builds.** The Candidate procedure now gives the
+  focused `cargo test --release` command and installer command one task-owned
+  `--target-dir`. Evidence: the first real isolated verification reused the
+  dependency cache and compiled only the changed Herdr package; an unchanged repeat
+  then completed Cargo in 0.470 seconds and the validated installer in 22.847
+  seconds. Owner: the Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Make `just test-one` select Windows-valid Rust targets.**
   The Windows recipe now runs through native PowerShell and constrains nextest to

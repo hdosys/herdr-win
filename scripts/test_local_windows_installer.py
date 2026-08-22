@@ -7,15 +7,18 @@ import unittest
 from pathlib import Path
 
 from scripts.local_windows_installer import (
+    DEFAULT_PATHS,
     InstallerIdentity,
     LocalInstallerError,
     OUTPUT_PATH,
+    TARGET_ROOT,
     _bundle_manifest,
     _candidate_build_id,
     _cargo_build_arguments,
     _dynamic_msvc_runtime_imports,
     _git_arguments,
     _hashes,
+    _isolated_candidate_paths,
     parse_identity,
 )
 
@@ -72,6 +75,23 @@ class LocalWindowsInstallerTests(unittest.TestCase):
 
     def test_default_output_is_one_short_replaceable_candidate_path(self) -> None:
         self.assertEqual(OUTPUT_PATH.name, "herdr-win_local_candidate_setup.exe")
+        self.assertEqual(DEFAULT_PATHS.output_path, OUTPUT_PATH)
+
+    def test_isolated_candidate_paths_share_one_build_scoped_root(self) -> None:
+        paths = _isolated_candidate_paths(BUILD_ID)
+        expected_root = TARGET_ROOT / "isolated" / BUILD_ID
+
+        self.assertEqual(paths.target_root, expected_root)
+        self.assertEqual(paths.input_root, expected_root / "installer-inputs")
+        self.assertEqual(
+            paths.output_path,
+            expected_root / "release" / "herdr-win_local_candidate_setup.exe",
+        )
+        self.assertEqual(paths.nsis_cache, expected_root / "tools" / "nsis-3.12")
+
+    def test_isolated_candidate_paths_reject_unbounded_names(self) -> None:
+        with self.assertRaisesRegex(LocalInstallerError, "invalid candidate build ID"):
+            _isolated_candidate_paths("../other-session")
 
     def test_candidate_identity_tracks_the_exact_source_snapshot(self) -> None:
         base = "a" * 40

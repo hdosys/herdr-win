@@ -179,6 +179,30 @@ single-job setting cannot serialize the build. Success always reports the replac
 installer at
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`.
 
+Use one task-owned release-profile Cargo target for the focused native check and
+the candidate build so dependencies compile once:
+
+```powershell
+$cargoTarget = Join-Path $env:TEMP `
+  ("opencode\herdr-win-cargo-target-" + [guid]::NewGuid().ToString("N"))
+$testFilter = "<one exact test filter>"
+cargo test --locked --release --target-dir $cargoTarget `
+  --bin herdr $testFilter -- --nocapture
+python scripts/local_windows_installer.py candidate `
+  --source-worktree <materialized-source-worktree> `
+  --cargo-target-dir $cargoTarget
+```
+
+When another same-repository session temporarily owns the fixed setup path, add
+`--isolated` to that candidate command. The candidate build ID then owns one
+namespace below
+`target/x86_64-pc-windows-msvc/isolated/<build-id>/` containing its temporary
+stage, validated input bundle, pinned NSIS tool, and setup. It does not write the
+fixed setup path. This isolated setup is coordination evidence, not the user
+deliverable. After the fixed path is released, rerun the command without
+`--isolated` and with the same Cargo target, then report the canonical setup path
+above.
+
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
 

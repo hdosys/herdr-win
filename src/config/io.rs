@@ -351,6 +351,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
 
     diagnostics.extend(config.theme.diagnostics());
+    diagnostics.extend(config.invalid_session_auto_start_agent_diagnostic());
 
     Ok(LoadedConfig {
         config,
@@ -864,14 +865,31 @@ mod tests {
         let loaded = load_live_config_from_str(
             r#"
 [session]
+auto_start_agent = "opencode"
 resume_agents_on_restore = true
 "#,
         )
         .unwrap();
 
+        assert_eq!(
+            loaded.config.session.auto_start_agent.as_deref(),
+            Some("opencode")
+        );
         assert!(loaded.config.session.resume_agents_on_restore);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
+
+        let loaded = load_live_config_from_str(
+            r#"
+[session]
+auto_start_agent = "not-an-agent"
+"#,
+        )
+        .unwrap();
+        assert!(loaded
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("session.auto_start_agent")));
     }
 
     #[test]

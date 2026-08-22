@@ -78,6 +78,16 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Share the release-profile Cargo cache between focused native
+  checks and candidate installer builds.** Evidence: the exact Windows detach test
+  compiled for 148.667 seconds in its worktree target, then the installer command
+  separately compiled release payloads for 137.657 seconds; the first installer was
+  written 703.921 seconds after task checkpointing. Document one exact focused-test
+  command that uses `--release` and the same explicit `--target-dir` passed to
+  `local_windows_installer.py candidate`. Expected benefit: compile dependencies
+  once while preserving the pre-artifact behavior check and real installer gate.
+  Owner: the Candidate procedure in `CONTRIBUTING.md`.
+
 - **Status: proposed. Give public preview-manifest propagation a sufficient
   bounded release-ready gate.** Evidence: release publication committed the new
   manifest and all immutable assets were live, but the exact raw branch URL served

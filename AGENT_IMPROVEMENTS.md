@@ -88,6 +88,16 @@ configuration repository.
   once while preserving the pre-artifact behavior check and real installer gate.
   Owner: the Candidate procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Make `just test-one` select Windows-valid Rust targets.**
+  Evidence: on Windows, the repository recipe entered Git Bash and selected Git's
+  `usr/bin/link.exe`; direct nextest then compiled pre-existing Unix-only
+  integration targets before applying the focused filter, while `cargo test
+  --locked --bin herdr auto_start -- --nocapture` passed three focused tests. Use a
+  native bin-unit path or explicitly constrain nextest targets on Windows while
+  preserving the current non-Windows recipe. Expected benefit: reliable focused
+  Windows tests without unrelated Unix compilation or linker ambiguity. Owner:
+  `justfile`.
+
 - **Status: proposed. Give public preview-manifest propagation a sufficient
   bounded release-ready gate.** Evidence: release publication committed the new
   manifest and all immutable assets were live, but the exact raw branch URL served

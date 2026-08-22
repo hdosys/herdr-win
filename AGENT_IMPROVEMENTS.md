@@ -123,3 +123,13 @@ configuration repository.
   path to the existing release contribution procedure before manifest edits.
   Expected benefit: remove ten-minute checkout waits and avoid dirty-index risk
   during routine external package updates. Owner: `CONTRIBUTING.md`.
+
+- **Status: proposed. Make Windows worktree removal terminal before dropping its
+  recovery metadata.** Evidence: `herdr worktree remove` closed workspace `wA` and
+  removed its Git registration, then failed with `Permission denied`; the checkout
+  became an empty non-repository directory that remained locked after the owner
+  stopped writing, and Herdr could no longer retry it by workspace ID. Wait for the
+  task-owned shell process to exit and remove the directory before unregistering,
+  or preserve enough state to report the owning process and retry safely. Expected
+  benefit: one bounded cleanup command without an unrecoverable orphan directory.
+  Owner: the Windows `herdr worktree remove` lifecycle.

@@ -1148,6 +1148,12 @@
       "title": "Session",
       "keys": [
         {
+          "key": "session.auto_start_agent",
+          "type": "string",
+          "default": "unset",
+          "description": "Start one supported interactive Agent in each new tab root and in eligible existing roots when the setting is enabled live."
+        },
+        {
           "key": "session.resume_agents_on_restore",
           "type": "boolean",
           "default": "true",

@@ -4797,6 +4797,8 @@ impl HeadlessServer {
         // No resize polling needed — server has no terminal.
         // Client resize messages drive size changes instead.
 
+        changed |= self.app.try_start_tab_auto_start_agents(now);
+
         if self
             .app
             .config_diagnostic_deadline

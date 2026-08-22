@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
-use super::{terminal_targets::TerminalTargetError, App};
+use super::{terminal_targets::TerminalTargetError, App, PendingTabAutoStartAgent};
 use crate::api::schema::AgentStartParams;
 
 const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -140,6 +140,186 @@ impl App {
                     target: target.to_string(),
                 })
             })
+    }
+
+    pub(super) fn queue_tab_auto_start_agent(&mut self, ws_idx: usize, tab_idx: usize) {
+        let Some(kind) = self.tab_auto_start_agent else {
+            return;
+        };
+        let label = crate::detect::agent_label(kind);
+        let Some(root_pane) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.tabs.get(tab_idx))
+            .map(|tab| tab.root_pane)
+        else {
+            tracing::warn!(
+                agent = label,
+                "new tab has no root pane for agent auto-start"
+            );
+            return;
+        };
+        let Some(pane_id) = self.public_pane_id(ws_idx, root_pane) else {
+            tracing::warn!(
+                agent = label,
+                "new tab root pane has no public id for agent auto-start"
+            );
+            return;
+        };
+        if self
+            .pending_tab_auto_start_agents
+            .iter()
+            .any(|pending| pending.pane_id == pane_id)
+        {
+            return;
+        }
+        self.pending_tab_auto_start_agents
+            .push(PendingTabAutoStartAgent {
+                kind,
+                name: format!("{label}-p{}", root_pane.raw()),
+                pane_id,
+                deadline: Instant::now() + DEFAULT_AGENT_START_TIMEOUT,
+            });
+        self.try_start_tab_auto_start_agents(Instant::now());
+    }
+
+    pub(super) fn queue_existing_tab_auto_start_agents(&mut self) {
+        let mut eligible_tabs = Vec::new();
+        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
+            for (tab_idx, tab) in workspace.tabs.iter().enumerate() {
+                let Some(terminal_id) = workspace.terminal_id(tab.root_pane) else {
+                    continue;
+                };
+                let Some(terminal) = self.state.terminals.get(terminal_id) else {
+                    continue;
+                };
+                if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
+                    continue;
+                }
+                let Some(runtime) = self.terminal_runtimes.get(terminal_id) else {
+                    continue;
+                };
+                if available_shell_name(runtime).is_some() {
+                    eligible_tabs.push((ws_idx, tab_idx));
+                }
+            }
+        }
+
+        for (ws_idx, tab_idx) in eligible_tabs {
+            self.queue_tab_auto_start_agent(ws_idx, tab_idx);
+        }
+    }
+
+    pub(crate) fn tab_auto_start_deadline(&self) -> Option<Instant> {
+        self.pending_tab_auto_start_agents
+            .iter()
+            .map(|pending| pending.deadline)
+            .min()
+    }
+
+    pub(crate) fn try_start_tab_auto_start_agents(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        let pending_agents = std::mem::take(&mut self.pending_tab_auto_start_agents);
+        for PendingTabAutoStartAgent {
+            kind,
+            name,
+            pane_id,
+            deadline,
+        } in pending_agents
+        {
+            let label = crate::detect::agent_label(kind);
+
+            if now >= deadline {
+                tracing::warn!(
+                    agent = label,
+                    pane_id,
+                    "timed out waiting for the new tab shell before agent auto-start"
+                );
+                continue;
+            }
+
+            let Some((ws_idx, internal_pane_id)) = self.parse_current_public_pane_id(&pane_id)
+            else {
+                tracing::warn!(
+                    agent = label,
+                    pane_id,
+                    "new tab agent auto-start pane is no longer available"
+                );
+                continue;
+            };
+            let Some(terminal_id) = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|workspace| workspace.terminal_id(internal_pane_id))
+                .cloned()
+            else {
+                tracing::warn!(
+                    agent = label,
+                    pane_id,
+                    "new tab agent auto-start pane has no terminal"
+                );
+                continue;
+            };
+            let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
+                tracing::warn!(
+                    agent = label,
+                    pane_id,
+                    "new tab agent auto-start pane has no live terminal"
+                );
+                continue;
+            };
+            let Some(shell_name) = available_shell_name(runtime) else {
+                self.pending_tab_auto_start_agents
+                    .push(PendingTabAutoStartAgent {
+                        kind,
+                        name,
+                        pane_id,
+                        deadline,
+                    });
+                continue;
+            };
+            if !crate::platform::initial_pane_shell_ready_for_input(
+                &shell_name,
+                runtime.content_seq() > 0,
+                runtime.has_reported_cwd(),
+            ) {
+                self.pending_tab_auto_start_agents
+                    .push(PendingTabAutoStartAgent {
+                        kind,
+                        name,
+                        pane_id,
+                        deadline,
+                    });
+                continue;
+            }
+
+            let params = AgentStartParams {
+                name,
+                kind: label.to_string(),
+                pane_id,
+                args: Vec::new(),
+                timeout_ms: None,
+            };
+
+            match self.start_agent(params) {
+                Ok((agent, _)) => {
+                    tracing::info!(agent = label, pane_id = %agent.pane_id, "started configured agent in new tab");
+                    changed = true;
+                }
+                Err(err) => {
+                    let error = self.agent_start_error_body(err);
+                    tracing::warn!(
+                        agent = label,
+                        code = error.code,
+                        message = error.message,
+                        "failed to start configured agent in new tab"
+                    );
+                }
+            }
+        }
+        changed
     }
 
     pub(super) fn start_agent(
@@ -469,6 +649,7 @@ pub(super) enum AgentRenameError {
 #[cfg(test)]
 mod tests {
     use super::valid_agent_name;
+    use std::time::Instant;
 
     #[test]
     fn agent_names_use_a_small_cli_safe_grammar() {
@@ -487,5 +668,75 @@ mod tests {
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
         }
+    }
+
+    #[tokio::test]
+    async fn new_tab_agent_auto_start_reuses_managed_launch_for_each_root() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = super::super::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = crate::workspace::Workspace::test_new("auto-start");
+        let second_tab = workspace.test_add_tab(None);
+        let first_root = workspace.tabs[0].root_pane;
+        let second_root = workspace.tabs[second_tab].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
+
+        let first_terminal = app.state.workspaces[0].tabs[0].panes[&first_root]
+            .attached_terminal_id
+            .clone();
+        let second_terminal = app.state.workspaces[0].tabs[second_tab].panes[&second_root]
+            .attached_terminal_id
+            .clone();
+        let (first_runtime, mut first_receiver) =
+            crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        let (second_runtime, mut second_receiver) =
+            crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes
+            .insert(first_terminal.clone(), first_runtime);
+        app.terminal_runtimes
+            .insert(second_terminal.clone(), second_runtime);
+
+        app.queue_tab_auto_start_agent(0, 0);
+        app.queue_tab_auto_start_agent(0, second_tab);
+
+        assert!(!app.try_start_tab_auto_start_agents(Instant::now()));
+        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
+        assert!(first_receiver.try_recv().is_err());
+        assert!(second_receiver.try_recv().is_err());
+
+        for terminal_id in [&first_terminal, &second_terminal] {
+            app.terminal_runtimes
+                .get(terminal_id)
+                .unwrap()
+                .test_process_pty_bytes(b"$ ");
+        }
+        assert!(app.try_start_tab_auto_start_agents(Instant::now()));
+        assert!(app.pending_tab_auto_start_agents.is_empty());
+        assert_eq!(
+            app.state.terminals[&first_terminal].agent_name.as_deref(),
+            Some(format!("opencode-p{}", first_root.raw()).as_str())
+        );
+        assert_eq!(
+            app.state.terminals[&second_terminal].agent_name.as_deref(),
+            Some(format!("opencode-p{}", second_root.raw()).as_str())
+        );
+        first_receiver
+            .try_recv()
+            .expect("managed launch should submit the initial tab agent command");
+        second_receiver
+            .try_recv()
+            .expect("managed launch should submit the later tab agent command");
+
+        assert!(!app.try_start_tab_auto_start_agents(Instant::now()));
+        assert!(first_receiver.try_recv().is_err());
+        assert!(second_receiver.try_recv().is_err());
     }
 }

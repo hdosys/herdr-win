@@ -480,6 +480,17 @@ kitty_graphics = true
 
 Enable it only when testing terminal image behavior.
 
+## Start an Agent in every new tab
+
+To start one supported interactive Agent in the root pane of every genuinely new tab in a persistent session, opt in with its `herdr agent start --kind` label:
+
+```toml
+[session]
+auto_start_agent = "opencode"
+```
+
+The setting is unset by default. It applies to the initial tab of a new persistent session and later tabs created through the UI, CLI, or API. When live reload enables or changes the setting, Herdr also starts the selected Agent in each existing tab root that is currently waiting at its shell. It does not run automatically for restored or reattached tabs at startup, live handoff, `--no-session`, or split panes. Auto-start uses the normal managed Agent path, so exiting or interrupting the Agent returns to the tab's underlying shell. Herdr reads this value from your config and never adds or rewrites it.
+
 ## Agent session restore
 
 Herdr resumes supported Agent conversations after a server restart by default:

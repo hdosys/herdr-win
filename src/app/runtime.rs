@@ -297,6 +297,8 @@ impl App {
             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
         }
 
+        changed |= self.try_start_tab_auto_start_agents(now);
+
         if self
             .config_diagnostic_deadline
             .is_some_and(|deadline| now >= deadline)
@@ -623,6 +625,7 @@ impl App {
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
+            self.tab_auto_start_deadline(),
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
             self.selection_autoscroll_deadline,

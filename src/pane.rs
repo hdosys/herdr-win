@@ -2965,6 +2965,12 @@ impl PaneRuntime {
         crate::platform::process_cwd(pid)
     }
 
+    pub(crate) fn has_reported_cwd(&self) -> bool {
+        self.reported_cwd
+            .lock()
+            .is_ok_and(|reported_cwd| reported_cwd.is_some())
+    }
+
     pub fn child_pid(&self) -> Option<u32> {
         let pid = self.child_pid.load(Ordering::Acquire);
         (pid > 0).then_some(pid)

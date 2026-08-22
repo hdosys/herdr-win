@@ -138,7 +138,7 @@ tests remain the detailed implementation truth.
   SemVer remains plugin/provenance compatibility metadata, and the wire protocol
   remains the client/server compatibility gate.
 - A copy installed by WinGet updates only through
-  `winget upgrade --id hdosys.herdr-win --exact --source winget`; `herdr update`
+  `winget upgrade hdosys.herdr-win`; `herdr update`
   refuses to replace package-managed bytes. A newer GitHub release does not create
   an update badge or release-note action for that copy until the official WinGet
   source exposes the exact target release version; then user-facing update actions

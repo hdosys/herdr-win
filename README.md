@@ -107,38 +107,26 @@ Provision starts a missing server, reloads configuration when the running binary
 
 ### WinGet (recommended)
 
-WinGet is the preferred Windows installation and update path. Install the latest
-available Herdr Win release with:
-
 ```powershell
-winget install --id hdosys.herdr-win --exact --source winget
+winget install hdosys.herdr-win
 ```
 
-No version is specified, so WinGet selects the latest available release from its
-catalog. The package installs for the current user without administrator access,
-registers an uninstaller, and adds its managed `bin` directory to the user `PATH`
-only when no effective equivalent already exists. Open a new terminal and run:
+Update with:
+
+```powershell
+winget upgrade hdosys.herdr-win
+```
+
+Open a new terminal and run:
 
 ```powershell
 herdr --version
 herdr
 ```
 
-Setup also installs Herdr's canonical agent skill at `%USERPROFILE%\.agents\skills\herdr\SKILL.md` and, when Claude Code is detected, in its configured skills directory. Installer-known copies update automatically; customized copies are preserved and reported.
-
-Published builds report `herdr-win <CalVer> (Herdr <upstream-version>)`. Local test builds include their build ID when available, as in `herdr-win local (Herdr <upstream-version>, build <build-id>)`, and omit that clause otherwise. Integrations can use the stable `herdr-win ` prefix to identify this distribution and its Windows-specific features.
-
-WinGet owns updates for package-managed copies. Upgrade to the latest available
-release with:
-
-```powershell
-winget upgrade --id hdosys.herdr-win --exact --source winget
-```
-
-`herdr update` does not replace package-managed files. GitHub may publish a
-snapshot before the WinGet catalog finishes accepting it. A WinGet-owned copy
-shows an update only after the official `winget` source contains that release, so
-its update action always points to installable bytes.
+The per-user installer requires no administrator access and installs Herdr's
+canonical agent skill while preserving customized copies. Published builds
+identify themselves as `herdr-win <CalVer> (Herdr <upstream-version>)`.
 
 ### Direct setup alternative
 
@@ -146,23 +134,12 @@ its update action always points to installable bytes.
   <img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">
 </p>
 
-If WinGet is unavailable, download the newest
+If WinGet is unavailable, download
 `herdr-win_v<version>_windows_amd64_setup.exe` from the latest
-[Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest) and run
-it. Direct setup uses the same managed per-user installation and never rewrites
-or claims an equivalent user-owned `PATH` entry.
-
-Direct installations use the fork-owned update feed. herdr-win has no user-selectable update channel and cannot be redirected to official Herdr update sources through config. CalVer orders fork releases, the build ID identifies the exact immutable runtime and matching remote assets, and the wire protocol gates client/server compatibility.
-
-Running a newer setup over a current managed installation updates it in place and repairs incomplete current installer registration.
-
-For setup downloaded directly from Releases, use `herdr update` from an ordinary
-terminal after detaching from active Herdr sessions. Updates preserve running
-sessions and activate the new verified snapshot when it is safe.
-
-#### Verify a direct download
-
-GitHub records a SHA-256 digest for every immutable release asset. Before running setup, verify the downloaded file against the `digest` for the same filename in that tagged release's GitHub metadata.
+[Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest), verify
+its GitHub SHA-256 digest, and run it. Direct installations update with
+`herdr update`; running sessions stay on their current runtime until the
+replacement can activate safely.
 
 ### Uninstall
 

@@ -279,12 +279,43 @@ fn normalized_process_name(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn is_powershell_process_name(name: &str) -> bool {
     matches!(
         normalized_process_name(name).as_str(),
         "pwsh" | "powershell"
     )
+}
+
+pub(crate) fn initial_pane_shell_ready_for_input(
+    shell_name: &str,
+    content_seen: bool,
+    cwd_reported: bool,
+) -> bool {
+    if cfg!(windows) && is_powershell_process_name(shell_name) {
+        cwd_reported
+    } else {
+        content_seen
+    }
+}
+
+#[cfg(test)]
+mod initial_shell_readiness_tests {
+    use super::initial_pane_shell_ready_for_input;
+
+    #[test]
+    fn session_auto_start_waits_for_windows_powershell_prompt() {
+        assert!(!initial_pane_shell_ready_for_input("cmd.exe", false, false));
+        assert!(initial_pane_shell_ready_for_input("cmd.exe", true, false));
+        assert_eq!(
+            initial_pane_shell_ready_for_input("powershell.exe", true, false),
+            !cfg!(windows)
+        );
+        assert!(initial_pane_shell_ready_for_input(
+            "powershell.exe",
+            true,
+            true
+        ));
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -293,6 +324,9 @@ pub(crate) fn interactive_unix_shell_command(
     shell_name: &str,
     quote_posix_arg: fn(&str) -> String,
 ) -> Option<String> {
+    if normalized_process_name(shell_name) == "nu" {
+        return interactive_nushell_command(argv);
+    }
     let quote = if is_powershell_process_name(shell_name) {
         quote_powershell_arg
     } else {
@@ -305,6 +339,35 @@ pub(crate) fn interactive_unix_shell_command(
         command.push_str(&quote(part));
     }
     Some(command)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn interactive_nushell_command(argv: &[String]) -> Option<String> {
+    let mut parts = argv.iter();
+    let mut command = format!("^{}", quote_nushell_arg(parts.next()?));
+    for part in parts {
+        command.push(' ');
+        command.push_str(&quote_nushell_arg(part));
+    }
+    Some(command)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn quote_nushell_arg(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            ch => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 pub(crate) fn quote_powershell_arg(value: &str) -> String {
@@ -405,6 +468,19 @@ impl PrefixInputSource for RealPrefixInputSource {
     }
 }
 
+#[cfg(test)]
+mod nushell_command_tests {
+    #[test]
+    fn preserves_windows_paths_and_quotes() {
+        let argv = vec![r"C:\Program Files\agent.exe".into(), r#"a\b\"c"#.into()];
+
+        assert_eq!(
+            super::interactive_nushell_command(&argv).as_deref(),
+            Some(r#"^"C:\\Program Files\\agent.exe" "a\\b\\\"c""#)
+        );
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -494,6 +570,10 @@ mod tests {
         assert_eq!(
             interactive_shell_command(&argv, "pwsh").as_deref(),
             Some("pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'")
+        );
+        assert_eq!(
+            interactive_shell_command(&argv, "nu").as_deref(),
+            Some("^\"pi\" \"\" \"two words\" \"a'b\" \"$HOME\" \"semi;colon\" \"@options\"")
         );
     }
 

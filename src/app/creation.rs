@@ -270,6 +270,7 @@ impl App {
             self.state.switch_workspace(idx);
             self.state.mode = Mode::Terminal;
         }
+        self.queue_tab_auto_start_agent(idx, 0);
         self.schedule_session_save();
         Ok(idx)
     }

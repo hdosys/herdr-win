@@ -279,12 +279,43 @@ fn normalized_process_name(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn is_powershell_process_name(name: &str) -> bool {
     matches!(
         normalized_process_name(name).as_str(),
         "pwsh" | "powershell"
     )
+}
+
+pub(crate) fn initial_pane_shell_ready_for_input(
+    shell_name: &str,
+    content_seen: bool,
+    cwd_reported: bool,
+) -> bool {
+    if cfg!(windows) && is_powershell_process_name(shell_name) {
+        cwd_reported
+    } else {
+        content_seen
+    }
+}
+
+#[cfg(test)]
+mod initial_shell_readiness_tests {
+    use super::initial_pane_shell_ready_for_input;
+
+    #[test]
+    fn session_auto_start_waits_for_windows_powershell_prompt() {
+        assert!(!initial_pane_shell_ready_for_input("cmd.exe", false, false));
+        assert!(initial_pane_shell_ready_for_input("cmd.exe", true, false));
+        assert_eq!(
+            initial_pane_shell_ready_for_input("powershell.exe", true, false),
+            !cfg!(windows)
+        );
+        assert!(initial_pane_shell_ready_for_input(
+            "powershell.exe",
+            true,
+            true
+        ));
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

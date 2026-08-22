@@ -419,6 +419,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # droid = "off"
 
 [session]
+# Start one supported interactive Agent in the root pane of each new tab in a
+# persistent session. Uses the same kind labels as `herdr agent start`.
+# Enabling this during live reload also starts eligible existing tab roots.
+# auto_start_agent = "opencode"
 # Resume supported AI-agent panes into their native conversation sessions after
 # a Herdr server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true

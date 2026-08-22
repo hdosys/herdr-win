@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 const MAX_SESSION_ID_LEN: usize = 512;
 const MAX_SESSION_PATH_LEN: usize = 4096;
 
+pub(crate) fn opencode_local_server_argv() -> Vec<String> {
+    ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns"]
+        .map(str::to_string)
+        .into()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionRef {
     pub kind: AgentSessionRefKind,
@@ -166,11 +172,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             ]
         }
         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
-            vec![
-                "opencode".into(),
-                "--session".into(),
-                session_ref.value.clone(),
-            ]
+            let mut argv = opencode_local_server_argv();
+            argv.extend(["--session".into(), session_ref.value.clone()]);
+            argv
         }
         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
             vec![
@@ -394,7 +398,14 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["opencode", "--session", "opencode-session"]
+            vec![
+                "opencode",
+                "--hostname=127.0.0.1",
+                "--port=0",
+                "--no-mdns",
+                "--session",
+                "opencode-session"
+            ]
         );
         assert_eq!(
             plan(

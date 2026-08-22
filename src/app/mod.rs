@@ -142,6 +142,8 @@ pub struct App {
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
+    pub(crate) tab_auto_start_agent: Option<crate::detect::Agent>,
+    pub(crate) pending_tab_auto_start_agents: Vec<PendingTabAutoStartAgent>,
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
@@ -171,6 +173,14 @@ pub struct App {
     pub(crate) local_input_source_switch: bool,
     pub(crate) config_reloaded_from_disk: bool,
     prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingTabAutoStartAgent {
+    kind: crate::detect::Agent,
+    name: String,
+    pane_id: String,
+    deadline: Instant,
 }
 
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -391,6 +401,15 @@ fn resolve_effective_theme(
     )
 }
 
+fn configured_tab_auto_start_agent(
+    config: &Config,
+    no_session: bool,
+) -> Option<crate::detect::Agent> {
+    (!no_session)
+        .then(|| config.session_auto_start_agent())
+        .flatten()
+}
+
 impl App {
     pub fn new(
         config: &Config,
@@ -404,6 +423,12 @@ impl App {
         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
+        let saved_session = if no_session {
+            None
+        } else {
+            crate::persist::load()
+        };
+        let tab_auto_start_agent = configured_tab_auto_start_agent(config, no_session);
 
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
@@ -426,7 +451,7 @@ impl App {
                 0.5_f32,
                 std::collections::HashSet::new(),
             )
-        } else if let Some(snap) = crate::persist::load() {
+        } else if let Some(snap) = saved_session {
             let history = config
                 .experimental
                 .pane_history
@@ -788,6 +813,8 @@ impl App {
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
+            tab_auto_start_agent,
+            pending_tab_auto_start_agents: Vec::new(),
             session_save_deadline: None,
             session_save_thread: None,
             startup_session_save_blocked: false,
@@ -1443,6 +1470,17 @@ impl App {
         let mut diagnostics = load_diagnostics.to_vec();
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+
+        if !invalid_section("session") {
+            let next_agent = configured_tab_auto_start_agent(config, self.no_session);
+            if next_agent != self.tab_auto_start_agent {
+                self.pending_tab_auto_start_agents.clear();
+                self.tab_auto_start_agent = next_agent;
+                if next_agent.is_some() {
+                    self.queue_existing_tab_auto_start_agents();
+                }
+            }
+        }
 
         if !invalid_section("keys") {
             match config.live_keybinds_with_diagnostics() {
@@ -2766,6 +2804,56 @@ mod tests {
         let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
 
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+    }
+
+    #[test]
+    fn tab_agent_auto_start_is_configured_only_for_persistent_sessions() {
+        let mut config = Config::default();
+        config.session.auto_start_agent = Some("opencode".into());
+
+        assert_eq!(
+            configured_tab_auto_start_agent(&config, false),
+            Some(Agent::OpenCode)
+        );
+        assert_eq!(configured_tab_auto_start_agent(&config, true), None);
+    }
+
+    #[tokio::test]
+    async fn enabling_tab_agent_auto_start_queues_existing_shell_roots_once() {
+        let mut app = test_app();
+        app.no_session = false;
+        let mut workspace = Workspace::test_new("auto-start-reload");
+        let second_tab = workspace.test_add_tab(None);
+        let first_root = workspace.tabs[0].root_pane;
+        let second_root = workspace.tabs[second_tab].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+
+        for root in [first_root, second_root] {
+            let terminal_id = app.state.workspaces[0].terminal_id(root).cloned().unwrap();
+            let (runtime, _receiver) = TerminalRuntime::test_with_channel(80, 24);
+            app.terminal_runtimes.insert(terminal_id, runtime);
+        }
+
+        let mut config = Config::default();
+        config.session.auto_start_agent = Some("opencode".into());
+        let report = app.apply_live_config(&config, &[], &[], false);
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
+        for root in [first_root, second_root] {
+            let pane_id = app.public_pane_id(0, root).unwrap();
+            assert!(app
+                .pending_tab_auto_start_agents
+                .iter()
+                .any(|pending| pending.pane_id == pane_id));
+        }
+
+        app.apply_live_config(&config, &[], &[], false);
+        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
+
+        app.apply_live_config(&Config::default(), &[], &[], false);
+        assert!(app.pending_tab_auto_start_agents.is_empty());
     }
 
     #[test]

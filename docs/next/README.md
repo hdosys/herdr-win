@@ -49,7 +49,7 @@ The table is intentionally capability-level. The patch files contain the exact i
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Makes runtime downloads independent of user `curl` configuration and bounds them to TLS 1.2+ HTTPS with limited redirects. |
 | Cross-platform docs checks | **Maintained here** · [#3041](https://github.com/herdrdev/herdr/issues/3041) · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
 | Mounted worktree lifecycle | **Maintained here** · [#3044](https://github.com/herdrdev/herdr/issues/3044) · [`0008`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0008-worktree-scoped-git-trust.patch) | Scopes Git ownership trust to the exact repository and checkout selected by a Herdr worktree operation, without persistent or wildcard configuration. |
-| New-tab Agent start | **Maintained here** · [#321](https://github.com/herdrdev/herdr/issues/321) · [`0009`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0009-session-agent-autostart.patch) | Optionally starts one configured Agent in the root pane of each genuinely new persistent-session tab without competing with saved-session Agent resume. |
+| Managed Agent start | **Maintained here** · [#321](https://github.com/herdrdev/herdr/issues/321) · [#2685](https://github.com/herdrdev/herdr/issues/2685) · [`0009`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0009-session-agent-autostart.patch) | Optionally starts one configured Agent in each new persistent-session tab, catches up eligible existing shell roots when the setting changes live, and resolves argument-bearing npm Agent shims reliably on Windows. |
 
 Upstream PR #2329 ships in Herdr v0.8.2. The refreshed mailbox `0003` therefore contains only Windows target-host detection, provisioning, activation, and exact interactive-session launch. Shared client attach, image transport, and SSH bridge behavior now come directly from upstream. The original Windows-host work builds on [nsxdavid's `feat/windows-remote-attach` branch](https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach).
 
@@ -74,7 +74,7 @@ flowchart LR
         P5 --> P6["0006<br/>Hardened downloads"]
         P6 --> P7["0007<br/>Portable docs check"]
         P7 --> P8["0008<br/>Scoped Git trust"]
-        P8 --> P9["0009<br/>Fresh-session Agent"]
+        P8 --> P9["0009<br/>Managed Agent start"]
     end
 
     subgraph V["Validated distribution"]

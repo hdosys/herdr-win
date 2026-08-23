@@ -101,13 +101,19 @@ behavior; code and tests remain the detailed implementation truth.
   user `curl` configuration, pass URLs as option values, require TLS 1.2 or newer
   HTTPS for initial requests and redirects, disable URL globbing, and allow at most
   five redirects; callers retain any narrower timeout, size, and digest checks.
-- Mailbox 0009 owns opt-in Agent auto-start for every genuinely new tab in a
-  persistent session and the Windows-native focused Rust test path used to verify
-  it. Initial workspace creation and the shared UI, CLI, and API tab-create path
-  queue only each new tab's root pane while the existing managed Agent launch owner
-  waits for shell readiness. Restore, reattach, config reload itself, live handoff,
-  `--no-session`, and pane split paths never queue auto-start. Native Agent resume
-  remains the only Agent launch path for restored tabs.
+- Mailbox 0009 owns opt-in Agent auto-start and Windows managed-Agent command
+  submission through the interactive shell. Initial workspace creation and the
+  shared UI, CLI, and API tab-create path queue only each new tab's root pane while
+  the existing managed Agent launch owner waits for shell readiness. A live reload
+  that enables or changes the selected Agent also queues each eligible existing
+  shell-only tab root once; an unchanged reload cannot duplicate pending work.
+  Restore or reattach at startup, live handoff, `--no-session`, pane split, and
+  existing managed-Agent terminals do not queue this path. Native Agent resume
+  remains the only Agent launch path for restored Agent terminals. On Windows,
+  argument-bearing PowerShell launches resolve only executable `PATHEXT`
+  applications before `Start-Process`, while argument-free launches retain one
+  concise native command line. The Windows-focused Rust tests and a real shell
+  round trip own that boundary.
 
 ## Managed Windows Distribution
 

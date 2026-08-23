@@ -1,52 +1,54 @@
-From 4e0adbae5afe93f279bb8df987fefe7cb9d466da Mon Sep 17 00:00:00 2001
+From 0aef02f2e9935e8f103dc6bf7dd6d419668348cc Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/8] feat(session): auto-start configured agent
 
 Refs herdrdev/herdr#321
 ---
- docs/next/CHANGELOG.md                        |   4 +
+ docs/next/CHANGELOG.md                        |   5 +
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
  justfile                                      |   8 +-
- src/app/agents.rs                             | 219 +++++++++++++++++-
+ src/app/agents.rs                             | 253 +++++++++++++++++-
  src/app/api/panes.rs                          |  30 +++
  src/app/api/tabs.rs                           |  10 +-
  src/app/creation.rs                           |   1 +
- src/app/mod.rs                                |  45 +++-
+ src/app/mod.rs                                |  90 ++++++-
  src/app/runtime.rs                            |   3 +
  src/config.rs                                 |  20 ++
  src/config/io.rs                              |  18 ++
  src/config/model.rs                           |  22 +-
- src/main.rs                                   |   3 +
+ src/main.rs                                   |   4 +
  src/pane.rs                                   |   6 +
  src/platform/mod.rs                           |  33 ++-
+ src/platform/windows.rs                       |  41 ++-
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 18 files changed, 439 insertions(+), 6 deletions(-)
+ 19 files changed, 549 insertions(+), 18 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index 4048b9fef48bda76a7063882fb053f84ec68a3ed..62bcdd8c1e1c18a373ab93c53b0cc95828f03056 100644
+index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
-@@ -2,11 +2,15 @@
+@@ -2,11 +2,16 @@
  
  ## Unreleased
  
 +### Added
-+- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`.
++- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
 +
  ### Changed
  - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
  
  ### Fixed
++- Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
  - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
 +- Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
  
  ## [0.8.2] - 2026-08-19
  
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
-index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..e8692102772b7e4be77d9163b3298d27d134243e 100644
+index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..4314e1c1e960cdab0b47680c08b289085709b2b4 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx
 +++ b/docs/next/website/src/content/docs/configuration.mdx
 @@ -480,6 +480,17 @@ kitty_graphics = true
@@ -62,13 +64,13 @@ index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..e8692102772b7e4be77d9163b3298d27
 +auto_start_agent = "opencode"
 +```
 +
-+The setting is unset by default. It applies to the initial tab of a new persistent session and later tabs created through the UI, CLI, or API. It does not run for restored or reattached tabs, config reload itself, live handoff, `--no-session`, or split panes. Auto-start uses the normal managed Agent path, so exiting or interrupting the Agent returns to the tab's underlying shell. Herdr reads this value from your config and never adds or rewrites it.
++The setting is unset by default. It applies to the initial tab of a new persistent session and later tabs created through the UI, CLI, or API. When live reload enables or changes the setting, Herdr also starts the selected Agent in each existing tab root that is currently waiting at its shell. It does not run automatically for restored or reattached tabs at startup, live handoff, `--no-session`, or split panes. Auto-start uses the normal managed Agent path, so exiting or interrupting the Agent returns to the tab's underlying shell. Herdr reads this value from your config and never adds or rewrites it.
 +
  ## Agent session restore
  
  Herdr resumes supported Agent conversations after a server restart by default:
 diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
-index 60cc83c35a009e9c2d2e36ba7896da262e401660..fc7f40a4fabcafca274ec0e52f76c0a4aac0dc81 100644
+index 60cc83c35a009e9c2d2e36ba7896da262e401660..8198ea516cee6c65922263cbb00d09527b21151c 100644
 --- a/docs/next/website/src/data/config-reference.json
 +++ b/docs/next/website/src/data/config-reference.json
 @@ -1147,6 +1147,12 @@
@@ -79,7 +81,7 @@ index 60cc83c35a009e9c2d2e36ba7896da262e401660..fc7f40a4fabcafca274ec0e52f76c0a4
 +          "key": "session.auto_start_agent",
 +          "type": "string",
 +          "default": "unset",
-+          "description": "Start one supported interactive Agent in the root pane of each new tab in a persistent session."
++          "description": "Start one supported interactive Agent in each new tab root and in eligible existing roots when the setting is enabled live."
 +        },
          {
            "key": "session.resume_agents_on_restore",
@@ -105,7 +107,7 @@ index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977
  # Enforce deterministic UI hot-path architecture boundaries
  ui-hot-path-architecture-test:
 diff --git a/src/app/agents.rs b/src/app/agents.rs
-index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0693f1cca 100644
+index b2aac01cf404b98824ecdda9fb509238a1ffcc07..053097a40ec28deaf1e8e4321499479bf87f194d 100644
 --- a/src/app/agents.rs
 +++ b/src/app/agents.rs
 @@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
@@ -117,7 +119,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0
  use crate::api::schema::AgentStartParams;
  
  const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
-@@ -142,6 +142,152 @@ impl App {
+@@ -142,6 +142,186 @@ impl App {
              })
      }
  
@@ -146,6 +148,13 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0
 +            );
 +            return;
 +        };
++        if self
++            .pending_tab_auto_start_agents
++            .iter()
++            .any(|pending| pending.pane_id == pane_id)
++        {
++            return;
++        }
 +        self.pending_tab_auto_start_agents
 +            .push(PendingTabAutoStartAgent {
 +                kind,
@@ -154,6 +163,33 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0
 +                deadline: Instant::now() + DEFAULT_AGENT_START_TIMEOUT,
 +            });
 +        self.try_start_tab_auto_start_agents(Instant::now());
++    }
++
++    pub(super) fn queue_existing_tab_auto_start_agents(&mut self) {
++        let mut eligible_tabs = Vec::new();
++        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
++            for (tab_idx, tab) in workspace.tabs.iter().enumerate() {
++                let Some(terminal_id) = workspace.terminal_id(tab.root_pane) else {
++                    continue;
++                };
++                let Some(terminal) = self.state.terminals.get(terminal_id) else {
++                    continue;
++                };
++                if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
++                    continue;
++                }
++                let Some(runtime) = self.terminal_runtimes.get(terminal_id) else {
++                    continue;
++                };
++                if available_shell_name(runtime).is_some() {
++                    eligible_tabs.push((ws_idx, tab_idx));
++                }
++            }
++        }
++
++        for (ws_idx, tab_idx) in eligible_tabs {
++            self.queue_tab_auto_start_agent(ws_idx, tab_idx);
++        }
 +    }
 +
 +    pub(crate) fn tab_auto_start_deadline(&self) -> Option<Instant> {
@@ -270,7 +306,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0
      pub(super) fn start_agent(
          &mut self,
          params: AgentStartParams,
-@@ -469,6 +615,7 @@ pub(super) enum AgentRenameError {
+@@ -469,6 +649,7 @@ pub(super) enum AgentRenameError {
  #[cfg(test)]
  mod tests {
      use super::valid_agent_name;
@@ -278,7 +314,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..92e87de17ca0e0239307c1773904aea0
  
      #[test]
      fn agent_names_use_a_small_cli_safe_grammar() {
-@@ -488,4 +635,74 @@ mod tests {
+@@ -488,4 +669,74 @@ mod tests {
              assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
          }
      }
@@ -451,7 +487,7 @@ index d531e7337084c8fca2235ceb4b37da6990271773..c1da07558c06b3867ab03bea3b82b22a
          Ok(idx)
      }
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..476cb1c0e3549dcc6051a94bf866d8acf652da13 100644
+index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73bad6ec03 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
 @@ -137,6 +137,8 @@ pub struct App {
@@ -525,18 +561,25 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..476cb1c0e3549dcc6051a94bf866d8ac
              session_save_deadline: None,
              session_save_thread: None,
              detached_process_children: Vec::new(),
-@@ -1437,6 +1464,10 @@ impl App {
+@@ -1437,6 +1464,17 @@ impl App {
          let invalid_section =
              |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
  
 +        if !invalid_section("session") {
-+            self.tab_auto_start_agent = configured_tab_auto_start_agent(config, self.no_session);
++            let next_agent = configured_tab_auto_start_agent(config, self.no_session);
++            if next_agent != self.tab_auto_start_agent {
++                self.pending_tab_auto_start_agents.clear();
++                self.tab_auto_start_agent = next_agent;
++                if next_agent.is_some() {
++                    self.queue_existing_tab_auto_start_agents();
++                }
++            }
 +        }
 +
          if !invalid_section("keys") {
              match config.live_keybinds_with_diagnostics() {
                  Ok((live, keybind_diagnostics)) => {
-@@ -2761,6 +2792,18 @@ mod tests {
+@@ -2761,6 +2799,56 @@ mod tests {
          assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
      }
  
@@ -550,6 +593,44 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..476cb1c0e3549dcc6051a94bf866d8ac
 +            Some(Agent::OpenCode)
 +        );
 +        assert_eq!(configured_tab_auto_start_agent(&config, true), None);
++    }
++
++    #[tokio::test]
++    async fn enabling_tab_agent_auto_start_queues_existing_shell_roots_once() {
++        let mut app = test_app();
++        app.no_session = false;
++        let mut workspace = Workspace::test_new("auto-start-reload");
++        let second_tab = workspace.test_add_tab(None);
++        let first_root = workspace.tabs[0].root_pane;
++        let second_root = workspace.tabs[second_tab].root_pane;
++        app.state.workspaces = vec![workspace];
++        app.state.ensure_test_terminals();
++
++        for root in [first_root, second_root] {
++            let terminal_id = app.state.workspaces[0].terminal_id(root).cloned().unwrap();
++            let (runtime, _receiver) = TerminalRuntime::test_with_channel(80, 24);
++            app.terminal_runtimes.insert(terminal_id, runtime);
++        }
++
++        let mut config = Config::default();
++        config.session.auto_start_agent = Some("opencode".into());
++        let report = app.apply_live_config(&config, &[], &[], false);
++
++        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
++        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
++        for root in [first_root, second_root] {
++            let pane_id = app.public_pane_id(0, root).unwrap();
++            assert!(app
++                .pending_tab_auto_start_agents
++                .iter()
++                .any(|pending| pending.pane_id == pane_id));
++        }
++
++        app.apply_live_config(&config, &[], &[], false);
++        assert_eq!(app.pending_tab_auto_start_agents.len(), 2);
++
++        app.apply_live_config(&Config::default(), &[], &[], false);
++        assert!(app.pending_tab_auto_start_agents.is_empty());
 +    }
 +
      #[test]
@@ -713,15 +794,16 @@ index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d1
  
      #[test]
 diff --git a/src/main.rs b/src/main.rs
-index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..25c95856b17515739a5d89faf354ec807d8d9dd2 100644
+index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..f06448898103d6fab277b9b670b80163b96cc5d4 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -419,6 +419,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+@@ -419,6 +419,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
  # droid = "off"
  
  [session]
 +# Start one supported interactive Agent in the root pane of each new tab in a
 +# persistent session. Uses the same kind labels as `herdr agent start`.
++# Enabling this during live reload also starts eligible existing tab roots.
 +# auto_start_agent = "opencode"
  # Resume supported AI-agent panes into their native conversation sessions after
  # a Herdr server restart. Requires official integrations that report session refs.
@@ -794,6 +876,95 @@ index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4c
  #[cfg(any(target_os = "linux", target_os = "macos"))]
  pub(crate) fn interactive_unix_shell_command(
      argv: &[String],
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a139c7e5097 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -534,6 +534,14 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString
+ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
+     let shell_name = shell_name.to_ascii_lowercase();
+     let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
++    let (program, args) = argv.split_first()?;
++    if args.is_empty() {
++        return Some(if powershell {
++            format!("cmd.exe /d /c {program}")
++        } else {
++            program.clone()
++        });
++    }
+     let script = powershell_agent_script(argv)?;
+     if powershell {
+         Some(script)
+@@ -544,20 +552,19 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
+ 
+ fn powershell_agent_script(argv: &[String]) -> Option<String> {
+     let (program, args) = argv.split_first()?;
+-    if args.is_empty() {
+-        return Some(format!("& {}", super::quote_powershell_arg(program)));
+-    }
+-
++    let mut command = format!(
++        "& {{$herdrExtensions=if($env:PATHEXT){{@($env:PATHEXT -split ';')}}else{{@('.COM','.EXE','.BAT','.CMD')}};$herdrCommand=Get-Command -Name {} -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {{$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}}|Select-Object -First 1;if($null -eq $herdrCommand){{throw 'agent executable not found'}};$p=Start-Process -FilePath $herdrCommand.Path",
++        super::quote_powershell_arg(program)
++    );
+     let command_line = args
+         .iter()
+         .map(|arg| quote_windows_command_line_arg(arg))
+         .collect::<Vec<_>>()
+         .join(" ");
+-    Some(format!(
+-        "$p=Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait -PassThru",
+-        super::quote_powershell_arg(program),
+-        super::quote_powershell_arg(&command_line),
+-    ))
++    command.push_str(" -ArgumentList ");
++    command.push_str(&super::quote_powershell_arg(&command_line));
++    command.push_str(" -NoNewWindow -Wait -PassThru}");
++    Some(command)
+ }
+ 
+ fn quote_windows_command_line_arg(value: &str) -> String {
+@@ -3317,12 +3324,16 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn powershell_agent_command_omits_argument_list_when_no_arguments_are_passed() {
++    fn argument_free_agent_commands_stay_concise_and_use_native_resolution() {
+         let argv = vec!["opencode".into()];
+ 
+         assert_eq!(
+             super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
+-            Some("& opencode")
++            Some("cmd.exe /d /c opencode")
++        );
++        assert_eq!(
++            super::interactive_shell_command(&argv, "cmd.exe").as_deref(),
++            Some("opencode")
+         );
+     }
+ 
+@@ -3381,7 +3392,7 @@ mod tests {
+             .collect::<Vec<_>>();
+         assert_eq!(
+             String::from_utf16(&utf16).unwrap(),
+-            "$p=Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru"
++            "& {$herdrExtensions=if($env:PATHEXT){@($env:PATHEXT -split ';')}else{@('.COM','.EXE','.BAT','.CMD')};$herdrCommand=Get-Command -Name pi -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}|Select-Object -First 1;if($null -eq $herdrCommand){throw 'agent executable not found'};$p=Start-Process -FilePath $herdrCommand.Path -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru}"
+         );
+     }
+ 
+@@ -3403,6 +3414,12 @@ mod tests {
+             "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
+         )
+         .unwrap();
++        fs::write(base.join("pi"), "#!/bin/sh\nexit 1\n").unwrap();
++        fs::write(
++            base.join("pi.ps1"),
++            "& \"$PSScriptRoot\\pi.cmd\" @args\nexit $LASTEXITCODE\n",
++        )
++        .unwrap();
+         let argv = vec![
+             "pi".into(),
+             String::new(),
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..f801c1985fe4bb85e98349ae497df937b0ce162d 100644
 --- a/src/server/headless.rs

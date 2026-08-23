@@ -177,9 +177,15 @@ tests remain the detailed implementation truth.
   supported interactive Agent in the root pane of every genuinely new tab through
   Herdr's existing managed launch path. It is unset by default and applies to the
   initial tab of a new persistent session plus later tabs created through the UI,
-  CLI, or API. Restored or reattached tabs, config reload itself, live handoff,
-  `--no-session`, and split panes never trigger it. Exiting or interrupting the
+  CLI, or API. When live reload enables or changes the setting, Herdr also starts
+  the selected Agent in each eligible existing tab root that is waiting at its
+  shell. Restore or reattach at startup, an unchanged reload, live handoff,
+  `--no-session`, and split panes do not trigger it. Exiting or interrupting the
   Agent returns to the tab's underlying shell, and Herdr never writes the setting.
+- On Windows, managed Agent launch resolves npm-installed executable shims through
+  the interactive shell. Argument-bearing PowerShell launches preserve the exact
+  configured arguments, while argument-free starts use concise native command
+  resolution instead of exposing the longer resolver in the pane.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at

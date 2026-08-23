@@ -36,10 +36,11 @@ tests remain the detailed implementation truth.
   interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
   and owned upstream unless a maintained Windows delta explicitly changes it.
-- The maintained user-visible Windows delta covers terminal fidelity, Windows SSH
-  target provisioning, managed Windows distribution, and truthful OpenCode
-  retry/error lifecycle reporting. Upstream Herdr owns the shared remote client and
-  clipboard/file image bridge.
+- The maintained user-visible delta covers terminal fidelity, Windows SSH target
+  provisioning, managed Windows distribution, truthful OpenCode lifecycle and
+  session selection, managed Agent launch, and recovery after temporary foreground
+  takeover. Upstream Herdr owns the shared remote client and clipboard/file image
+  bridge.
 
 ## Installation, Update, and Uninstall
 
@@ -186,6 +187,14 @@ tests remain the detailed implementation truth.
   the interactive shell. Argument-bearing PowerShell launches preserve the exact
   configured arguments, while argument-free starts use concise native command
   resolution instead of exposing the longer resolver in the pane.
+- OpenCode panes remain bound to the root session selected locally in that pane;
+  server-global creation events from another attached client cannot take over that
+  selection, while child prompts still report blocked and working state through the
+  root authority.
+- A still-running full-lifecycle Agent that was temporarily superseded by another
+  recognized foreground Agent regains hook authority when it returns. A real
+  process exit or explicit hook clear still prevents the stale session from
+  reclaiming authority.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at

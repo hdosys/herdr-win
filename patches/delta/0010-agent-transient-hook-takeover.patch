@@ -1,0 +1,136 @@
+From b875487ec4338ad3cce1d55a0f89ebc7953f6f6a Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Sun, 23 Aug 2026 00:13:32 +0200
+Subject: [PATCH 9/9] fix(agent): restore authority after transient takeover
+
+Refs herdrdev/herdr#1033
+---
+ docs/next/CHANGELOG.md |  1 +
+ src/terminal/state.rs  | 71 ++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 70 insertions(+), 2 deletions(-)
+
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index a15a03c2da80222f9654e5d5864965a08ca69ea2..a8322335b03fd4753d64da571d546f4d4fcdcd02 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -10,6 +10,7 @@
+ 
+ ### Fixed
+ - Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
++- Full-lifecycle agent sessions now regain hook authority after a temporary foreground takeover ends instead of remaining permanently stale. (#1033)
+ - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
+ - Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ 
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f6b3772a3 100644
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -42,6 +42,7 @@ struct PendingFullLifecycleHookReport {
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ enum FullLifecycleHookSuppressionReason {
++    ForegroundTakeover,
+     HookClear,
+     ProcessExit,
+ }
+@@ -567,7 +568,7 @@ impl TerminalState {
+                 })
+             });
+             self.suppress_current_full_lifecycle_hook_authority(
+-                FullLifecycleHookSuppressionReason::HookClear,
++                FullLifecycleHookSuppressionReason::ForegroundTakeover,
+             );
+             self.hook_authority = None;
+             self.persisted_agent_session = durable_session;
+@@ -907,7 +908,11 @@ impl TerminalState {
+             if suppressed.agent_label != agent_label {
+                 return FullLifecycleHookReportRoute::Ignore;
+             }
+-            if suppressed.reason == FullLifecycleHookSuppressionReason::HookClear {
++            if matches!(
++                suppressed.reason,
++                FullLifecycleHookSuppressionReason::ForegroundTakeover
++                    | FullLifecycleHookSuppressionReason::HookClear
++            ) {
+                 let reanchor_sequence = matches!(
+                     (&suppressed.session_ref, session_ref),
+                     (Some(previous), Some(incoming)) if previous != incoming
+@@ -1095,6 +1100,9 @@ impl TerminalState {
+                 if !should_clear {
+                     return true;
+                 }
++                if suppressed.reason == FullLifecycleHookSuppressionReason::ForegroundTakeover {
++                    return false;
++                }
+                 if suppressed.reason == FullLifecycleHookSuppressionReason::ProcessExit {
+                     if let Some(session_ref) = suppressed.replacement_session_ref.take() {
+                         if let Some(exited_session_ref) = suppressed
+@@ -3144,6 +3152,65 @@ mod tests {
+         assert_eq!(terminal.state, AgentState::Idle);
+     }
+ 
++    #[test]
++    fn transient_foreground_takeover_allows_live_session_to_reacquire_authority() {
++        let now = Instant::now();
++        let mut terminal = test_terminal();
++        let session_ref =
++            crate::agent_resume::AgentSessionRef::id("kimi-session-a").expect("session ref");
++        anchor_full_lifecycle_session(
++            &mut terminal,
++            Agent::Kimi,
++            "herdr:kimi",
++            "kimi",
++            session_ref.clone(),
++        );
++        terminal
++            .set_hook_authority_at(
++                "herdr:kimi".into(),
++                "kimi".into(),
++                AgentState::Working,
++                None,
++                Some(session_ref.clone()),
++                Some(100),
++                now,
++            )
++            .expect("initial live session");
++
++        terminal.set_detected_state_with_screen_signals_at(
++            Some(Agent::Codex),
++            AgentState::Working,
++            false,
++            false,
++            false,
++            false,
++            now + Duration::from_millis(1),
++        );
++        terminal.set_detected_state_with_screen_signals_at(
++            Some(Agent::Kimi),
++            AgentState::Working,
++            false,
++            false,
++            false,
++            false,
++            now + Duration::from_millis(2),
++        );
++
++        let resumed = terminal.set_hook_authority_at(
++            "herdr:kimi".into(),
++            "kimi".into(),
++            AgentState::Working,
++            None,
++            Some(session_ref),
++            Some(101),
++            now + Duration::from_millis(3),
++        );
++
++        assert!(resumed.is_some());
++        assert!(terminal.full_lifecycle_hook_authority_active());
++        assert_eq!(terminal.state, AgentState::Working);
++    }
++
+     #[test]
+     fn queued_fresh_process_evidence_uses_process_exit_observation_time() {
+         let mut terminal = test_terminal();
+-- 
+2.55.0.windows.3
+

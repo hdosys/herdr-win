@@ -94,9 +94,13 @@ behavior; code and tests remain the detailed implementation truth.
   live handoff or OpenSSH control-socket reuse.
 - Mailbox 0004 owns deterministic ConPTY packaging, managed Windows distribution,
   fork update sources, and installer lifecycle.
-- Mailbox 0005 owns OpenCode retry/error lifecycle correlation. It must preserve
-  actionable terminal failures without surfacing transient errors during an active
-  retry.
+- Mailbox 0005 owns OpenCode retry/error lifecycle correlation and root-session
+  selection. It preserves actionable terminal failures without surfacing transient
+  errors during an active retry, keeps child prompt state scoped to the selected
+  root, and ignores server-global session creation as local ownership evidence.
+  Local chat selection binds the root while an initial update without a preceding
+  creation may recover startup selection; foreign, retired, and trailing child
+  events cannot replace it.
 - Mailbox 0006 owns the shared runtime `curl` transfer policy. Runtime fetches ignore
   user `curl` configuration, pass URLs as option values, require TLS 1.2 or newer
   HTTPS for initial requests and redirects, disable URL globbing, and allow at most
@@ -114,6 +118,11 @@ behavior; code and tests remain the detailed implementation truth.
   applications before `Start-Process`, while argument-free launches retain one
   concise native command line. The Windows-focused Rust tests and a real shell
   round trip own that boundary.
+- Mailbox 0010 owns full-lifecycle hook-authority recovery after a temporary
+  recognized foreground-Agent takeover. Suppression remains active during the
+  conflict, then the original still-running Agent may re-anchor the same session
+  with an advancing sequence when it returns. Process-exit and explicit hook-clear
+  suppression remain fail closed, so a stale or replaced session cannot resurrect.
 
 ## Managed Windows Distribution
 

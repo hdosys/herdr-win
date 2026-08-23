@@ -1,16 +1,16 @@
-From 4b8f538b14772a8a828ece9c10ebe94e114db8ba Mon Sep 17 00:00:00 2001
+From e1ede02a7f7f5a675324fa3a0718779136265dbb Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
 Subject: [PATCH 4/8] fix(opencode): preserve truthful lifecycle state
 
 Defer root-session errors until idle or a bounded fallback, cancel them when explicit continuing status follows, and prevent terminal blocked state from being overwritten by legacy idle events. Keep outstanding root and child prompts blocked until their exact replies arrive so unrelated busy or idle events cannot erase user-waiting state.
 ---
- .../assets/opencode/herdr-agent-state.js      | 520 ++++++++++++---
- .../assets/opencode/herdr-agent-state.test.ts | 594 +++++++++++++++++-
- 2 files changed, 1010 insertions(+), 104 deletions(-)
+ .../assets/opencode/herdr-agent-state.js      | 533 +++++++++++++---
+ .../assets/opencode/herdr-agent-state.test.ts | 584 +++++++++++++++++-
+ 2 files changed, 1007 insertions(+), 110 deletions(-)
 
 diff --git a/src/integration/assets/opencode/herdr-agent-state.js b/src/integration/assets/opencode/herdr-agent-state.js
-index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead14b3f307 100644
+index 2840c221ac252444bda54c36ba0370d51268726e..5fa5e776e0c63ae7ac9df6c576a6f805e415c204 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.js
 +++ b/src/integration/assets/opencode/herdr-agent-state.js
 @@ -9,12 +9,11 @@ import net from "node:net";
@@ -150,7 +150,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
  }
  
  export const HerdrAgentStatePlugin = async () => {
-@@ -127,45 +77,412 @@ export const HerdrAgentStatePlugin = async () => {
+@@ -127,45 +77,422 @@ export const HerdrAgentStatePlugin = async () => {
      return {};
    }
  
@@ -162,6 +162,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 +  const activePrompts = new Map();
 +  const childParents = new Map();
 +  const retiredChildren = new Set();
++  const serverCreatedSessions = new Set();
 +  const activeClients = new Map();
 +
 +  function requestOnce(method, params) {
@@ -347,6 +348,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 +    if (!sessionID) {
 +      return;
 +    }
++    serverCreatedSessions.delete(sessionID);
 +    if (currentRootSessionID && currentRootSessionID !== sessionID) {
 +      clearSessionLifecycle(currentRootSessionID);
 +      clearPromptsForSession(currentRootSessionID);
@@ -466,6 +468,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 +    activePrompts.clear();
 +    childParents.clear();
 +    retiredChildren.clear();
++    serverCreatedSessions.clear();
 +    currentRootSessionID = undefined;
 +    unscopedErrorBlocked = false;
 +    for (const finish of [...activeClients.values()]) {
@@ -525,29 +528,30 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 -      if (sessionID && childSessions.has(sessionID)) {
 -        const state = CHILD_EVENT_STATES.get(type);
 -        if (state) {
+-          await reportState(state);
 +
 +      if (sessionID && childParents.has(sessionID)) {
 +        if (type === "session.deleted") {
 +          retireChild(sessionID);
 +          return;
-+        }
+         }
 +        const state = updatePromptState(type, properties, sessionID)
 +          ?? CHILD_EVENT_STATES.get(type);
 +        if (state && !unscopedErrorBlocked) {
-           await reportState(state);
-         }
-         return;
-       }
- 
++          await reportState(state, currentRootSessionID);
++        }
++        return;
++      }
++
 +      if (
 +        type !== "session.created" &&
 +        type !== "session.updated" &&
 +        type !== "session.deleted" &&
 +        !acceptsRootEvent(sessionID)
 +      ) {
-+        return;
-+      }
-+
+         return;
+       }
+ 
 +      updatePromptState(type, properties, sessionID);
 +
        switch (type) {
@@ -557,10 +561,17 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 -          reportedRootSessionID = sessionID;
 +          // Creation is server-global, so another attached client may own it.
 +          // The TUI plugin reports the root selected in this pane.
++          if (sessionID) {
++            serverCreatedSessions.add(sessionID);
++          }
            break;
          case "session.updated":
 -          if (sessionID && sessionID !== reportedRootSessionID) {
-+          if (sessionID && !currentRootSessionID) {
++          if (
++            sessionID &&
++            !currentRootSessionID &&
++            !serverCreatedSessions.has(sessionID)
++          ) {
 +            establishRootSession(sessionID);
              await reportSession(sessionID);
            }
@@ -576,7 +587,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
            } else {
              await reportSession(sessionID);
            }
-@@ -177,21 +494,36 @@ export const HerdrAgentStatePlugin = async () => {
+@@ -177,21 +504,37 @@ export const HerdrAgentStatePlugin = async () => {
          case "question.replied":
          case "question.rejected":
          case "session.compacted":
@@ -602,6 +613,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
 +          await reportIdleOrConfirmError(sessionID);
            break;
          case "session.deleted":
++          serverCreatedSessions.delete(sessionID);
 +          clearSessionLifecycle(sessionID);
 +          clearPromptsForSession(sessionID);
 +          if (sessionID && sessionID === currentRootSessionID) {
@@ -617,7 +629,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5694c76ebec73f6dcd2e6f8890f54ead
    };
  };
 diff --git a/src/integration/assets/opencode/herdr-agent-state.test.ts b/src/integration/assets/opencode/herdr-agent-state.test.ts
-index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d731dfbb8 100644
+index 6f8ee59002d0205f6b28689c1497db787dd113a0..88da2feeed93613d349dfcbf417db0519b38dddd 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.test.ts
 +++ b/src/integration/assets/opencode/herdr-agent-state.test.ts
 @@ -1,4 +1,4 @@
@@ -727,7 +739,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
  });
  
  test("does not classify server activity in another root session as a selection", async () => {
-@@ -160,6 +193,471 @@ test("reports retry status as working", async () => {
+@@ -160,8 +193,452 @@ test("reports retry status as working", async () => {
    expect(requests.map(requestSessionID)).toEqual(["root-session"]);
  });
  
@@ -860,12 +872,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +  try {
 +    const plugin = await loadPlugin();
 +    await plugin.event(apiErrorEvent("old-session"));
-+    await plugin.event({
-+      event: {
-+        type: "session.created",
-+        properties: { sessionID: "new-session" },
-+      },
-+    });
++    await plugin["chat.message"]({ sessionID: "new-session" });
 +
 +    await plugin.event(sessionStatusEvent("old-session", { type: "idle" }));
 +    await plugin.event(apiErrorEvent("old-session"));
@@ -878,9 +885,9 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +    vi.runAllTimers();
 +    await Promise.resolve();
 +
-+    expect(requests.map(requestMethod)).toEqual(["pane.report_agent_session"]);
++    expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
 +    expect(requests.map(requestSessionID)).toEqual(["new-session"]);
-+    expect(requests.map(requestState)).toEqual([undefined]);
++    expect(requests.map(requestState)).toEqual(["working"]);
 +  } finally {
 +    vi.useRealTimers();
 +  }
@@ -972,11 +979,10 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +  await plugin.event(sessionStatusEvent("root-b", { type: "busy" }));
 +
 +  expect(requests.map(requestMethod)).toEqual([
-+    "pane.report_agent_session",
 +    "pane.report_agent",
 +    "pane.report_agent",
 +  ]);
-+  expect(requests.map(requestSessionID)).toEqual(["root-a", "root-b", "root-b"]);
++  expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
 +});
 +
 +test("same-root chat cannot clear an unscoped error block", async () => {
@@ -998,12 +1004,8 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +
 +test("old child reply is dropped after root replacement", async () => {
 +  const plugin = await loadPlugin();
-+  await plugin.event({
-+    event: {
-+      type: "session.created",
-+      properties: { sessionID: "old-root" },
-+    },
-+  });
++  await plugin["chat.message"]({ sessionID: "old-root" });
++  requests.length = 0;
 +  await plugin.event({
 +    event: {
 +      type: "session.created",
@@ -1013,12 +1015,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +      },
 +    },
 +  });
-+  await plugin.event({
-+    event: {
-+      type: "session.created",
-+      properties: { sessionID: "new-root" },
-+    },
-+  });
++  await plugin["chat.message"]({ sessionID: "new-root" });
 +  await plugin.event({
 +    event: {
 +      type: "permission.replied",
@@ -1026,21 +1023,14 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +    },
 +  });
 +
-+  expect(requests.map(requestMethod)).toEqual([
-+    "pane.report_agent_session",
-+    "pane.report_agent_session",
-+  ]);
-+  expect(requests.map(requestSessionID)).toEqual(["old-root", "new-root"]);
++  expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
++  expect(requests.map(requestSessionID)).toEqual(["new-root"]);
 +});
 +
 +test("canonical child deletion removes ownership before trailing reply", async () => {
 +  const plugin = await loadPlugin();
-+  await plugin.event({
-+    event: {
-+      type: "session.created",
-+      properties: { sessionID: "root-session" },
-+    },
-+  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
 +  await plugin.event({
 +    event: {
 +      type: "session.created",
@@ -1066,8 +1056,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +    },
 +  });
 +
-+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent_session"]);
-+  expect(requests.map(requestSessionID)).toEqual(["root-session"]);
++  expect(requests).toHaveLength(0);
 +});
 +
 +test("no-root deleted child stays retired through trailing activity", async () => {
@@ -1198,11 +1187,28 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +
  test("reports child prompts without replacing the root session", async () => {
    const plugin = await loadPlugin();
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
  
-@@ -196,6 +694,82 @@ test("reports child prompts without replacing the root session", async () => {
+   await plugin.event({
+     event: {
+@@ -188,14 +665,91 @@ test("reports child prompts without replacing the root session", async () => {
+     "working",
    ]);
- });
- 
+   expect(requests.map(requestSessionID)).toEqual([
+-    undefined,
+-    undefined,
+-    undefined,
+-    undefined,
+-    undefined,
++    "root-session",
++    "root-session",
++    "root-session",
++    "root-session",
++    "root-session",
++  ]);
++});
++
 +test("root prompts stay blocked until every request completes", async () => {
 +  const plugin = await loadPlugin();
 +
@@ -1238,9 +1244,9 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +    "root-session",
 +    "root-session",
 +    "root-session",
-+  ]);
-+});
-+
+   ]);
+ });
+ 
 +test("child prompt blocks survive root statuses until the child replies", async () => {
 +  const plugin = await loadPlugin();
 +  await plugin.event({
@@ -1249,6 +1255,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +      properties: { sessionID: "root-session" },
 +    },
 +  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
 +  requests.length = 0;
 +
 +  await plugin.event({
@@ -1276,7 +1283,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..c43514037a9c2be8cf5b1546c3608a7d
 +  });
 +
 +  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
-+  expect(requests.map(requestSessionID)).toEqual([undefined, undefined]);
++  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
 +});
 +
  function requestMethod(request: unknown): unknown {

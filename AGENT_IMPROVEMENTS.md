@@ -53,13 +53,17 @@ configuration repository.
   A later probe spent 93 seconds rebuilding a trace client, then initially targeted
   the independent debug state directory and incurred two 10-second rendered-text
   waits before an exact socket override and client/server logs isolated the input
-  path. Proposed change: add one bounded real-Windows-Terminal probe that derives
-  state ownership from the tested binary, accepts an exact socket/session target,
-  scopes tracing to one client role, waits on protocol state instead of rendered
-  text, verifies injected input through the shared path, and cleans its named
-  session. Expected benefit: faster local-versus-remote attribution and reliable
-  keyboard regression evidence. Owner: a focused script and tests under `scripts/`,
-  documented in `CONTRIBUTING.md`.
+  path. An auto-start probe isolated state but not config, restored the shared
+  session, then left its corrected task server alive through a 122-minute session
+  interruption and blocked installer preflight until bounded cleanup. Proposed
+  change: add one bounded real-Windows-Terminal probe that derives isolated config
+  and state ownership from the tested binary, accepts an exact socket/session
+  target, scopes tracing to one client role, waits on protocol state instead of
+  rendered text, verifies injected input through the shared path, and always
+  cleans its named process tree and session. Expected benefit: faster
+  local-versus-remote attribution, reliable terminal regression evidence, and no
+  leaked task server blocking packaging. Owner: a focused script and tests under
+  `scripts/`, documented in `CONTRIBUTING.md`.
 
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle

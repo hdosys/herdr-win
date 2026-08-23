@@ -32,6 +32,7 @@ DEFAULT_CARGO_TARGET = (
 )
 BUILD_ID_RE = re.compile(r"^[0-9a-f]{12}\.[0-9a-f]{12}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+COMBINED_ACCEPTANCE_BRANCH_PREFIX = "agent/delta-combined-acceptance-"
 DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
     r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
 )
@@ -78,6 +79,17 @@ def _isolated_candidate_paths(build_id: str) -> InstallerPaths:
         output_path=target_root / "release" / OUTPUT_PATH.name,
         nsis_cache=target_root / "tools" / "nsis-3.12",
     )
+
+
+def _candidate_paths(
+    branch: str, build_id: str, *, isolated: bool
+) -> InstallerPaths:
+    combined_acceptance = branch.startswith(COMBINED_ACCEPTANCE_BRANCH_PREFIX) and (
+        branch != COMBINED_ACCEPTANCE_BRANCH_PREFIX
+    )
+    if isolated or not combined_acceptance:
+        return _isolated_candidate_paths(build_id)
+    return DEFAULT_PATHS
 
 
 def _run(
@@ -176,9 +188,7 @@ def _source_root(path: Path) -> Path:
     ).resolve()
     if os.path.normcase(control_common) != os.path.normcase(source_common):
         raise LocalInstallerError("source worktree belongs to another Git repository")
-    branch = _git(source, ["symbolic-ref", "--short", "HEAD"])
-    if not branch.startswith("agent/delta-"):
-        raise LocalInstallerError(f"source worktree uses unsupported branch {branch!r}")
+    branch = _source_branch(source)
     for relative in (
         "scripts/package_windows_conpty.py",
         "scripts/package_windows_installer.ps1",
@@ -186,6 +196,13 @@ def _source_root(path: Path) -> Path:
     ):
         _safe_path(source / relative, f"source {relative}", directory=False)
     return source
+
+
+def _source_branch(source: Path) -> str:
+    branch = _git(source, ["symbolic-ref", "--short", "HEAD"])
+    if not branch.startswith("agent/delta-"):
+        raise LocalInstallerError(f"source worktree uses unsupported branch {branch!r}")
+    return branch
 
 
 def parse_identity(version: str, launcher_build_id: str) -> InstallerIdentity:
@@ -453,7 +470,7 @@ def validate_bundle(
 
 
 def prepare(
-    options: argparse.Namespace, *, paths: InstallerPaths = DEFAULT_PATHS
+    options: argparse.Namespace, *, paths: InstallerPaths | None = None
 ) -> None:
     source = _source_root(options.source_worktree)
     stage = _safe_path(options.stage_dir, "--stage-dir", directory=True)
@@ -468,6 +485,10 @@ def prepare(
     )
     _validate_stage(source, stage)
     identity = _identity(stage, launcher)
+    if paths is None:
+        paths = _candidate_paths(
+            _source_branch(source), identity.build_id, isolated=options.isolated
+        )
     paths.input_root.mkdir(parents=True, exist_ok=True)
     destination = paths.input_root / identity.build_id
     if destination.exists():
@@ -511,10 +532,17 @@ def prepare(
 
 
 def build(
-    options: argparse.Namespace, *, paths: InstallerPaths = DEFAULT_PATHS
+    options: argparse.Namespace, *, paths: InstallerPaths | None = None
 ) -> None:
     source = _source_root(options.source_worktree)
     bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
+    if paths is None:
+        recorded_identity, _ = _bundle_manifest(bundle)
+        paths = _candidate_paths(
+            _source_branch(source),
+            recorded_identity.build_id,
+            isolated=options.isolated,
+        )
     identity = validate_bundle(source, bundle, input_root=paths.input_root)
     paths.output_path.parent.mkdir(parents=True, exist_ok=True)
     powershell = _windows_powershell()
@@ -605,17 +633,20 @@ def release_precheck(options: argparse.Namespace) -> None:
 def candidate(options: argparse.Namespace) -> None:
     total_started = time.monotonic()
     source = _source_root(options.source_worktree)
+    source_branch = _source_branch(source)
     cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
     build_id, base_commit = _source_build_identity(source)
-    paths = (
-        _isolated_candidate_paths(build_id) if options.isolated else DEFAULT_PATHS
-    )
+    paths = _candidate_paths(source_branch, build_id, isolated=options.isolated)
+    isolated = paths != DEFAULT_PATHS
     jobs = _available_cpu_count()
     print(f"build_id={build_id}")
+    print(f"source_branch={source_branch}")
     print(f"cargo_jobs={jobs}")
     print(f"cargo_target={cargo_target}")
-    if options.isolated:
+    if isolated:
         print(f"isolation_root={paths.target_root}")
+    else:
+        print("acceptance_output=canonical")
 
     cargo_started = time.monotonic()
     cargo_result = _run(
@@ -699,9 +730,11 @@ def _parser() -> argparse.ArgumentParser:
     prepare_command.add_argument("--stage-dir", required=True, type=Path)
     prepare_command.add_argument("--launcher-exe", required=True, type=Path)
     prepare_command.add_argument("--installer-helper-exe", required=True, type=Path)
+    prepare_command.add_argument("--isolated", action="store_true")
     build_command = commands.add_parser("build")
     build_command.add_argument("--source-worktree", required=True, type=Path)
     build_command.add_argument("--input-bundle", required=True, type=Path)
+    build_command.add_argument("--isolated", action="store_true")
     precheck_command = commands.add_parser("release-precheck")
     precheck_command.add_argument("--source-worktree", required=True, type=Path)
     precheck_command.add_argument("--input-bundle", required=True, type=Path)
@@ -713,7 +746,7 @@ def _parser() -> argparse.ArgumentParser:
     candidate_command.add_argument(
         "--isolated",
         action="store_true",
-        help="place non-deliverable candidate outputs in a build-scoped namespace",
+        help="force build-scoped outputs even for a combined acceptance branch",
     )
     return parser
 

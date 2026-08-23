@@ -84,6 +84,11 @@ active memory owner.
   ignored `target/<target-triple>/release/` directory. Temporary directories are
   intermediates only; never report an external temporary path as the primary
   user-testable artifact.
+- The fixed local setup path is owned only by an
+  `agent/delta-combined-acceptance-*` source stack containing the current replay
+  plus every completed candidate selected for that acceptance batch. Individual
+  candidate worktrees use build-ID-isolated outputs and never produce or replace
+  the user-testable installer.
 
 ## Product and implementation constraints
 

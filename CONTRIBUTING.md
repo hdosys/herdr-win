@@ -162,25 +162,42 @@ mailbox churn are not substitutes for source review plus exact tree identity.
 ### Fast local Windows installer candidates
 
 The control checkout owns one thin local entrypoint that reuses the materialized
-source packager. It adds no installer implementation. For every source change, use
-one command that derives local identity before compilation, gives Cargo every
-logical processor available to the current process, builds only the runtime,
-launcher, and installer helper, and finishes at the real installer:
+source packager. It adds no installer implementation. The fixed user-testable setup
+is owned only by one rolling `agent/delta-combined-acceptance-*` worktree containing
+the current replay plus every completed candidate selected for that acceptance
+batch. Individual source candidates never replace that setup.
+
+For an individual candidate, run its smallest focused check, push its immutable
+candidate ref, and hand it to the combined acceptance owner. Do not build another
+installer by default. When the exact candidate needs internal packaging evidence,
+the installer command on that ordinary `agent/delta-*` branch automatically uses
+build-ID-isolated stage, bundle, NSIS, and setup paths. That real setup is not the
+artifact reported for user testing:
 
 ```powershell
 python scripts/local_windows_installer.py candidate `
   --source-worktree <materialized-source-worktree>
 ```
 
-Its intermediates use one Sandbox-local Cargo target by default. An exact existing
-cache may be selected with `--cargo-target-dir <absolute-path>`. The command passes
-the detected logical processor count through Cargo `--jobs`, so an inherited
-single-job setting cannot serialize the build. Success always reports the replaced
-installer at
-`target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`.
+The combined acceptance owner appends completed candidate commits in handoff order,
+pushes one immutable `origin/candidate/combined/acceptance-*` recovery ref, and runs
+the same command from the combined worktree. Only that branch class writes
+`target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`, which
+is the one artifact reported for user testing. Its acceptance handoff always reports
+the replay tree, included candidate commits, combined source tree, build ID, setup
+size, and SHA-256.
 
-Use one task-owned release-profile Cargo target for the focused native check and
-the candidate build so dependencies compile once:
+The command uses one Sandbox-local Cargo target by default. An exact existing cache
+may be selected with `--cargo-target-dir <absolute-path>`. It passes the detected
+logical processor count through Cargo `--jobs`, so an inherited single-job setting
+cannot serialize the build.
+
+Keep one task-owned release-profile Cargo target for the complete rolling acceptance
+batch. Use it for each focused native check and every combined installer update so
+dependencies compile once. When several independent candidates finish together,
+append all completed handoffs before one installer build. Recreate the combined
+worktree only when the master replay changes or a real integration conflict requires
+it:
 
 ```powershell
 $cargoTarget = Join-Path $env:TEMP `
@@ -189,19 +206,14 @@ $testFilter = "<one exact test filter>"
 cargo test --locked --release --target-dir $cargoTarget `
   --bin herdr $testFilter -- --nocapture
 python scripts/local_windows_installer.py candidate `
-  --source-worktree <materialized-source-worktree> `
+  --source-worktree <combined-acceptance-worktree> `
   --cargo-target-dir $cargoTarget
 ```
 
-When another same-repository session temporarily owns the fixed setup path, add
-`--isolated` to that candidate command. The candidate build ID then owns one
-namespace below
-`target/x86_64-pc-windows-msvc/isolated/<build-id>/` containing its temporary
-stage, validated input bundle, pinned NSIS tool, and setup. It does not write the
-fixed setup path. This isolated setup is coordination evidence, not the user
-deliverable. After the fixed path is released, rerun the command without
-`--isolated` and with the same Cargo target, then report the canonical setup path
-above.
+`--isolated` may force an additional internal namespace for a combined worktree,
+but it never creates the user deliverable. Never rerun an individual candidate
+against the fixed path after a resource handoff. Add it to the rolling combined
+stack and replace the canonical setup once with that complete state instead.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
@@ -220,8 +232,8 @@ SHA-256, and binds the bundle to the runtime and launcher identities. It never
 extracts a prior setup with 7-Zip. The source ConPTY validator remains the stage
 owner.
 
-For installer, artwork, copy, validator, or packaging-only iterations, reuse that
-bundle without rebuilding Rust payloads:
+For combined installer, artwork, copy, validator, or packaging-only iterations,
+reuse that bundle without rebuilding Rust payloads:
 
 ```powershell
 python scripts/local_windows_installer.py build `
@@ -231,9 +243,12 @@ python scripts/local_windows_installer.py build `
 
 Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtime
 and launcher identity, then delegates to the materialized source's existing NSIS
-packager. The setup is written to the one short replaceable path
+packager. A combined acceptance branch writes the setup to the one short
+replaceable path
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
-reports its new hash. A tiny, clearly bounded daytime packaging-only request uses
+reports its new hash. An individual branch selects its isolated bundle and setup;
+pass `--isolated` explicitly when forcing that behavior on a combined branch. A
+tiny, clearly bounded daytime packaging-only request uses
 a soft goal of roughly two minutes from the user request to that installable
 artifact. Request-to-artifact is the primary user-wait metric; build time,
 candidate completion, remote backup, and promotion are separate timings. The goal

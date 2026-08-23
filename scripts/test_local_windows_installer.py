@@ -14,6 +14,7 @@ from scripts.local_windows_installer import (
     TARGET_ROOT,
     _bundle_manifest,
     _candidate_build_id,
+    _candidate_paths,
     _cargo_build_arguments,
     _dynamic_msvc_runtime_imports,
     _git_arguments,
@@ -92,6 +93,42 @@ class LocalWindowsInstallerTests(unittest.TestCase):
     def test_isolated_candidate_paths_reject_unbounded_names(self) -> None:
         with self.assertRaisesRegex(LocalInstallerError, "invalid candidate build ID"):
             _isolated_candidate_paths("../other-session")
+
+    def test_individual_candidate_defaults_to_isolated_outputs(self) -> None:
+        self.assertEqual(
+            _candidate_paths(
+                "agent/delta-one-fix", BUILD_ID, isolated=False
+            ),
+            _isolated_candidate_paths(BUILD_ID),
+        )
+
+    def test_combined_acceptance_defaults_to_canonical_output(self) -> None:
+        self.assertEqual(
+            _candidate_paths(
+                "agent/delta-combined-acceptance-20260823",
+                BUILD_ID,
+                isolated=False,
+            ),
+            DEFAULT_PATHS,
+        )
+
+    def test_combined_acceptance_can_force_isolated_outputs(self) -> None:
+        self.assertEqual(
+            _candidate_paths(
+                "agent/delta-combined-acceptance-20260823",
+                BUILD_ID,
+                isolated=True,
+            ),
+            _isolated_candidate_paths(BUILD_ID),
+        )
+
+    def test_empty_combined_acceptance_suffix_is_not_canonical(self) -> None:
+        self.assertEqual(
+            _candidate_paths(
+                "agent/delta-combined-acceptance-", BUILD_ID, isolated=False
+            ),
+            _isolated_candidate_paths(BUILD_ID),
+        )
 
     def test_candidate_identity_tracks_the_exact_source_snapshot(self) -> None:
         base = "a" * 40

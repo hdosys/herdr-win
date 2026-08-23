@@ -78,14 +78,17 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: done. Give concurrent local installer candidates one supported
-  isolated namespace.** `candidate --isolated` now derives one namespace from the
-  validated build ID and places its temporary stage, bundle, pinned NSIS tool, and
-  setup below that ignored root. The default fixed setup remains the only user
-  deliverable. Evidence: a complete isolated candidate finished in 148.276 seconds
-  while the canonical setup SHA-256 remained exactly unchanged before and after.
-  Owner: `scripts/local_windows_installer.py`, its focused tests, and the Candidate
-  procedure in `CONTRIBUTING.md`.
+- **Status: done. Make the rolling combined acceptance stack the only local user
+  installer owner.** Ordinary candidate branches now default to a build-ID-isolated
+  stage, bundle, pinned NSIS tool, and setup. Only an
+  `agent/delta-combined-acceptance-*` branch writes the fixed setup, and one warm
+  release Cargo target is retained across the complete acceptance batch. This keeps
+  every reported installer cumulative without rebuilding dependencies or broad
+  gates for each fix. Evidence: 13 focused path-selection tests completed in 0.033
+  seconds, then the unchanged combined validated bundle replaced the canonical
+  setup in 27.281 seconds without a Cargo build. Owner:
+  `scripts/local_windows_installer.py`, its focused tests, `AGENTS.md`, and the
+  Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Share the release-profile Cargo cache between focused native
   checks and candidate installer builds.** The Candidate procedure now gives the

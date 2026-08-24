@@ -1124,11 +1124,8 @@ impl GhosttyPaneTerminal {
         });
         let previous = core.terminal.set_color_scheme(color_scheme);
 
-        let transitioned = matches!(
-            (previous, color_scheme),
-            (Some(previous), Some(current)) if previous != current
-        );
-        if !transitioned
+        let changed = previous != color_scheme;
+        if !changed
             || !core
                 .terminal
                 .mode_get(crate::ghostty::MODE_COLOR_SCHEME_REPORT)

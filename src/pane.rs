@@ -3690,14 +3690,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscribed_idle_child_receives_color_scheme_transition() {
+    async fn subscribed_idle_child_receives_first_known_and_changed_color_scheme() {
         let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
-        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark));
         runtime.test_process_pty_bytes(b"\x1b[?2031h");
 
         runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light));
-
         assert_eq!(rx.recv().await, Some(Bytes::from_static(b"\x1b[?997;2n")));
+
+        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark));
+        assert_eq!(rx.recv().await, Some(Bytes::from_static(b"\x1b[?997;1n")));
     }
 
     #[test]

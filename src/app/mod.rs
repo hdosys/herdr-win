@@ -97,6 +97,11 @@ impl PaneClickState {
     }
 }
 
+pub(crate) struct DeferredWorkspaceShell {
+    pub(crate) terminal_id: crate::terminal::TerminalId,
+    pub(crate) extra_env: Vec<(String, String)>,
+}
+
 pub struct App {
     pub state: AppState,
     pub(crate) pane_graphics: pane_graphics::Runtime,
@@ -143,6 +148,7 @@ pub struct App {
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
+    pub(crate) startup_session_save_blocked: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     tab_bar_status_generation: u64,
     tab_bar_datetimes: Vec<tab_bar_status::TabBarDatetimeRuntime>,
@@ -811,6 +817,7 @@ impl App {
             pending_tab_auto_start_agents: Vec::new(),
             session_save_deadline: None,
             session_save_thread: None,
+            startup_session_save_blocked: false,
             detached_process_children: Vec::new(),
             tab_bar_status_generation: 0,
             tab_bar_datetimes: Vec::new(),

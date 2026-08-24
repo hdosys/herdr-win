@@ -1660,7 +1660,14 @@ impl AppState {
 
     pub fn estimate_pane_size(&self) -> (u16, u16) {
         if let Some(info) = self.view.pane_infos.first() {
-            (info.rect.height, info.rect.width)
+            (info.inner_rect.height, info.inner_rect.width)
+        } else if self.view.terminal_area.width > 0 && self.view.terminal_area.height > 0 {
+            let cols = if self.view.terminal_area.width > 4 {
+                self.view.terminal_area.width - 1
+            } else {
+                self.view.terminal_area.width
+            };
+            (self.view.terminal_area.height, cols)
         } else {
             (self.headless_size.1, self.headless_size.0)
         }

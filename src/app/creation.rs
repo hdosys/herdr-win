@@ -275,6 +275,100 @@ impl App {
         Ok(idx)
     }
 
+    pub(crate) fn create_workspace_with_deferred_shell(
+        &mut self,
+        initial_cwd: PathBuf,
+        focus: bool,
+    ) -> (usize, crate::terminal::TerminalId) {
+        let pane_id = crate::layout::PaneId::alloc();
+        let terminal_id = crate::terminal::TerminalId::alloc();
+        let workspace = Workspace::from_existing_pane(
+            None,
+            None,
+            initial_cwd.clone(),
+            crate::workspace::MovedPane {
+                pane_id,
+                pane_state: crate::pane::PaneState::new(terminal_id.clone()),
+            },
+            self.event_tx.clone(),
+            self.render_notify.clone(),
+            self.render_dirty.clone(),
+        );
+        self.state.terminals.insert(
+            terminal_id.clone(),
+            crate::terminal::TerminalState::new(terminal_id.clone(), initial_cwd),
+        );
+        self.state.workspaces.push(workspace);
+        let idx = self.state.workspaces.len() - 1;
+        self.state.remove_alias_shadowed_by_new_pane(pane_id);
+        let workspace_id = self.state.workspaces[idx].id.clone();
+        crate::logging::workspace_created(&workspace_id, pane_id.raw());
+        if focus || self.state.active.is_none() {
+            self.state.switch_workspace(idx);
+            self.state.mode = Mode::Terminal;
+        }
+        (idx, terminal_id)
+    }
+
+    pub(crate) fn launch_deferred_workspace_shell(
+        &mut self,
+        terminal_id: &crate::terminal::TerminalId,
+        extra_env: Vec<(String, String)>,
+        rows: u16,
+        cols: u16,
+    ) -> std::io::Result<()> {
+        if self.terminal_runtimes.get(terminal_id).is_some() {
+            return Ok(());
+        }
+        let Some((ws_idx, tab_idx, pane_id)) =
+            self.state
+                .workspaces
+                .iter()
+                .enumerate()
+                .find_map(|(ws_idx, workspace)| {
+                    workspace
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .find_map(|(tab_idx, tab)| {
+                            tab.panes.iter().find_map(|(pane_id, pane)| {
+                                (&pane.attached_terminal_id == terminal_id)
+                                    .then_some((ws_idx, tab_idx, *pane_id))
+                            })
+                        })
+                })
+        else {
+            return Ok(());
+        };
+        let cwd = self
+            .state
+            .terminals
+            .get(terminal_id)
+            .map(|terminal| terminal.cwd.clone())
+            .ok_or_else(|| std::io::Error::other("deferred terminal state is missing"))?;
+        let launch_env = self
+            .pane_launch_env(ws_idx, pane_id, extra_env)
+            .ok_or_else(|| std::io::Error::other("deferred pane launch identity is missing"))?;
+        let runtime = crate::terminal::TerminalRuntime::spawn(
+            pane_id,
+            rows,
+            cols,
+            cwd,
+            self.state.pane_scrollback_limit_bytes,
+            self.state.host_terminal_theme,
+            self.state.host_terminal_appearance,
+            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+            &launch_env,
+            self.event_tx.clone(),
+            self.render_notify.clone(),
+            self.render_dirty.clone(),
+        )?;
+        self.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        self.queue_tab_auto_start_agent(ws_idx, tab_idx);
+        self.schedule_session_save();
+        Ok(())
+    }
+
     pub(super) fn collect_panes_for_workspace(
         &self,
         workspace_id: Option<&str>,

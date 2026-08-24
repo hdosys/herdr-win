@@ -327,6 +327,12 @@ pub struct HeadlessServer {
     /// Shared pane runtime size derived from the foreground client, or the
     /// configured headless size when no clients are connected.
     effective_size: (u16, u16),
+    /// Startup cwd consumed when the first real app client supplies its geometry.
+    startup_cwd: Option<PathBuf>,
+    /// Whether API-created shells still need the first real app client geometry.
+    awaiting_first_app_client_geometry: bool,
+    /// Startup API workspaces whose shells wait for the first real app client geometry.
+    pending_startup_workspace_launches: Vec<app::DeferredWorkspaceShell>,
     /// Flag set when shutdown is initiated.
     shutting_down: bool,
     /// Flag set while exporting live PTYs to a replacement server.
@@ -522,6 +528,9 @@ impl HeadlessServer {
             next_activity_stamp: 1,
             headless_size,
             effective_size: headless_size,
+            startup_cwd: None,
+            awaiting_first_app_client_geometry: true,
+            pending_startup_workspace_launches: Vec::new(),
             shutting_down: false,
             handoff_in_progress: false,
             #[cfg(unix)]
@@ -3053,8 +3062,23 @@ impl HeadlessServer {
                 if first_app_client {
                     self.app.mark_git_status_refresh_due(Instant::now());
                 }
-                self.sync_foreground_client_state();
-                self.resize_shared_runtime_to_effective_size();
+                if !direct_attach_requested {
+                    self.sync_foreground_client_state();
+                    if self.awaiting_first_app_client_geometry {
+                        self.awaiting_first_app_client_geometry = false;
+                        self.launch_pending_startup_workspace_shells();
+                    } else if !self.pending_startup_workspace_launches.is_empty() {
+                        self.launch_pending_startup_workspace_shells();
+                    }
+                    if first_app_client {
+                        seed_startup_workspace_if_empty(
+                            &mut self.app,
+                            self.startup_cwd.take(),
+                            self.effective_size,
+                        );
+                    }
+                    self.resize_shared_runtime_to_effective_size();
+                }
                 self.nudge_handoff_panes_on_first_client_attach();
                 true
             }
@@ -3748,6 +3772,8 @@ impl HeadlessServer {
                 .handle_deferred_worktree_api_request(msg.request, msg.respond_to);
             return changed | deferred_changed;
         }
+        let defer_startup_workspace_shell = self.awaiting_first_app_client_geometry
+            && matches!(&msg.request.method, api::schema::Method::WorkspaceCreate(_));
         let mut response = if matches!(
             &msg.request.method,
             api::schema::Method::ServerReloadConfig(_)
@@ -3770,6 +3796,27 @@ impl HeadlessServer {
                 })
                 .unwrap_or_else(|_| "{}".to_string())
             })
+        } else if defer_startup_workspace_shell {
+            let request = msg.request;
+            let (response, pending) = match request.method {
+                api::schema::Method::WorkspaceCreate(params) => self
+                    .app
+                    .handle_workspace_create_with_deferred_shell(request.id, params),
+                method => (
+                    self.app.handle_api_request_after_internal_events_drained(
+                        api::schema::Request {
+                            id: request.id,
+                            method,
+                        },
+                    ),
+                    None,
+                ),
+            };
+            if let Some(pending) = pending {
+                self.pending_startup_workspace_launches.push(pending);
+                self.app.block_startup_session_save();
+            }
+            response
         } else {
             self.app
                 .handle_api_request_after_internal_events_drained(msg.request)
@@ -3959,6 +4006,38 @@ impl HeadlessServer {
         }
 
         changed
+    }
+
+    fn launch_pending_startup_workspace_shells(&mut self) {
+        if self.pending_startup_workspace_launches.is_empty() {
+            return;
+        }
+        self.resize_shared_runtime_to_effective_size_before_input();
+        let (rows, cols) = self.app.state.estimate_pane_size();
+        let mut failed = Vec::new();
+        for pending in std::mem::take(&mut self.pending_startup_workspace_launches) {
+            if let Err(err) = self.app.launch_deferred_workspace_shell(
+                &pending.terminal_id,
+                pending.extra_env.clone(),
+                rows,
+                cols,
+            ) {
+                warn!(
+                    terminal = %pending.terminal_id,
+                    rows,
+                    cols,
+                    err = %err,
+                    "failed to launch startup workspace shell at client geometry"
+                );
+                failed.push(pending);
+            }
+        }
+        self.pending_startup_workspace_launches = failed;
+        if self.pending_startup_workspace_launches.is_empty() {
+            self.app.unblock_startup_session_save();
+        } else {
+            self.app.block_startup_session_save();
+        }
     }
 
     fn focused_pane_graphics_demand(&self) -> bool {
@@ -5061,6 +5140,7 @@ pub fn run_server() -> io::Result<()> {
     }
 
     let loaded_config = config::Config::load();
+    let startup_cwd = take_startup_cwd();
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));
@@ -5096,8 +5176,6 @@ pub fn run_server() -> io::Result<()> {
             api_rx,
             event_hub,
         );
-        seed_startup_workspace_if_empty(&mut app);
-
         // The server runs headless — disable local notification side effects.
         // Sound and terminal notifications are forwarded to connected clients
         // as ServerMessage::Notify instead of emitted by the server process.
@@ -5123,6 +5201,7 @@ pub fn run_server() -> io::Result<()> {
             }
             Err(err) => return Err(err),
         };
+        server.startup_cwd = startup_cwd;
 
         info!(
             api_socket = %api::socket_path().display(),
@@ -5140,8 +5219,12 @@ pub fn run_server() -> io::Result<()> {
     result
 }
 
-fn seed_startup_workspace_if_empty(app: &mut app::App) {
-    let Some(cwd) = take_startup_cwd() else {
+fn seed_startup_workspace_if_empty(
+    app: &mut app::App,
+    startup_cwd: Option<PathBuf>,
+    (cols, rows): (u16, u16),
+) {
+    let Some(cwd) = startup_cwd else {
         return;
     };
 
@@ -5152,6 +5235,9 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
         );
         return;
     }
+
+    app.state.view.terminal_area =
+        crate::ui::initial_workspace_terminal_area(&app.state, Rect::new(0, 0, cols, rows));
 
     match app.create_workspace_with_options(cwd.clone(), true) {
         Ok(_) => {
@@ -5349,6 +5435,43 @@ mod tests {
         test_headless_server_with_event_hub(api::EventHub::default())
     }
 
+    fn exiting_test_command() -> &'static str {
+        #[cfg(windows)]
+        {
+            "C:\\Windows\\System32\\whoami.exe"
+        }
+        #[cfg(not(windows))]
+        {
+            "/usr/bin/true"
+        }
+    }
+
+    fn connect_test_client(
+        server: &mut HeadlessServer,
+        client_id: u64,
+        cols: u16,
+        rows: u16,
+        direct_attach_requested: bool,
+    ) -> (
+        std::sync::mpsc::Receiver<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (writer, control, render) = test_client_writer();
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id,
+            cols,
+            rows,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested,
+            direct_graphics: false,
+            writer,
+        }));
+        (control, render)
+    }
+
     fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
         let config = crate::config::Config::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -5406,6 +5529,9 @@ mod tests {
             next_activity_stamp: 1,
             headless_size,
             effective_size: headless_size,
+            startup_cwd: None,
+            awaiting_first_app_client_geometry: true,
+            pending_startup_workspace_launches: Vec::new(),
             shutting_down: false,
             handoff_in_progress: false,
             #[cfg(unix)]
@@ -5677,6 +5803,136 @@ mod tests {
             })
             .expect("tab created event");
         assert_eq!(tab_created.label, "ops");
+        shutdown_test_runtimes(&mut server);
+    }
+
+    #[tokio::test]
+    async fn startup_bootstrap_shells_wait_for_real_client_geometry() {
+        let startup_size = (120, 40);
+        let expected_terminal_area = Rect::new(26, 1, 94, 39);
+        let expected_pane_size = (39, 93);
+
+        let mut startup_server = test_headless_server();
+        startup_server.startup_cwd = Some(std::env::temp_dir());
+        startup_server.app.state.default_shell = exiting_test_command().into();
+        let (_readiness_control, _readiness_render) =
+            connect_test_client(&mut startup_server, 1, 80, 24, true);
+        assert!(startup_server.app.state.workspaces.is_empty());
+        assert!(startup_server.startup_cwd.is_some());
+        let (_app_control, _app_render) = connect_test_client(
+            &mut startup_server,
+            2,
+            startup_size.0,
+            startup_size.1,
+            false,
+        );
+        assert!(startup_server.startup_cwd.is_none());
+        assert_eq!(startup_server.app.state.workspaces.len(), 1);
+        let startup_pane_id = startup_server.app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            startup_server
+                .app
+                .state
+                .runtime_for_pane(&startup_server.app.terminal_runtimes, startup_pane_id)
+                .expect("startup runtime after real app attach")
+                .current_size(),
+            expected_pane_size
+        );
+        shutdown_test_runtimes(&mut startup_server);
+
+        let mut server = test_headless_server();
+        server.startup_cwd = Some(std::env::temp_dir().join("guest-home-must-not-open"));
+        server.app.state.default_shell = exiting_test_command().into();
+
+        let (status_respond_to, status_response_rx) = std::sync::mpsc::channel();
+        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "startup-status-probe".into(),
+                method: api::schema::Method::SessionSnapshot(api::schema::EmptyParams::default()),
+            },
+            respond_to: status_respond_to,
+            response_write_complete: None,
+            stream_active: None,
+        });
+        let _: api::schema::SuccessResponse = serde_json::from_str(
+            &status_response_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("status response before app attach"),
+        )
+        .expect("successful status response");
+        assert!(server.awaiting_first_app_client_geometry);
+        assert!(server.startup_cwd.is_some());
+        assert!(server.app.state.workspaces.is_empty());
+
+        let (_readiness_control, _readiness_render) =
+            connect_test_client(&mut server, 1, 80, 24, true);
+        assert!(server.awaiting_first_app_client_geometry);
+        assert!(server.startup_cwd.is_some());
+        assert_eq!(server.foreground_client_id, None);
+        assert!(server.app.state.workspaces.is_empty());
+
+        let (workspace_respond_to, workspace_response_rx) = std::sync::mpsc::channel();
+        assert!(
+            server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+                request: api::schema::Request {
+                    id: "startup-mapped-workspace".into(),
+                    method: api::schema::Method::WorkspaceCreate(
+                        api::schema::WorkspaceCreateParams {
+                            cwd: Some(std::env::temp_dir().display().to_string()),
+                            focus: true,
+                            label: Some("mapped-project".into()),
+                            env: Default::default(),
+                        },
+                    ),
+                },
+                respond_to: workspace_respond_to,
+                response_write_complete: None,
+                stream_active: None,
+            })
+        );
+        let response: api::schema::SuccessResponse = serde_json::from_str(
+            &workspace_response_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("workspace response before app attach"),
+        )
+        .expect("successful workspace response");
+        assert!(matches!(
+            response.result,
+            api::schema::ResponseResult::WorkspaceCreated { .. }
+        ));
+        assert!(server.awaiting_first_app_client_geometry);
+        assert!(server.startup_cwd.is_some());
+        assert_eq!(server.app.state.workspaces.len(), 1);
+        assert_eq!(server.pending_startup_workspace_launches.len(), 1);
+        assert!(server.app.startup_session_save_blocked);
+        assert!(server.app.session_save_deadline.is_none());
+        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
+        assert!(server
+            .app
+            .state
+            .runtime_for_pane(&server.app.terminal_runtimes, pane_id)
+            .is_none());
+
+        let (_app_control, _app_render) =
+            connect_test_client(&mut server, 2, startup_size.0, startup_size.1, false);
+
+        assert!(!server.awaiting_first_app_client_geometry);
+        assert!(server.startup_cwd.is_none());
+        assert_eq!(server.app.state.workspaces.len(), 1);
+        assert!(server.pending_startup_workspace_launches.is_empty());
+        assert!(!server.app.startup_session_save_blocked);
+        assert_eq!(server.effective_size, startup_size);
+        assert_eq!(server.app.state.view.terminal_area, expected_terminal_area);
+        assert_eq!(server.app.state.estimate_pane_size(), expected_pane_size);
+        assert_eq!(
+            server
+                .app
+                .state
+                .runtime_for_pane(&server.app.terminal_runtimes, pane_id)
+                .expect("mapped startup runtime after real app attach")
+                .current_size(),
+            expected_pane_size
+        );
         shutdown_test_runtimes(&mut server);
     }
 

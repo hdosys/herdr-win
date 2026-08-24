@@ -95,13 +95,16 @@ configuration repository.
   Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Share the release-profile Cargo cache between focused native
-  checks and candidate installer builds.** The Candidate procedure now gives the
-  focused test and installer the same release profile, explicit Windows target,
-  task-owned target directory, and detected logical-processor job count. Evidence:
-  an ad hoc debug check spent 220.885 seconds compiling, then the all-core installer
-  spent another 210.409 seconds compiling the separate release target. The exact
-  shared command removes one cold target graph and prevents inherited single-job
-  settings. Owner: the Candidate procedure in `CONTRIBUTING.md`.
+  checks and candidate installer builds.** `local_windows_installer.py candidate
+  --test-filter` now runs one focused test before packaging with the same release
+  profile, explicit Windows target, target directory, build identity, and detected
+  logical-processor job count as the packaged binaries, and requires exactly one
+  passing test before packaging. Evidence: the implemented path compiled and passed
+  the focused release test in 186.361 seconds, then reused that target for the
+  packaged-binary build in 0.826 seconds. The executable path removes one cold target
+  graph and rejects failing or unmatched filters before packaging. Owner:
+  `scripts/local_windows_installer.py`, its focused tests, and the Candidate
+  procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Make `just test-one` select Windows-valid Rust targets.**
   The Windows recipe now runs through native PowerShell and constrains nextest to

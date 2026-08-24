@@ -36,6 +36,7 @@ COMBINED_ACCEPTANCE_BRANCH_PREFIX = "agent/delta-combined-acceptance-"
 DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
     r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
 )
+FOCUSED_TEST_RESULT_RE = re.compile(r"(?m)^test result: ok\. (?P<passed>[0-9]+) passed;")
 LOCAL_VERSION_RE = re.compile(
     r"^herdr-win local \(Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
@@ -130,6 +131,17 @@ def _run(
             f"{command!s} failed with exit code {result.returncode}: {detail}"
         )
     return result
+
+
+def _print_process_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(
+            result.stderr,
+            file=sys.stderr,
+            end="" if result.stderr.endswith("\n") else "\n",
+        )
 
 
 def _safe_path(path: Path, label: str, *, directory: bool) -> Path:
@@ -293,6 +305,37 @@ def _cargo_build_arguments(cargo_target: Path, jobs: int) -> list[str]:
         "--bin",
         "herdr-installer-helper",
     ]
+
+
+def _cargo_test_arguments(
+    cargo_target: Path, jobs: int, test_filter: str
+) -> list[str]:
+    if jobs < 1:
+        raise LocalInstallerError("Cargo requires at least one build job")
+    if not test_filter.strip() or test_filter.startswith("-"):
+        raise LocalInstallerError("--test-filter must be one non-option test filter")
+    return [
+        "test",
+        "--release",
+        "--locked",
+        "--target",
+        WINDOWS_TARGET,
+        "--target-dir",
+        str(cargo_target),
+        "--jobs",
+        str(jobs),
+        "--bin",
+        "herdr",
+        test_filter,
+        "--",
+        "--nocapture",
+    ]
+
+
+def _require_one_focused_test(output: str) -> None:
+    passed = [int(match.group("passed")) for match in FOCUSED_TEST_RESULT_RE.finditer(output)]
+    if passed != [1]:
+        raise LocalInstallerError("--test-filter must run exactly one passing test")
 
 
 def _dynamic_msvc_runtime_imports(dependencies: str) -> list[str]:
@@ -648,26 +691,35 @@ def candidate(options: argparse.Namespace) -> None:
     else:
         print("acceptance_output=canonical")
 
+    build_environment = {
+        "HERDR_BUILD_ID": build_id,
+        "HERDR_BUILD_COMMIT": base_commit,
+    }
+    if options.test_filter is not None:
+        print(f"focused_test={options.test_filter}")
+        test_started = time.monotonic()
+        test_result = _run(
+            "cargo",
+            _cargo_test_arguments(cargo_target, jobs, options.test_filter),
+            cwd=source,
+            timeout=1200,
+            environment_overrides=build_environment,
+            removed_environment=("HERDR_RELEASE_VERSION",),
+        )
+        _print_process_output(test_result)
+        _require_one_focused_test(test_result.stdout)
+        print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
+
     cargo_started = time.monotonic()
     cargo_result = _run(
         "cargo",
         _cargo_build_arguments(cargo_target, jobs),
         cwd=source,
         timeout=1200,
-        environment_overrides={
-            "HERDR_BUILD_ID": build_id,
-            "HERDR_BUILD_COMMIT": base_commit,
-        },
+        environment_overrides=build_environment,
         removed_environment=("HERDR_RELEASE_VERSION",),
     )
-    if cargo_result.stdout:
-        print(cargo_result.stdout, end="" if cargo_result.stdout.endswith("\n") else "\n")
-    if cargo_result.stderr:
-        print(
-            cargo_result.stderr,
-            file=sys.stderr,
-            end="" if cargo_result.stderr.endswith("\n") else "\n",
-        )
+    _print_process_output(cargo_result)
     print(f"cargo_elapsed_seconds={time.monotonic() - cargo_started:.3f}")
 
     release = cargo_target / WINDOWS_TARGET / "release"
@@ -742,6 +794,10 @@ def _parser() -> argparse.ArgumentParser:
     candidate_command.add_argument("--source-worktree", required=True, type=Path)
     candidate_command.add_argument(
         "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
+    )
+    candidate_command.add_argument(
+        "--test-filter",
+        help="run one focused herdr test with the candidate build target before packaging",
     )
     candidate_command.add_argument(
         "--isolated",

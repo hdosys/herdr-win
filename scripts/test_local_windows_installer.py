@@ -16,10 +16,12 @@ from scripts.local_windows_installer import (
     _candidate_build_id,
     _candidate_paths,
     _cargo_build_arguments,
+    _cargo_test_arguments,
     _dynamic_msvc_runtime_imports,
     _git_arguments,
     _hashes,
     _isolated_candidate_paths,
+    _require_one_focused_test,
     parse_identity,
 )
 
@@ -152,6 +154,31 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             if value == "--bin"
         ]
         self.assertEqual(bins, ["herdr", "herdr-launcher", "herdr-installer-helper"])
+
+    def test_candidate_focused_test_shares_windows_target_and_jobs(self) -> None:
+        cargo_target = Path("C:/cargo-target")
+        arguments = _cargo_test_arguments(cargo_target, 16, "exact_test_filter")
+
+        self.assertEqual(arguments[0], "test")
+        self.assertIn("--release", arguments)
+        self.assertEqual(arguments[arguments.index("--target") + 1], "x86_64-pc-windows-msvc")
+        self.assertEqual(arguments[arguments.index("--target-dir") + 1], str(cargo_target))
+        self.assertEqual(arguments[arguments.index("--jobs") + 1], "16")
+        self.assertEqual(arguments[arguments.index("--bin") + 1], "herdr")
+        self.assertEqual(arguments[-3:], ["exact_test_filter", "--", "--nocapture"])
+
+        with self.assertRaisesRegex(LocalInstallerError, "non-option test filter"):
+            _cargo_test_arguments(cargo_target, 16, "--all")
+
+    def test_candidate_focused_test_requires_exactly_one_result(self) -> None:
+        _require_one_focused_test(
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n"
+        )
+
+        with self.assertRaisesRegex(LocalInstallerError, "exactly one passing test"):
+            _require_one_focused_test(
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured\n"
+            )
 
     def test_dynamic_msvc_runtime_imports_are_rejected_case_insensitively(
         self,

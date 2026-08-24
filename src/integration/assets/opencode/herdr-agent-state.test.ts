@@ -94,6 +94,21 @@ function apiErrorEvent(sessionID?: string) {
   };
 }
 
+function abortedErrorEvent(sessionID?: string) {
+  return {
+    event: {
+      type: "session.error",
+      properties: {
+        ...(sessionID ? { sessionID } : {}),
+        error: {
+          name: "MessageAbortedError",
+          data: { message: "Aborted" },
+        },
+      },
+    },
+  };
+}
+
 test("serializes lifecycle reports", async () => {
   autoAcknowledge = false;
   const plugin = await loadPlugin();
@@ -191,6 +206,24 @@ test("reports retry status as working", async () => {
   expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
   expect(requests.map(requestState)).toEqual(["working"]);
   expect(requests.map(requestSessionID)).toEqual(["root-session"]);
+});
+
+test("reports a user-aborted session as idle instead of blocked", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
+  await plugin.event(abortedErrorEvent("root-session"));
+
+  expect(requests.map(requestState)).toEqual(["working", "idle"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+  expect(
+    (requests[0] as { params: { suppress_completion?: boolean } }).params
+      .suppress_completion,
+  ).toBeUndefined();
+  expect(
+    (requests[1] as { params: { suppress_completion?: boolean } }).params
+      .suppress_completion,
+  ).toBe(true);
 });
 
 test("error followed by retry reports working without blocked", async () => {

@@ -1515,6 +1515,7 @@ pub struct AppState {
     pub accent: Color,
     pub sound: SoundConfig,
     pub local_sound_playback: bool,
+    pub notify_on_agent_completion: bool,
     pub toast_config: ToastConfig,
     pub keybinds: Keybinds,
     /// UI color palette — all sidebar/UI colors centralized for theming.
@@ -1906,6 +1907,7 @@ impl AppState {
                 ..SoundConfig::default()
             },
             local_sound_playback: false,
+            notify_on_agent_completion: false,
             toast_config: ToastConfig::default(),
             keybinds: Keybinds::default(),
             palette: Palette::catppuccin(),

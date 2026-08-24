@@ -65,6 +65,7 @@ pub fn active_tab_suppresses_notifications(
 
 #[cfg(test)]
 pub fn notification_sound_for_state_change(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     prev_state: AgentState,
     new_state: AgentState,
@@ -76,7 +77,8 @@ pub fn notification_sound_for_state_change(
     match new_state {
         AgentState::Blocked => Some(crate::sound::Sound::Request),
         AgentState::Idle
-            if is_background_completion_transition(prev_state, new_state)
+            if notify_on_agent_completion
+                && is_background_completion_transition(prev_state, new_state)
                 && !suppress_active_tab_notifications =>
         {
             Some(crate::sound::Sound::Done)
@@ -86,6 +88,7 @@ pub fn notification_sound_for_state_change(
 }
 
 pub fn notification_sound_for_state_change_with_agent_labels(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     prev_state: AgentState,
     new_state: AgentState,
@@ -99,12 +102,14 @@ pub fn notification_sound_for_state_change_with_agent_labels(
     match new_state {
         AgentState::Blocked => Some(crate::sound::Sound::Request),
         AgentState::Idle
-            if is_completion_transition_parts(
-                prev_state,
-                new_state,
-                previous_agent_label,
-                agent_label,
-            ) && !suppress_active_tab_notifications =>
+            if notify_on_agent_completion
+                && is_completion_transition_parts(
+                    prev_state,
+                    new_state,
+                    previous_agent_label,
+                    agent_label,
+                )
+                && !suppress_active_tab_notifications =>
         {
             Some(crate::sound::Sound::Done)
         }
@@ -113,6 +118,7 @@ pub fn notification_sound_for_state_change_with_agent_labels(
 }
 
 fn notification_sound_for_effective_state_change(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     change: &EffectiveStateChange,
 ) -> Option<crate::sound::Sound> {
@@ -123,7 +129,9 @@ fn notification_sound_for_effective_state_change(
     match change.state {
         AgentState::Blocked => Some(crate::sound::Sound::Request),
         AgentState::Idle
-            if is_completion_transition(change) && !suppress_active_tab_notifications =>
+            if notify_on_agent_completion
+                && is_completion_transition(change)
+                && !suppress_active_tab_notifications =>
         {
             Some(crate::sound::Sound::Done)
         }
@@ -132,6 +140,7 @@ fn notification_sound_for_effective_state_change(
 }
 
 pub fn notification_toast_for_state_change_with_agent_labels(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     prev_state: AgentState,
     new_state: AgentState,
@@ -145,12 +154,13 @@ pub fn notification_toast_for_state_change_with_agent_labels(
     match new_state {
         AgentState::Blocked => Some(ToastKind::NeedsAttention),
         AgentState::Idle
-            if is_completion_transition_parts(
-                prev_state,
-                new_state,
-                previous_agent_label,
-                agent_label,
-            ) =>
+            if notify_on_agent_completion
+                && is_completion_transition_parts(
+                    prev_state,
+                    new_state,
+                    previous_agent_label,
+                    agent_label,
+                ) =>
         {
             Some(ToastKind::Finished)
         }
@@ -159,6 +169,7 @@ pub fn notification_toast_for_state_change_with_agent_labels(
 }
 
 fn notification_toast_for_effective_state_change(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     change: &EffectiveStateChange,
 ) -> Option<ToastKind> {
@@ -168,12 +179,15 @@ fn notification_toast_for_effective_state_change(
 
     match change.state {
         AgentState::Blocked => Some(ToastKind::NeedsAttention),
-        AgentState::Idle if is_completion_transition(change) => Some(ToastKind::Finished),
+        AgentState::Idle if notify_on_agent_completion && is_completion_transition(change) => {
+            Some(ToastKind::Finished)
+        }
         _ => None,
     }
 }
 
 pub fn notification_toast_for_pane_state_update(
+    notify_on_agent_completion: bool,
     suppress_active_tab_notifications: bool,
     update: &PaneStateUpdate,
 ) -> Option<ToastKind> {
@@ -185,6 +199,7 @@ pub fn notification_toast_for_pane_state_update(
     }
 
     notification_toast_for_state_change_with_agent_labels(
+        notify_on_agent_completion,
         suppress_active_tab_notifications,
         update.previous_state,
         update.state,
@@ -2813,6 +2828,7 @@ impl AppState {
                 message,
                 seq,
                 session_ref,
+                suppress_completion,
             } => {
                 if crate::agent_resume::is_reserved_native_state_source(&source, &agent_label) {
                     self.update_terminal_state(pane_id, |terminal| {
@@ -2821,16 +2837,20 @@ impl AppState {
                     .into_iter()
                     .collect()
                 } else {
-                    self.update_terminal_state(pane_id, |terminal| {
-                        terminal.set_hook_authority_with_session_ref(
-                            source,
-                            agent_label,
-                            state,
-                            message,
-                            session_ref,
-                            seq,
-                        )
-                    })
+                    self.update_terminal_state_with_completion_suppression(
+                        pane_id,
+                        suppress_completion,
+                        |terminal| {
+                            terminal.set_hook_authority_with_session_ref(
+                                source,
+                                agent_label,
+                                state,
+                                message,
+                                session_ref,
+                                seq,
+                            )
+                        },
+                    )
                     .into_iter()
                     .collect()
                 }
@@ -2956,6 +2976,18 @@ impl AppState {
     where
         F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
     {
+        self.update_terminal_state_with_completion_suppression(pane_id, false, update)
+    }
+
+    fn update_terminal_state_with_completion_suppression<F>(
+        &mut self,
+        pane_id: PaneId,
+        suppress_reported_completion: bool,
+        update: F,
+    ) -> Option<PaneStateUpdate>
+    where
+        F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
+    {
         let ws_idx = self
             .workspaces
             .iter()
@@ -2998,7 +3030,9 @@ impl AppState {
         let agent_released = mutation.agent_released;
         let change = mutation.effective_state_change.or(unchanged_change)?;
         let suppress_completion = change.state == AgentState::Idle
-            && (managed_launch_pending || suppress_acquisition_completion);
+            && (suppress_reported_completion
+                || managed_launch_pending
+                || suppress_acquisition_completion);
         if change.previous_state != change.state {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
@@ -3138,10 +3172,12 @@ impl AppState {
             active_tab_suppresses_notifications(is_active_tab, self.outer_terminal_focus);
 
         let client_notification_kind = notification_toast_for_effective_state_change(
+            self.notify_on_agent_completion,
             suppress_active_tab_notifications,
             change,
         );
         let sound = notification_sound_for_effective_state_change(
+            self.notify_on_agent_completion,
             suppress_active_tab_notifications,
             change,
         );
@@ -3205,6 +3241,9 @@ impl AppState {
         kind: ToastKind,
         expected_state: AgentState,
     ) -> Option<AgentNotificationDelivery> {
+        if kind == ToastKind::Finished && !self.notify_on_agent_completion {
+            return None;
+        }
         let terminal_state = self
             .workspaces
             .get(ws_idx)?
@@ -4880,7 +4919,7 @@ mod tests {
     }
 
     #[test]
-    fn state_changed_idle_in_background_marks_unseen() {
+    fn state_changed_idle_in_background_marks_unseen_without_default_notification() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         state.active = Some(0);
@@ -4908,10 +4947,7 @@ mod tests {
 
         let pane = state.workspaces[1].panes.get(&bg_pane_id).unwrap();
         assert!(!pane.seen);
-        assert!(matches!(
-            state.toast.as_ref().map(|toast| toast.kind),
-            Some(ToastKind::Finished)
-        ));
+        assert!(state.toast.is_none());
     }
 
     #[test]
@@ -5089,23 +5125,37 @@ mod tests {
     #[test]
     fn waiting_sound_plays_even_in_active_workspace() {
         assert_eq!(
-            notification_sound_for_state_change(true, AgentState::Working, AgentState::Blocked),
+            notification_sound_for_state_change(
+                false,
+                true,
+                AgentState::Working,
+                AgentState::Blocked,
+            ),
             Some(crate::sound::Sound::Request)
         );
     }
 
     #[test]
-    fn done_sound_only_plays_in_background() {
+    fn done_sound_requires_opt_in_and_background() {
         assert_eq!(
-            notification_sound_for_state_change(false, AgentState::Working, AgentState::Idle),
+            notification_sound_for_state_change(true, false, AgentState::Working, AgentState::Idle,),
             Some(crate::sound::Sound::Done)
         );
         assert_eq!(
-            notification_sound_for_state_change(true, AgentState::Working, AgentState::Idle),
+            notification_sound_for_state_change(
+                false,
+                false,
+                AgentState::Working,
+                AgentState::Idle,
+            ),
             None
         );
         assert_eq!(
-            notification_sound_for_state_change(false, AgentState::Unknown, AgentState::Idle),
+            notification_sound_for_state_change(true, true, AgentState::Working, AgentState::Idle,),
+            None
+        );
+        assert_eq!(
+            notification_sound_for_state_change(true, false, AgentState::Unknown, AgentState::Idle,),
             None
         );
     }
@@ -5293,12 +5343,48 @@ mod tests {
             message: None,
             seq: None,
             session_ref: None,
+            suppress_completion: false,
         });
 
         let toast = state.toast.as_ref().unwrap();
         assert_eq!(toast.kind, ToastKind::NeedsAttention);
         assert_eq!(toast.title, "hermes needs attention");
         assert_eq!(toast.context, "background · 2");
+    }
+
+    #[test]
+    fn hook_reported_cancelled_idle_suppresses_opted_in_completion_notification() {
+        let mut state = app_with_workspaces(&["active", "background"]);
+        state.active = Some(0);
+        state.notify_on_agent_completion = true;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
+
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id: bg_pane_id,
+            source: "custom:opencode".into(),
+            agent_label: "opencode".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: Some(1),
+            session_ref: None,
+            suppress_completion: false,
+        });
+        let updates = state.handle_app_event(AppEvent::HookStateReported {
+            pane_id: bg_pane_id,
+            source: "custom:opencode".into(),
+            agent_label: "opencode".into(),
+            state: AgentState::Idle,
+            message: None,
+            seq: Some(2),
+            session_ref: None,
+            suppress_completion: true,
+        });
+
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].suppress_completion);
+        assert!(state.toast.is_none());
+        assert!(state.pending_agent_notifications.is_empty());
     }
 
     #[test]
@@ -5331,6 +5417,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: None,
+            suppress_completion: false,
         });
         state.handle_app_event(AppEvent::StateChanged {
             pane_id: bg_pane_id,
@@ -5379,6 +5466,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: crate::agent_resume::AgentSessionRef::id("claude-session"),
+            suppress_completion: false,
         });
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
@@ -5488,6 +5576,7 @@ mod tests {
             message: None,
             seq: Some(1),
             session_ref: crate::agent_resume::AgentSessionRef::id("devin-session"),
+            suppress_completion: false,
         });
 
         let terminal = state.terminals.get(&terminal_id).unwrap();
@@ -5512,6 +5601,7 @@ mod tests {
             message: None,
             seq: Some(20),
             session_ref: crate::agent_resume::AgentSessionRef::path(first_session),
+            suppress_completion: false,
         });
         assert_eq!(first_updates.len(), 1);
         state.session_dirty = false;
@@ -5524,6 +5614,7 @@ mod tests {
             message: None,
             seq: Some(21),
             session_ref: crate::agent_resume::AgentSessionRef::path(second_session),
+            suppress_completion: false,
         });
 
         assert!(second_updates.is_empty());
@@ -5593,6 +5684,7 @@ mod tests {
     fn background_idle_sets_finished_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
+        state.notify_on_agent_completion = true;
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
         let bg_terminal_id = state.workspaces[1]
@@ -5944,6 +6036,7 @@ mod tests {
     #[test]
     fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
         let mut state = app_with_workspaces(&["active", "background"]);
+        state.notify_on_agent_completion = true;
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         state.active = Some(1);
         state.ensure_test_terminals();

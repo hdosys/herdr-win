@@ -96,11 +96,12 @@ configuration repository.
 
 - **Status: done. Share the release-profile Cargo cache between focused native
   checks and candidate installer builds.** The Candidate procedure now gives the
-  focused `cargo test --release` command and installer command one task-owned
-  `--target-dir`. Evidence: the first real isolated verification reused the
-  dependency cache and compiled only the changed Herdr package; an unchanged repeat
-  then completed Cargo in 0.470 seconds and the validated installer in 22.847
-  seconds. Owner: the Candidate procedure in `CONTRIBUTING.md`.
+  focused test and installer the same release profile, explicit Windows target,
+  task-owned target directory, and detected logical-processor job count. Evidence:
+  an ad hoc debug check spent 220.885 seconds compiling, then the all-core installer
+  spent another 210.409 seconds compiling the separate release target. The exact
+  shared command removes one cold target graph and prevents inherited single-job
+  settings. Owner: the Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Make `just test-one` select Windows-valid Rust targets.**
   The Windows recipe now runs through native PowerShell and constrains nextest to

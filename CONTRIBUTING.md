@@ -202,9 +202,11 @@ it:
 ```powershell
 $cargoTarget = Join-Path $env:TEMP `
   ("opencode\herdr-win-cargo-target-" + [guid]::NewGuid().ToString("N"))
+$cargoJobs = [Environment]::ProcessorCount
 $testFilter = "<one exact test filter>"
-cargo test --locked --release --target-dir $cargoTarget `
-  --bin herdr $testFilter -- --nocapture
+cargo test --locked --release --target x86_64-pc-windows-msvc `
+  --target-dir $cargoTarget --jobs $cargoJobs --bin herdr `
+  $testFilter -- --nocapture
 python scripts/local_windows_installer.py candidate `
   --source-worktree <combined-acceptance-worktree> `
   --cargo-target-dir $cargoTarget

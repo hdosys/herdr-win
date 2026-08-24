@@ -970,6 +970,7 @@ impl App {
     }
 
     pub(crate) fn close_removed_linked_worktree_workspace(&mut self, ws_idx: usize) {
+        let removed_workspace_was_active = self.state.active == Some(ws_idx);
         let parent_key = self
             .state
             .workspaces
@@ -981,6 +982,9 @@ impl App {
         self.state.selected = ws_idx;
         self.state.close_selected_workspace();
 
+        if !removed_workspace_was_active {
+            return;
+        }
         let Some(parent_key) = parent_key else {
             return;
         };

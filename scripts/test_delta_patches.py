@@ -214,6 +214,26 @@ class DeltaPatchTests(unittest.TestCase):
             '+rustflags = ["-C", "target-feature=+crt-static"]', patch
         )
 
+    def test_remote_mailbox_preserves_client_sized_startup_bootstrap(self) -> None:
+        patch = (DELTA_ROOT / "0003-windows-remote-attach.patch").read_text(
+            encoding="utf-8"
+        )
+        added = "\n".join(
+            line[1:]
+            for line in patch.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
+        for required in (
+            "struct DeferredWorkspaceShell",
+            "awaiting_first_app_client_geometry:",
+            "pending_startup_workspace_launches:",
+            "launch_pending_startup_workspace_shells",
+            "initial_workspace_terminal_area",
+            "startup_bootstrap_shells_wait_for_real_client_geometry",
+        ):
+            self.assertIn(required, added)
+
     def test_public_readme_mirror_and_manual_build_promotion_contract(self) -> None:
         readme_bytes = (PROJECT_ROOT / "README.md").read_bytes()
         self.assertEqual(

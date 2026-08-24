@@ -54,6 +54,19 @@ herdr
 
 run your agents, split panes, walk away. `ctrl+b q` detaches, `herdr` reattaches. [quick start →](https://herdr.dev/docs/quick-start/)
 
+## completion notifications are opt-in
+
+herdr keeps questions, permission prompts, and errors actionable. completion notifications are off by default because frequent idle transitions are usually noise in multi-agent setups.
+
+to allow completion toasts and sounds, add this to `config.toml`:
+
+```toml
+[ui]
+notify_on_agent_completion = true
+```
+
+user-cancelled opencode responses stay silent even when completion notifications are enabled. [configuration →](https://herdr.dev/docs/configuration/)
+
 ## docs
 
 everything lives at [herdr.dev/docs](https://herdr.dev/docs/): [quick start](https://herdr.dev/docs/quick-start/) · [concepts](https://herdr.dev/docs/concepts/) · [supported agents](https://herdr.dev/docs/agents/) · [keyboard](https://herdr.dev/docs/keyboard/) · [configuration](https://herdr.dev/docs/configuration/) · [session state](https://herdr.dev/docs/session-state/) · [remote](https://herdr.dev/docs/persistence-remote/) · [integrations](https://herdr.dev/docs/integrations/) · [plugins](https://herdr.dev/docs/plugins/) · [socket api](https://herdr.dev/docs/socket-api/)

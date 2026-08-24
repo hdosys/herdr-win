@@ -22,6 +22,8 @@ BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 PATCH_RE = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 TASK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 GIT_TIMEOUT_SECONDS = 120
+DEVELOPMENT_BRANCH = "agent/delta-development"
+DEVELOPMENT_REMOTE_REF = "refs/heads/candidate/development"
 
 
 class DeltaWorkflowError(RuntimeError):
@@ -54,6 +56,20 @@ class FinalizeResult:
 
 
 @dataclass(frozen=True)
+class DevelopmentResult:
+    path: Path
+    head: str
+    tree: str
+
+
+@dataclass(frozen=True)
+class TopicWorktree:
+    path: Path
+    head: str
+    branch: str
+
+
+@dataclass(frozen=True)
 class MailboxMetadata:
     author_name: str
     author_email: str
@@ -83,7 +99,7 @@ def _run_git(
     check: bool = True,
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = ["git", "-c", "core.longpaths=true", *arguments]
+    command = _git_command(project_root, arguments, cwd=cwd)
     try:
         result = subprocess.run(
             command,
@@ -108,6 +124,68 @@ def _run_git(
             f"{' '.join(command)!r} failed with exit code {result.returncode}: {detail}"
         )
     return result
+
+
+def _git_command(
+    project_root: Path,
+    arguments: Sequence[str],
+    *,
+    cwd: Path | None = None,
+) -> list[str]:
+    command = ["git", "-c", "core.longpaths=true"]
+    trusted: list[Path] = []
+    for path in (project_root, cwd or project_root):
+        resolved = path.resolve()
+        if resolved not in trusted:
+            trusted.append(resolved)
+            command.extend(["-c", f"safe.directory={resolved.as_posix()}"])
+    command.extend(arguments)
+    return command
+
+
+def unintegrated_topic_worktrees(
+    project_root: Path,
+    development_head: str,
+) -> tuple[TopicWorktree, ...]:
+    """Return linked topic heads not contained in the development head."""
+
+    output = _run_git(
+        project_root,
+        ["worktree", "list", "--porcelain", "-z"],
+    ).stdout
+    linked: list[TopicWorktree] = []
+    path: Path | None = None
+    head = ""
+    branch = ""
+    for field in output.split("\0"):
+        if field.startswith("worktree "):
+            if path is not None and head and branch:
+                linked.append(TopicWorktree(path, head, branch))
+            path = Path(field.removeprefix("worktree ")).resolve()
+            head = ""
+            branch = ""
+        elif field.startswith("HEAD "):
+            head = field.removeprefix("HEAD ")
+        elif field.startswith("branch refs/heads/"):
+            branch = field.removeprefix("branch refs/heads/")
+    if path is not None and head and branch:
+        linked.append(TopicWorktree(path, head, branch))
+
+    unintegrated: list[TopicWorktree] = []
+    for worktree in linked:
+        if (
+            not worktree.branch.startswith("agent/delta-")
+            or worktree.branch == DEVELOPMENT_BRANCH
+        ):
+            continue
+        ancestor = _run_git(
+            project_root,
+            ["merge-base", "--is-ancestor", worktree.head, development_head],
+            check=False,
+        )
+        if ancestor.returncode != 0:
+            unintegrated.append(worktree)
+    return tuple(unintegrated)
 
 
 def _read_base(project_root: Path) -> str:
@@ -854,6 +932,59 @@ def materialize_delta_worktree(
     )
 
 
+def publish_development_worktree(
+    worktree: Path,
+    project_root: Path = PROJECT_ROOT,
+) -> DevelopmentResult:
+    """Push the one clean cumulative development source state."""
+
+    project_root = project_root.resolve()
+    _require_control_master(project_root)
+    _require_clean_delta(project_root)
+    replay = replay_delta_tree(project_root)
+    worktree, branch = _require_clean_delta_worktree(project_root, worktree)
+    if branch != DEVELOPMENT_BRANCH:
+        raise DeltaWorkflowError(
+            f"development worktree must use {DEVELOPMENT_BRANCH!r}, found {branch!r}"
+        )
+    ancestor = _run_git(
+        worktree,
+        ["merge-base", "--is-ancestor", replay.base, "HEAD"],
+        cwd=worktree,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        raise DeltaWorkflowError("recorded BASE is not an ancestor of development HEAD")
+    reachable_trees = _run_git(
+        worktree,
+        ["log", "--format=%T", f"{replay.base}..HEAD"],
+        cwd=worktree,
+    ).stdout.splitlines()
+    if replay.tree not in reachable_trees:
+        raise DeltaWorkflowError(
+            "development history does not contain the current checked-in replay tree"
+        )
+    head = _run_git(worktree, ["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+    unintegrated = unintegrated_topic_worktrees(project_root, head)
+    if unintegrated:
+        detail = ", ".join(
+            f"{topic.branch} ({topic.path})" for topic in unintegrated
+        )
+        raise DeltaWorkflowError(
+            f"unintegrated topic worktrees block development publication: {detail}"
+        )
+    _run_git(worktree, ["diff", "--check", f"{replay.base}..HEAD"], cwd=worktree)
+    _run_git(
+        worktree,
+        ["push", "origin", f"HEAD:{DEVELOPMENT_REMOTE_REF}"],
+        cwd=worktree,
+    )
+    tree = _run_git(
+        worktree, ["rev-parse", "HEAD^{tree}"], cwd=worktree
+    ).stdout.strip()
+    return DevelopmentResult(path=worktree, head=head, tree=tree)
+
+
 def start_delta_worktree(
     name: str,
     path: Path,
@@ -931,6 +1062,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="absolute path to an existing agent/delta-* worktree at BASE",
     )
 
+    publish_development = commands.add_parser(
+        "publish-development",
+        help="push the clean cumulative development source state",
+    )
+    publish_development.add_argument(
+        "--worktree",
+        required=True,
+        type=Path,
+        help="absolute path to the shared agent/delta-development worktree",
+    )
+
     check = commands.add_parser(
         "check", help="replay into a temporary index without another checkout"
     )
@@ -1003,6 +1145,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"source-tree: {result.source_tree}")
             print(f"replay-tree: {result.replay_tree}")
             print("mailbox-updated: yes")
+            return 0
+
+        if options.command == "publish-development":
+            result = publish_development_worktree(options.worktree)
+            print(f"worktree: {result.path}")
+            print(f"head: {result.head}")
+            print(f"tree: {result.tree}")
+            print("development-pushed: yes")
             return 0
 
         result = verify_replay_tree(options.expected_tree)

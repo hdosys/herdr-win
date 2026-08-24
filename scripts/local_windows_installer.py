@@ -19,6 +19,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+try:
+    from scripts.delta_workflow import (
+        DEVELOPMENT_BRANCH,
+        DEVELOPMENT_REMOTE_REF,
+        DeltaWorkflowError,
+        unintegrated_topic_worktrees,
+    )
+except ModuleNotFoundError:
+    from delta_workflow import (  # type: ignore[no-redef]
+        DEVELOPMENT_BRANCH,
+        DEVELOPMENT_REMOTE_REF,
+        DeltaWorkflowError,
+        unintegrated_topic_worktrees,
+    )
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TARGET_ROOT = PROJECT_ROOT / "target" / "x86_64-pc-windows-msvc"
@@ -32,7 +47,6 @@ DEFAULT_CARGO_TARGET = (
 )
 BUILD_ID_RE = re.compile(r"^[0-9a-f]{12}\.[0-9a-f]{12}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-COMBINED_ACCEPTANCE_BRANCH_PREFIX = "agent/delta-combined-acceptance-"
 DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
     r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
 )
@@ -85,10 +99,7 @@ def _isolated_candidate_paths(build_id: str) -> InstallerPaths:
 def _candidate_paths(
     branch: str, build_id: str, *, isolated: bool
 ) -> InstallerPaths:
-    combined_acceptance = branch.startswith(COMBINED_ACCEPTANCE_BRANCH_PREFIX) and (
-        branch != COMBINED_ACCEPTANCE_BRANCH_PREFIX
-    )
-    if isolated or not combined_acceptance:
+    if isolated or branch != DEVELOPMENT_BRANCH:
         return _isolated_candidate_paths(build_id)
     return DEFAULT_PATHS
 
@@ -215,6 +226,50 @@ def _source_branch(source: Path) -> str:
     if not branch.startswith("agent/delta-"):
         raise LocalInstallerError(f"source worktree uses unsupported branch {branch!r}")
     return branch
+
+
+def _require_pushed_development_source(
+    source: Path, branch: str, *, isolated: bool
+) -> None:
+    if isolated or branch != DEVELOPMENT_BRANCH:
+        return
+    status = _git(source, ["status", "--porcelain=v1", "--untracked-files=all"])
+    if status:
+        raise LocalInstallerError("development worktree must be clean before packaging")
+    _run(
+        "git",
+        _git_arguments(
+            source,
+            [
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"{DEVELOPMENT_REMOTE_REF}:refs/remotes/origin/candidate/development",
+            ],
+        ),
+        timeout=120,
+    )
+    local_head = _git(source, ["rev-parse", "HEAD"])
+    remote_head = _git(
+        source, ["rev-parse", "refs/remotes/origin/candidate/development"]
+    )
+    if local_head != remote_head:
+        raise LocalInstallerError(
+            "development worktree must equal origin/candidate/development before packaging"
+        )
+    try:
+        unintegrated = unintegrated_topic_worktrees(PROJECT_ROOT, local_head)
+    except DeltaWorkflowError as error:
+        raise LocalInstallerError(
+            f"could not verify development worktree integration: {error}"
+        ) from error
+    if unintegrated:
+        detail = ", ".join(
+            f"{topic.branch} ({topic.path})" for topic in unintegrated
+        )
+        raise LocalInstallerError(
+            f"unintegrated topic worktrees block the development installer: {detail}"
+        )
 
 
 def parse_identity(version: str, launcher_build_id: str) -> InstallerIdentity:
@@ -677,6 +732,9 @@ def candidate(options: argparse.Namespace) -> None:
     total_started = time.monotonic()
     source = _source_root(options.source_worktree)
     source_branch = _source_branch(source)
+    _require_pushed_development_source(
+        source, source_branch, isolated=options.isolated
+    )
     cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
     build_id, base_commit = _source_build_identity(source)
     paths = _candidate_paths(source_branch, build_id, isolated=options.isolated)
@@ -802,7 +860,7 @@ def _parser() -> argparse.ArgumentParser:
     candidate_command.add_argument(
         "--isolated",
         action="store_true",
-        help="force build-scoped outputs even for a combined acceptance branch",
+        help="force build-scoped outputs even for the development branch",
     )
     return parser
 

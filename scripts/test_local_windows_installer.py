@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.local_windows_installer import (
     DEFAULT_PATHS,
@@ -21,6 +22,7 @@ from scripts.local_windows_installer import (
     _git_arguments,
     _hashes,
     _isolated_candidate_paths,
+    _require_pushed_development_source,
     _require_one_focused_test,
     parse_identity,
 )
@@ -104,30 +106,60 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             _isolated_candidate_paths(BUILD_ID),
         )
 
-    def test_combined_acceptance_defaults_to_canonical_output(self) -> None:
+    def test_development_branch_defaults_to_canonical_output(self) -> None:
         self.assertEqual(
             _candidate_paths(
-                "agent/delta-combined-acceptance-20260823",
+                "agent/delta-development",
                 BUILD_ID,
                 isolated=False,
             ),
             DEFAULT_PATHS,
         )
 
-    def test_combined_acceptance_can_force_isolated_outputs(self) -> None:
+    def test_development_branch_can_force_isolated_outputs(self) -> None:
         self.assertEqual(
             _candidate_paths(
-                "agent/delta-combined-acceptance-20260823",
+                "agent/delta-development",
                 BUILD_ID,
                 isolated=True,
             ),
             _isolated_candidate_paths(BUILD_ID),
         )
 
-    def test_empty_combined_acceptance_suffix_is_not_canonical(self) -> None:
+    def test_development_installer_requires_clean_pushed_source(self) -> None:
+        source = Path("C:/development")
+        with (
+            patch("scripts.local_windows_installer._git") as git,
+            patch("scripts.local_windows_installer._run") as run,
+            patch(
+                "scripts.local_windows_installer.unintegrated_topic_worktrees",
+                return_value=(),
+            ),
+        ):
+            git.side_effect = ["", "a" * 40, "a" * 40]
+
+            _require_pushed_development_source(
+                source, "agent/delta-development", isolated=False
+            )
+
+            self.assertIn("refs/heads/candidate/development", run.call_args.args[1][-1])
+
+        with (
+            patch("scripts.local_windows_installer._git") as git,
+            patch("scripts.local_windows_installer._run"),
+            self.assertRaisesRegex(LocalInstallerError, "must equal"),
+        ):
+            git.side_effect = ["", "a" * 40, "b" * 40]
+            _require_pushed_development_source(
+                source, "agent/delta-development", isolated=False
+            )
+
+    def test_legacy_combined_branch_is_not_canonical(self) -> None:
         self.assertEqual(
             _candidate_paths(
-                "agent/delta-combined-acceptance-", BUILD_ID, isolated=False
+                "agent/delta-combined-acceptance-20260823",
+                BUILD_ID,
+                isolated=False,
             ),
             _isolated_candidate_paths(BUILD_ID),
         )

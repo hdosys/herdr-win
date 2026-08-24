@@ -20,13 +20,11 @@ configuration repository.
 
 ## Proposals
 
-- **Status: proposed. Scope Git trust inside the delta-worktree helper.** Evidence:
-  `delta_workflow.py start` created the selected Sandbox worktree, then its Git
-  validation failed with dubious ownership; materialization and finalization
-  succeeded only after supplying command-scoped `safe.directory` values. Extend
-  the helper's Git wrapper to trust only the control checkout and selected
-  worktree, with one ownership-mismatch test. Expected benefit: keep the documented
-  replay workflow end to end without global Git configuration or manual recovery.
+- **Status: done. Scope Git trust inside the delta-worktree helper.** Every helper
+  Git command now trusts only the resolved control checkout and selected worktree
+  through command-scoped `safe.directory` values. Evidence: materialization had
+  failed on a Sandbox-owned linked checkout until the same bounded values were
+  supplied manually; the focused command-construction test now owns that contract.
   Owner: `scripts/delta_workflow.py`, its focused tests, and `CONTRIBUTING.md`.
 
 - **Status: proposed. Compile each mailbox prefix during stable-base refreshes.**
@@ -82,17 +80,15 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: done. Make the rolling combined acceptance stack the only local user
-  installer owner.** Ordinary candidate branches now default to a build-ID-isolated
-  stage, bundle, pinned NSIS tool, and setup. Only an
-  `agent/delta-combined-acceptance-*` branch writes the fixed setup, and one warm
-  release Cargo target is retained across the complete acceptance batch. This keeps
-  every reported installer cumulative without rebuilding dependencies or broad
-  gates for each fix. Evidence: 13 focused path-selection tests completed in 0.033
-  seconds, then the unchanged combined validated bundle replaced the canonical
-  setup in 27.281 seconds without a Cargo build. Owner:
+- **Status: done. Make one development stack the only local user installer
+  owner.** Product sessions default to the shared `agent/delta-development`
+  worktree. Topic worktrees exist only for concrete internal isolation, default to
+  build-ID-isolated outputs, and must be integrated and removed by their creator.
+  Only the exact development branch writes the fixed setup, so every reported
+  installer is the cumulative current state. User acceptance promotes that complete
+  tree rather than individual topics. Owner:
   `scripts/local_windows_installer.py`, its focused tests, `AGENTS.md`, and the
-  Candidate procedure in `CONTRIBUTING.md`.
+  development procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Share the release-profile Cargo cache between focused native
   checks and candidate installer builds.** `local_windows_installer.py candidate

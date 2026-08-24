@@ -8,8 +8,10 @@ from typing import Sequence
 
 from scripts.delta_workflow import (
     DeltaWorkflowError,
+    _git_command,
     finalize_delta_mailbox,
     materialize_delta_worktree,
+    publish_development_worktree,
     start_delta_worktree,
     verify_replay_tree,
 )
@@ -110,6 +112,25 @@ class DeltaFixture:
 
 
 class DeltaWorkflowTests(unittest.TestCase):
+    def test_git_commands_trust_only_control_and_selected_worktree(self) -> None:
+        control = Path("C:/repo/control")
+        worktree = Path("C:/repo/development")
+
+        self.assertEqual(
+            _git_command(control, ["status", "--short"], cwd=worktree),
+            [
+                "git",
+                "-c",
+                "core.longpaths=true",
+                "-c",
+                f"safe.directory={control.resolve().as_posix()}",
+                "-c",
+                f"safe.directory={worktree.resolve().as_posix()}",
+                "status",
+                "--short",
+            ],
+        )
+
     def test_temporary_index_replay_matches_the_source_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture = DeltaFixture(Path(temp_dir))
@@ -178,6 +199,60 @@ class DeltaWorkflowTests(unittest.TestCase):
                 run_git(worktree, ["rev-list", "--count", f"{fixture.base}..HEAD"]),
                 "2",
             )
+
+    def test_publish_development_pushes_only_the_exact_shared_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            origin = Path(temp_dir) / "origin.git"
+            origin.mkdir()
+            run_git(origin, ["init", "--bare"])
+            run_git(fixture.control, ["remote", "add", "origin", str(origin)])
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+            worktree = worktrees / "development"
+            start_delta_worktree("development", worktree, fixture.control)
+
+            result = publish_development_worktree(worktree, fixture.control)
+
+            self.assertEqual(result.tree, fixture.source_tree)
+            self.assertEqual(
+                run_git(
+                    fixture.control,
+                    [
+                        "ls-remote",
+                        "--heads",
+                        "origin",
+                        "refs/heads/candidate/development",
+                    ],
+                ).split()[0],
+                result.head,
+            )
+
+            topic = worktrees / "topic"
+            run_git(
+                fixture.control,
+                [
+                    "worktree",
+                    "add",
+                    "-b",
+                    "agent/delta-topic",
+                    str(topic),
+                    result.head,
+                ],
+            )
+            run_git(topic, ["config", "user.name", "Delta Test"])
+            run_git(topic, ["config", "user.email", "delta@example.invalid"])
+            (topic / "topic.txt").write_bytes(b"finished topic\n")
+            run_git(topic, ["add", "topic.txt"])
+            run_git(topic, ["commit", "-m", "topic change"])
+
+            with self.assertRaisesRegex(
+                DeltaWorkflowError, "unintegrated topic worktrees"
+            ):
+                publish_development_worktree(worktree, fixture.control)
+
+            run_git(worktree, ["merge", "--ff-only", "agent/delta-topic"])
+            publish_development_worktree(worktree, fixture.control)
 
     def test_finalize_updates_only_owner_and_reproduces_tested_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

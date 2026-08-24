@@ -34,6 +34,19 @@ behavior; code and tests remain the detailed implementation truth.
   mailboxes.
 - `patches/upstream/` is a frozen historical archive. `patches/delta/` is the only
   active product delta; `series` is the only application order.
+- Day-to-day maintained source has one integration state:
+  `agent/delta-development`. Its history starts from the current complete replay
+  and accumulates every completed development change. Topic worktrees are optional
+  internal parallel lanes, never alternative user-testable states.
+- Only the exact development branch may write the fixed local installer. User
+  acceptance identifies its exact source tree and authorizes folding every included
+  change into the owning mailboxes. Promotion must reproduce that tree before the
+  development baseline advances. Release publication remains a separate explicit
+  operation.
+- The development publication and installer gates inspect registered linked topic
+  worktrees. Every committed topic head must be an ancestor of the development
+  head. Uncommitted topic state remains explicitly in progress and outside the
+  reported superset.
 - Upstream owns general Herdr behavior. Fork-specific implementation must reuse
   upstream owners where practical and must not create a parallel command, config,
   protocol, state namespace, or general product implementation.

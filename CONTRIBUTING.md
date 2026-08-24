@@ -44,75 +44,67 @@ current behavior, and expected behavior.
 
 The patch queue is the release representation, not the day-to-day editing surface.
 Do not make a product-source edit only in this repository's control checkout. The
-manual candidate build starts from recorded `BASE`, so every finished product
+development build starts from recorded `BASE`, so every finished product
 change must still be represented by the canonical queue.
 
-A replayed task worktree is required only for maintained product-source changes,
-because the patch queue is their release representation. Documentation and
-control-plane changes stay in the control checkout. Use one task worktree for one
-accepted logical milestone and reuse it only while that same milestone remains
-active. Size alone does not justify another worktree. Independent milestones use
-separate branches and worktrees because tree identity covers the complete replayed
-source tree.
+Maintained product-source work uses one long-lived shared worktree on
+`agent/delta-development`. Documentation and control-plane changes stay in the
+control checkout. Ordinary sessions reopen, coordinate, and work directly in that
+development tree. They do not create a worktree per issue.
 
-Create the task tree once from the exact local commit already recorded in `BASE`.
-In a Herdr-managed session, the global worktree lifecycle remains authoritative:
+Create the development tree once from the exact local commit recorded in `BASE`,
+replay the queue, and publish its internal durability ref:
 
 ```powershell
 $control = (Get-Location).Path
 $base = (Get-Content -LiteralPath patches/delta/BASE -Raw).Trim()
-$created = herdr worktree create --cwd $control --branch "agent/delta-<task-slug>" --base $base --no-focus --json | ConvertFrom-Json
+$created = herdr worktree create --cwd $control --branch "agent/delta-development" --base $base --no-focus --json | ConvertFrom-Json
 python scripts/delta_workflow.py materialize --worktree $created.result.worktree.path
+python scripts/delta_workflow.py publish-development `
+  --worktree $created.result.worktree.path
 ```
 
-Omit `--path` so Herdr selects its configured worktree root and opens the linked
-checkout as a managed workspace. Outside a Herdr-managed session, the repository
-helper can create the same task tree below an existing durable parent:
+`materialize` validates the checkout, shared repository identity, exact `BASE`,
+and clean state before applying `series` once with `git am --3way`. Its Git trust is
+scoped to the control checkout and selected worktree. It never queries official
+upstream.
 
-```powershell
-python scripts/delta_workflow.py start --name <task-slug> --path <durable-absolute-new-path>
-```
+Create a topic worktree only for a concrete parallel collision or risky isolation
+boundary. Base it on the exact current development commit, not `BASE`. The creating
+agent owns integration, remote durability, and complete cleanup. After its focused
+check, merge the finished commit into `agent/delta-development`, push
+`HEAD:refs/heads/candidate/development`, then remove the topic worktree, local
+branch, and any temporary remote ref. Never ask the user to classify or clean these
+internal resources.
 
-`materialize` validates the existing checkout, branch, clean state, shared
-repository identity, and exact `BASE` before applying `series` once with
-`git am --3way`. Neither path queries or fetches official upstream.
+For every interactive development update:
 
-The default interactive result is a verified, remotely backed up source candidate,
-not an updated mailbox. Candidate work stays within one logical mailbox owner and
-one accepted milestone. During candidate iteration:
+1. Obtain exclusive ownership for overlapping files and build resources in the
+   shared development tree.
+2. Make the smallest source change and run its focused check.
+3. Commit every completed change to the development branch. Integrate any completed
+   topic lanes, review the cumulative diff, and push the branch to
+   `origin/candidate/development` through `delta_workflow.py publish-development`.
+4. Build the fixed installer only from that pushed cumulative commit. Never report
+   a topic artifact.
+5. Tell the user only the fixed path, hash, included outcomes, result, and next
+   action. Internal worktrees, refs, and integration state are not user decisions.
 
-1. Edit the replayed source directly and run only the required formatter plus the
-   smallest test or real boundary probe that exercises the changed behavior.
-2. When the change has a local package or installer path, build and report the
-   first coherent artifact at its canonical `target/` path now. Queue inventory,
-   fresh replay, broad lint, and native or release matrices do not precede that
-   artifact unless an exact unsafe boundary has no cheaper reliable evidence.
-3. Review the ordinary source diff, commit the focused-tested source candidate,
-   and record `git rev-parse 'HEAD^{tree}'`.
-4. Push each coherent artifact-backed commit as a fast-forward remote backup. The
-   remote candidate ref, not the worktree, is the durable owner:
+Both development publication and the fixed installer inspect registered linked
+topic worktrees. A committed topic head that is not an ancestor of the development
+head blocks the operation. Dirty uncommitted topic state remains in progress and is
+not part of the reported completed superset.
 
-   ```powershell
-   git push origin "HEAD:refs/heads/candidate/<mailbox-id>/<task-slug>"
-   ```
-
-   Never force-push a candidate. A non-fast-forward failure is an ownership or
-   integration blocker. Do not rely on a Sandbox or worktree surviving.
-5. Report the worktree, local and remote branches, source commit and tree, owned
-   files and resources, focused evidence, and artifact. Then stop. Do not regenerate
-   a mailbox, modify the control checkout, push `master`, or remove the candidate
-   worktree.
-
-Mailbox promotion requires a later explicit current-user instruction that names
-the candidate and owning mailbox. The original implementation request, elapsed
-time, a passing candidate, a nightly process, or an agent recommendation is not
-promotion approval. After approval, one session owns the complete promotion path:
+A user statement that the current fixed installer works, or an explicit request to
+regenerate the patches, authorizes promotion of the complete reported development
+tree. It never promotes an individual topic. One session owns the complete path:
 
 1. Reinspect shared ownership, collect completed handoffs, and stop overlapping
    writes. Reuse the focused evidence while its source, inputs, and environment
    assumptions remain unchanged.
-2. Run the finalizer with the recorded tree and the existing mailbox that owns the
-   behavior:
+2. Regenerate every owning mailbox represented in the accepted development range.
+   Use isolated linear replay worktrees internally when a mailbox finalizer needs
+   one:
 
    ```powershell
    python scripts/delta_workflow.py finalize `
@@ -143,15 +135,20 @@ promotion approval. After approval, one session owns the complete promotion path
 3. Run the inventory tests below. A matching tree transfers the source evidence to
    the checked-in queue, so mailbox regeneration alone does not require another
    product gate.
-4. Review the final control diff after folding. Commit and push the finished
-   control milestone, then remove the task worktree through the lifecycle that
-   created it only after remote durability and ownership are clear. Candidate
-   branch retention or deletion is a separate explicit maintenance decision.
+4. Require the complete checked-in queue to reproduce the exact accepted
+   development tree. Review, commit, and push `master`, refresh the development
+   baseline, rebuild the cumulative installer, and clean every integrated topic
+   worktree, local branch, and temporary remote ref. These are internal mechanics
+   and require no further user approval.
+
+Installer acceptance does not authorize publication. Release remains a separate
+explicit user request.
 
 There is no scheduled or nightly delta replay. Run replay and mailbox inventory
 only during an explicitly approved promotion, an explicitly assigned release, or
 a separately requested diagnosis. A release and any `BASE` refresh remain blocked
-until every selected candidate has been promoted into the canonical queue.
+until the complete accepted development tree has been promoted into the canonical
+queue.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning
@@ -159,60 +156,31 @@ mailbox from its reviewed logical commit. A replay conflict or tree mismatch is 
 real promotion blocker. Repeated builds, broad gates, and raw review of generated
 mailbox churn are not substitutes for source review plus exact tree identity.
 
-### Fast local Windows installer candidates
+### Fast cumulative Windows development installer
 
 The control checkout owns one thin local entrypoint that reuses the materialized
-source packager. It adds no installer implementation. The fixed user-testable setup
-is owned only by one rolling `agent/delta-combined-acceptance-*` worktree containing
-the current replay plus every completed candidate selected for that acceptance
-batch. Individual source candidates never replace that setup.
-
-For an individual candidate, run its smallest focused check, push its immutable
-candidate ref, and hand it to the combined acceptance owner. Do not build another
-installer by default. When the exact candidate needs internal packaging evidence,
-the installer command on that ordinary `agent/delta-*` branch automatically uses
-build-ID-isolated stage, bundle, NSIS, and setup paths. That real setup is not the
-artifact reported for user testing:
-
-```powershell
-python scripts/local_windows_installer.py candidate `
-  --source-worktree <materialized-source-worktree>
-```
-
-The combined acceptance owner appends completed candidate commits in handoff order,
-pushes one immutable `origin/candidate/combined/acceptance-*` recovery ref, and runs
-the same command from the combined worktree. Only that branch class writes
+source packager. It adds no installer implementation. Only the exact
+`agent/delta-development` branch writes
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`, which
-is the one artifact reported for user testing. Its acceptance handoff always reports
-the replay tree, included candidate commits, combined source tree, build ID, setup
-size, and SHA-256.
+is the one artifact reported for user testing. It always contains the current replay
+plus every completed change integrated into the development branch. Topic branches
+automatically use build-ID-isolated outputs and those paths stay internal.
 
-The command uses one Sandbox-local Cargo target by default. An exact existing cache
-may be selected with `--cargo-target-dir <absolute-path>`. It passes the detected
-logical processor count through Cargo `--jobs`, so an inherited single-job setting
-cannot serialize the build.
-
-Keep one task-owned release-profile Cargo target for the complete rolling acceptance
-batch. Use it for each focused native check and every combined installer update so
-dependencies compile once. When several independent candidates finish together,
-append all completed handoffs before one installer build. Recreate the combined
-worktree only when the master replay changes or a real integration conflict requires
-it:
+Before each user handoff, collect every completed topic handoff, commit the coherent
+development tree, and push `origin/candidate/development`. Then run:
 
 ```powershell
-$cargoTarget = Join-Path $env:TEMP `
-  ("opencode\herdr-win-cargo-target-" + [guid]::NewGuid().ToString("N"))
 $testFilter = "<one exact test filter>"
 python scripts/local_windows_installer.py candidate `
-  --source-worktree <combined-acceptance-worktree> `
-  --cargo-target-dir $cargoTarget `
+  --source-worktree <development-worktree> `
   --test-filter $testFilter
 ```
 
-`--isolated` may force an additional internal namespace for a combined worktree,
-but it never creates the user deliverable. Never rerun an individual candidate
-against the fixed path after a resource handoff. Add it to the rolling combined
-stack and replace the canonical setup once with that complete state instead.
+The command keeps one Sandbox-local release Cargo target, passes the detected logical
+processor count through `--jobs`, runs exactly one focused test when requested, and
+reuses that target for the three packaged binaries. It replaces the fixed setup only
+after the test, source identity, bundle, and package checks pass. Never report an
+isolated topic artifact or ask the user which topic belongs in the installer.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
@@ -231,7 +199,7 @@ SHA-256, and binds the bundle to the runtime and launcher identities. It never
 extracts a prior setup with 7-Zip. The source ConPTY validator remains the stage
 owner.
 
-For combined installer, artwork, copy, validator, or packaging-only iterations,
+For development installer, artwork, copy, validator, or packaging-only iterations,
 reuse that bundle without rebuilding Rust payloads:
 
 ```powershell
@@ -242,15 +210,15 @@ python scripts/local_windows_installer.py build `
 
 Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtime
 and launcher identity, then delegates to the materialized source's existing NSIS
-packager. A combined acceptance branch writes the setup to the one short
+packager. The exact development branch writes the setup to the one short
 replaceable path
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
-reports its new hash. An individual branch selects its isolated bundle and setup;
-pass `--isolated` explicitly when forcing that behavior on a combined branch. A
+reports its new hash. A topic branch selects its isolated bundle and setup; pass
+`--isolated` explicitly when forcing that behavior on the development branch. A
 tiny, clearly bounded daytime packaging-only request uses
 a soft goal of roughly two minutes from the user request to that installable
 artifact. Request-to-artifact is the primary user-wait metric; build time,
-candidate completion, remote backup, and promotion are separate timings. The goal
+development integration, remote backup, and promotion are separate timings. The goal
 is never a deadline or reason to stop discovery, diagnosis, or a running build;
 complex work has no two-minute expectation. Report the installer immediately so
 user and agent testing can continue in parallel. Missing or corrupt inputs are a

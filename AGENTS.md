@@ -80,15 +80,31 @@ active memory owner.
 - Preserve recovery stashes and unrelated shared-worktree changes.
 - Never commit generated replay/build evidence, logs, binaries, credentials,
   private data, or temporary worktrees.
+- Maintained product work defaults to the one shared
+  `agent/delta-development` source worktree. Sessions serialize and coordinate
+  there. Create a topic worktree only for a concrete parallel collision or risky
+  isolation boundary.
+- The agent that creates a topic worktree owns its complete internal lifecycle:
+  focused verification, integration into `agent/delta-development`, remote
+  durability, and removal of its task worktree, local branch, and temporary remote
+  ref after integration. This cleanup has standing user authorization when exact
+  integration and ownership are proven. Never ask the user to manage these items.
 - Final local ZIP, setup, and checksum artifacts always go under the workspace's
   ignored `target/<target-triple>/release/` directory. Temporary directories are
   intermediates only; never report an external temporary path as the primary
   user-testable artifact.
-- The fixed local setup path is owned only by an
-  `agent/delta-combined-acceptance-*` source stack containing the current replay
-  plus every completed candidate selected for that acceptance batch. Individual
-  candidate worktrees use build-ID-isolated outputs and never produce or replace
-  the user-testable installer.
+- The fixed local setup path is owned only by the exact
+  `agent/delta-development` source stack. It contains the current replay plus every
+  completed development change. Topic worktrees use build-ID-isolated outputs and
+  never produce or replace a user-testable installer.
+- The user sees one development state and one cumulative installer. User-facing
+  handoffs contain only the path, hash, included outcomes, result, and next action.
+  Internal worktrees, branches, candidate refs, queues, and cleanup stay internal
+  unless an unresolved safety blocker requires a decision.
+- Every committed topic-worktree head must be contained in
+  `agent/delta-development` before its fixed installer can build. Uncommitted topic
+  work remains in progress and is never represented as completed user-testable
+  behavior.
 
 ## Product and implementation constraints
 

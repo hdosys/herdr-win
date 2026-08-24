@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 
 import net from "node:net";
 
@@ -53,6 +53,10 @@ function stateFromSessionStatus(status) {
   return typeof kind === "string"
     ? SESSION_STATE_BY_STATUS.get(kind)
     : undefined;
+}
+
+function isSessionAbort(error) {
+  return error?.name === "MessageAbortedError";
 }
 
 function promptEventKey(type, properties) {
@@ -176,13 +180,16 @@ export const HerdrAgentStatePlugin = async () => {
     return request("pane.report_agent_session", params);
   }
 
-  function reportState(state, sessionID) {
+  function reportState(state, sessionID, suppressCompletion = false) {
     if (disposed) {
       return Promise.resolve();
     }
     const params = { state };
     if (sessionID) {
       params.agent_session_id = sessionID;
+    }
+    if (suppressCompletion) {
+      params.suppress_completion = true;
     }
     return request("pane.report_agent", params);
   }
@@ -363,7 +370,7 @@ export const HerdrAgentStatePlugin = async () => {
     }
   }
 
-  async function reportIdleOrConfirmError(sessionID) {
+  async function reportIdleOrConfirmError(sessionID, suppressCompletion = false) {
     if (unscopedErrorBlocked || activePrompts.size > 0) {
       return;
     }
@@ -376,7 +383,7 @@ export const HerdrAgentStatePlugin = async () => {
       return;
     }
     clearSessionLifecycle(sessionID);
-    await reportState("idle", sessionID);
+    await reportState("idle", sessionID, suppressCompletion);
   }
 
   function dispose() {
@@ -512,6 +519,13 @@ export const HerdrAgentStatePlugin = async () => {
           await reportState("blocked", sessionID);
           break;
         case "session.error":
+          if (isSessionAbort(properties.error)) {
+            clearSessionLifecycle(sessionID);
+            if (sessionID) {
+              await reportIdleOrConfirmError(sessionID, true);
+            }
+            break;
+          }
           if (!sessionID) {
             unscopedErrorBlocked = true;
             await reportState("blocked");

@@ -842,6 +842,12 @@
       "title": "Notifications",
       "keys": [
         {
+          "key": "ui.notify_on_agent_completion",
+          "type": "boolean",
+          "default": "false",
+          "description": "Notify when a background agent finishes. Questions, permission prompts, and errors remain actionable regardless of this setting."
+        },
+        {
           "key": "ui.toast.delivery",
           "type": "enum",
           "default": "\"off\"",

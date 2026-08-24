@@ -712,6 +712,7 @@ impl App {
             accent: crate::config::parse_color(&config.ui.accent),
             sound: config.ui.sound.clone(),
             local_sound_playback: true,
+            notify_on_agent_completion: config.ui.notify_on_agent_completion,
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
             palette: theme_palette,
@@ -1570,6 +1571,7 @@ impl App {
                     self.state.request_client_config_reload = true;
                 }
                 self.state.sound = config.ui.sound.clone();
+                self.state.notify_on_agent_completion = config.ui.notify_on_agent_completion;
                 self.state.toast_config = config.ui.toast.clone();
             }
         }

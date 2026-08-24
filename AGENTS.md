@@ -81,11 +81,13 @@ active memory owner.
 - Never commit generated replay/build evidence, logs, binaries, credentials,
   private data, or temporary worktrees.
 - Maintained product work defaults to the one shared
-  `agent/delta-development` source worktree. Sessions serialize and coordinate
+  `candidate/development` source worktree. The local branch and its pushed
+  `origin/candidate/development` target use the same name and form the one
+  cumulative cross-session development state. Sessions serialize and coordinate
   there. Create a topic worktree only for a concrete parallel collision or risky
   isolation boundary.
 - The agent that creates a topic worktree owns its complete internal lifecycle:
-  focused verification, integration into `agent/delta-development`, remote
+  focused verification, integration into `candidate/development`, remote
   durability, and removal of its task worktree, local branch, and temporary remote
   ref after integration. This cleanup has standing user authorization when exact
   integration and ownership are proven. Never ask the user to manage these items.
@@ -94,7 +96,7 @@ active memory owner.
   intermediates only; never report an external temporary path as the primary
   user-testable artifact.
 - The fixed local setup path is owned only by the exact
-  `agent/delta-development` source stack. It contains the current replay plus every
+  `candidate/development` source stack. It contains the current replay plus every
   completed development change. Topic worktrees use build-ID-isolated outputs and
   never produce or replace a user-testable installer.
 - The user sees one development state and one cumulative installer. User-facing
@@ -102,7 +104,7 @@ active memory owner.
   Internal worktrees, branches, candidate refs, queues, and cleanup stay internal
   unless an unresolved safety blocker requires a decision.
 - Every committed topic-worktree head must be contained in
-  `agent/delta-development` before its fixed installer can build. Uncommitted topic
+  `candidate/development` before its fixed installer can build. Uncommitted topic
   work remains in progress and is never represented as completed user-testable
   behavior.
 

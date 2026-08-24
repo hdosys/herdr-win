@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.delta_workflow import DEVELOPMENT_BRANCH, DEVELOPMENT_REMOTE_REF
 from scripts.local_windows_installer import (
     DEFAULT_PATHS,
     InstallerIdentity,
@@ -24,6 +25,7 @@ from scripts.local_windows_installer import (
     _isolated_candidate_paths,
     _require_pushed_development_source,
     _require_one_focused_test,
+    _source_branch,
     parse_identity,
 )
 
@@ -109,7 +111,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
     def test_development_branch_defaults_to_canonical_output(self) -> None:
         self.assertEqual(
             _candidate_paths(
-                "agent/delta-development",
+                DEVELOPMENT_BRANCH,
                 BUILD_ID,
                 isolated=False,
             ),
@@ -119,7 +121,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
     def test_development_branch_can_force_isolated_outputs(self) -> None:
         self.assertEqual(
             _candidate_paths(
-                "agent/delta-development",
+                DEVELOPMENT_BRANCH,
                 BUILD_ID,
                 isolated=True,
             ),
@@ -139,10 +141,10 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             git.side_effect = ["", "a" * 40, "a" * 40]
 
             _require_pushed_development_source(
-                source, "agent/delta-development", isolated=False
+                source, DEVELOPMENT_BRANCH, isolated=False
             )
 
-            self.assertIn("refs/heads/candidate/development", run.call_args.args[1][-1])
+            self.assertIn(DEVELOPMENT_REMOTE_REF, run.call_args.args[1][-1])
 
         with (
             patch("scripts.local_windows_installer._git") as git,
@@ -151,8 +153,14 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         ):
             git.side_effect = ["", "a" * 40, "b" * 40]
             _require_pushed_development_source(
-                source, "agent/delta-development", isolated=False
+                source, DEVELOPMENT_BRANCH, isolated=False
             )
+
+    def test_source_branch_accepts_the_cumulative_development_branch(self) -> None:
+        with patch(
+            "scripts.local_windows_installer._git", return_value=DEVELOPMENT_BRANCH
+        ):
+            self.assertEqual(_source_branch(Path("C:/development")), DEVELOPMENT_BRANCH)
 
     def test_legacy_combined_branch_is_not_canonical(self) -> None:
         self.assertEqual(

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Sequence
 
 from scripts.delta_workflow import (
+    DEVELOPMENT_BRANCH,
+    DEVELOPMENT_REMOTE_REF,
     DeltaWorkflowError,
     _git_command,
     finalize_delta_mailbox,
@@ -173,6 +175,27 @@ class DeltaWorkflowTests(unittest.TestCase):
                 "2",
             )
 
+    def test_start_refuses_to_recreate_published_development_from_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            origin = Path(temp_dir) / "origin.git"
+            origin.mkdir()
+            run_git(origin, ["init", "--bare"])
+            run_git(fixture.control, ["remote", "add", "origin", str(origin)])
+            run_git(
+                fixture.control,
+                ["push", "origin", f"{fixture.base}:{DEVELOPMENT_REMOTE_REF}"],
+            )
+            worktrees = Path(temp_dir) / "worktrees"
+            worktrees.mkdir()
+
+            with self.assertRaisesRegex(
+                DeltaWorkflowError, "remote cumulative development branch already exists"
+            ):
+                start_delta_worktree(
+                    "development", worktrees / "development", fixture.control
+                )
+
     def test_materialize_replays_an_existing_task_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture = DeltaFixture(Path(temp_dir))
@@ -210,7 +233,8 @@ class DeltaWorkflowTests(unittest.TestCase):
             worktrees = Path(temp_dir) / "worktrees"
             worktrees.mkdir()
             worktree = worktrees / "development"
-            start_delta_worktree("development", worktree, fixture.control)
+            started = start_delta_worktree("development", worktree, fixture.control)
+            self.assertEqual(started.branch, DEVELOPMENT_BRANCH)
 
             result = publish_development_worktree(worktree, fixture.control)
 
@@ -222,7 +246,7 @@ class DeltaWorkflowTests(unittest.TestCase):
                         "ls-remote",
                         "--heads",
                         "origin",
-                        "refs/heads/candidate/development",
+                        DEVELOPMENT_REMOTE_REF,
                     ],
                 ).split()[0],
                 result.head,

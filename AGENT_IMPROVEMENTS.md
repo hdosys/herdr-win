@@ -81,7 +81,7 @@ configuration repository.
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Make one development stack the only local user installer
-  owner.** Product sessions default to the shared `agent/delta-development`
+  owner.** Product sessions default to the shared `candidate/development`
   worktree. Topic worktrees exist only for concrete internal isolation, default to
   build-ID-isolated outputs, and must be integrated and removed by their creator.
   Only the exact development branch writes the fixed setup, so every reported

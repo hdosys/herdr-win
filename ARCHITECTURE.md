@@ -35,9 +35,10 @@ behavior; code and tests remain the detailed implementation truth.
 - `patches/upstream/` is a frozen historical archive. `patches/delta/` is the only
   active product delta; `series` is the only application order.
 - Day-to-day maintained source has one integration state:
-  `agent/delta-development`. Its history starts from the current complete replay
-  and accumulates every completed development change. Topic worktrees are optional
-  internal parallel lanes, never alternative user-testable states.
+  `candidate/development`, with the same local and `origin` branch name. Its history
+  starts from the current complete replay and accumulates every completed
+  development change. Topic worktrees are optional internal parallel lanes, never
+  alternative user-testable states.
 - Only the exact development branch may write the fixed local installer. User
   acceptance identifies its exact source tree and authorizes folding every included
   change into the owning mailboxes. Promotion must reproduce that tree before the

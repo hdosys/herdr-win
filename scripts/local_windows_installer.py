@@ -223,7 +223,7 @@ def _source_root(path: Path) -> Path:
 
 def _source_branch(source: Path) -> str:
     branch = _git(source, ["symbolic-ref", "--short", "HEAD"])
-    if not branch.startswith("agent/delta-"):
+    if branch != DEVELOPMENT_BRANCH and not branch.startswith("agent/delta-"):
         raise LocalInstallerError(f"source worktree uses unsupported branch {branch!r}")
     return branch
 
@@ -236,6 +236,7 @@ def _require_pushed_development_source(
     status = _git(source, ["status", "--porcelain=v1", "--untracked-files=all"])
     if status:
         raise LocalInstallerError("development worktree must be clean before packaging")
+    remote_tracking_ref = f"refs/remotes/origin/{DEVELOPMENT_BRANCH}"
     _run(
         "git",
         _git_arguments(
@@ -244,18 +245,18 @@ def _require_pushed_development_source(
                 "fetch",
                 "--no-tags",
                 "origin",
-                f"{DEVELOPMENT_REMOTE_REF}:refs/remotes/origin/candidate/development",
+                f"{DEVELOPMENT_REMOTE_REF}:{remote_tracking_ref}",
             ],
         ),
         timeout=120,
     )
     local_head = _git(source, ["rev-parse", "HEAD"])
     remote_head = _git(
-        source, ["rev-parse", "refs/remotes/origin/candidate/development"]
+        source, ["rev-parse", remote_tracking_ref]
     )
     if local_head != remote_head:
         raise LocalInstallerError(
-            "development worktree must equal origin/candidate/development before packaging"
+            f"development worktree must equal origin/{DEVELOPMENT_BRANCH} before packaging"
         )
     try:
         unintegrated = unintegrated_topic_worktrees(PROJECT_ROOT, local_head)

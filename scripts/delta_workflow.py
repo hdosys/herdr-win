@@ -22,8 +22,8 @@ BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 PATCH_RE = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 TASK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 GIT_TIMEOUT_SECONDS = 120
-DEVELOPMENT_BRANCH = "agent/delta-development"
-DEVELOPMENT_REMOTE_REF = "refs/heads/candidate/development"
+DEVELOPMENT_BRANCH = "candidate/development"
+DEVELOPMENT_REMOTE_REF = f"refs/heads/{DEVELOPMENT_BRANCH}"
 
 
 class DeltaWorkflowError(RuntimeError):
@@ -173,10 +173,7 @@ def unintegrated_topic_worktrees(
 
     unintegrated: list[TopicWorktree] = []
     for worktree in linked:
-        if (
-            not worktree.branch.startswith("agent/delta-")
-            or worktree.branch == DEVELOPMENT_BRANCH
-        ):
+        if not worktree.branch.startswith("agent/delta-"):
             continue
         ancestor = _run_git(
             project_root,
@@ -378,9 +375,10 @@ def _require_clean_delta_worktree(
     branch = _run_git(
         worktree, ["symbolic-ref", "--short", "HEAD"], cwd=worktree
     ).stdout.strip()
-    if not branch.startswith("agent/delta-"):
+    if branch != DEVELOPMENT_BRANCH and not branch.startswith("agent/delta-"):
         raise DeltaWorkflowError(
-            f"source worktree must use an agent/delta-* branch, found {branch!r}"
+            "source worktree must use the cumulative development branch or an "
+            f"agent/delta-* topic branch, found {branch!r}"
         )
 
     status = _run_git(
@@ -1017,8 +1015,22 @@ def start_delta_worktree(
     _require_clean_delta(project_root)
 
     base = _read_base(project_root)
-    branch = f"agent/delta-{name}"
+    branch = DEVELOPMENT_BRANCH if name == "development" else f"agent/delta-{name}"
     _run_git(project_root, ["check-ref-format", "--branch", branch])
+    if branch == DEVELOPMENT_BRANCH:
+        remote_exists = _run_git(
+            project_root,
+            ["ls-remote", "--exit-code", "--heads", "origin", DEVELOPMENT_REMOTE_REF],
+            check=False,
+        )
+        if remote_exists.returncode == 0:
+            raise DeltaWorkflowError(
+                "remote cumulative development branch already exists; create the "
+                "local development branch from its exact fetched tip"
+            )
+        if remote_exists.returncode != 2:
+            detail = remote_exists.stderr.strip() or "could not inspect remote branch"
+            raise DeltaWorkflowError(detail)
     branch_exists = _run_git(
         project_root,
         ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -1059,7 +1071,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--worktree",
         required=True,
         type=Path,
-        help="absolute path to an existing agent/delta-* worktree at BASE",
+        help="absolute path to an existing delta worktree at BASE",
     )
 
     publish_development = commands.add_parser(
@@ -1070,7 +1082,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--worktree",
         required=True,
         type=Path,
-        help="absolute path to the shared agent/delta-development worktree",
+        help=f"absolute path to the shared {DEVELOPMENT_BRANCH} worktree",
     )
 
     check = commands.add_parser(

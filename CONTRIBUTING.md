@@ -48,21 +48,33 @@ development build starts from recorded `BASE`, so every finished product
 change must still be represented by the canonical queue.
 
 Maintained product-source work uses one long-lived shared worktree on
-`agent/delta-development`. Documentation and control-plane changes stay in the
-control checkout. Ordinary sessions reopen, coordinate, and work directly in that
-development tree. They do not create a worktree per issue.
+`candidate/development`. Its local branch and remote
+`origin/candidate/development` target use the same name and are the repository's
+one cumulative development state. Documentation and control-plane changes stay in
+the control checkout. Ordinary sessions reopen, coordinate, and work directly in
+that development tree. They do not create a worktree per issue.
 
-Create the development tree once from the exact local commit recorded in `BASE`,
-replay the queue, and publish its internal durability ref:
+Integrate every completed topic into `candidate/development` immediately after its
+focused check and push that cumulative branch. User acceptance gates patch-queue
+promotion, not routine integration of completed development work.
+
+Only when `candidate/development` does not yet exist locally or on `origin`, create
+the development tree from the exact local commit recorded in `BASE`, replay the
+queue, and publish it:
 
 ```powershell
 $control = (Get-Location).Path
 $base = (Get-Content -LiteralPath patches/delta/BASE -Raw).Trim()
-$created = herdr worktree create --cwd $control --branch "agent/delta-development" --base $base --no-focus --json | ConvertFrom-Json
+$created = herdr worktree create --cwd $control --branch "candidate/development" --base $base --no-focus --json | ConvertFrom-Json
 python scripts/delta_workflow.py materialize --worktree $created.result.worktree.path
 python scripts/delta_workflow.py publish-development `
   --worktree $created.result.worktree.path
 ```
+
+After that first publication, `origin/candidate/development` is the authoritative
+recovery source for the cumulative line. Reopen its registered worktree, or in a
+fresh checkout create the same local branch from the exact fetched remote tip.
+Never reconstruct it from `BASE` while the remote branch exists.
 
 `materialize` validates the checkout, shared repository identity, exact `BASE`,
 and clean state before applying `series` once with `git am --3way`. Its Git trust is
@@ -72,10 +84,10 @@ upstream.
 Create a topic worktree only for a concrete parallel collision or risky isolation
 boundary. Base it on the exact current development commit, not `BASE`. The creating
 agent owns integration, remote durability, and complete cleanup. After its focused
-check, merge the finished commit into `agent/delta-development`, push
-`HEAD:refs/heads/candidate/development`, then remove the topic worktree, local
-branch, and any temporary remote ref. Never ask the user to classify or clean these
-internal resources.
+check, merge the finished commit into `candidate/development`, publish it through
+`delta_workflow.py publish-development`, then remove the topic worktree, local
+branch, and any temporary remote ref. Never ask the user to classify or clean
+these internal resources.
 
 For every interactive development update:
 
@@ -160,7 +172,7 @@ mailbox churn are not substitutes for source review plus exact tree identity.
 
 The control checkout owns one thin local entrypoint that reuses the materialized
 source packager. It adds no installer implementation. Only the exact
-`agent/delta-development` branch writes
+`candidate/development` branch writes
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`, which
 is the one artifact reported for user testing. It always contains the current replay
 plus every completed change integrated into the development branch. Topic branches

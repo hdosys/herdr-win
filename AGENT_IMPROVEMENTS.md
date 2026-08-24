@@ -102,6 +102,19 @@ configuration repository.
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Retier optimization-insensitive unit tests out of the local
+  installer release-build path.** Evidence: the background-worktree-focus candidate
+  spent 240.039 seconds compiling and running one exact release-profile unit test,
+  then another 147.156 seconds compiling the three production binaries; the full
+  candidate took 420.254 seconds. Run pure behavior filters through the existing
+  normal `just test-one` iteration gate before publication, then let the candidate
+  build only the packaged release binaries. Keep the release-profile filter for
+  tests whose signal actually depends on optimization or a native release boundary.
+  Expected benefit: remove a second serial release compilation from ordinary
+  behavior-fix installer delivery while preserving one focused product check.
+  Owner: `scripts/local_windows_installer.py`, `justfile`, their focused tests, and
+  the Candidate procedure in `CONTRIBUTING.md`.
+
 - **Status: done. Make `just test-one` select Windows-valid Rust targets.**
   The Windows recipe now runs through native PowerShell and constrains nextest to
   the `herdr` binary while the existing non-Windows path remains unchanged.

@@ -11,12 +11,22 @@ pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
+const OPENCODE_LOCAL_SERVER_ARGS: [&str; 3] = ["--hostname=127.0.0.1", "--port=0", "--no-mdns"];
 
 fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
         && name.len() <= 32
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+}
+
+fn agent_launch_argv(kind: crate::detect::Agent, args: Vec<String>) -> Vec<String> {
+    let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
+    if kind == crate::detect::Agent::OpenCode && args.is_empty() {
+        argv.extend(OPENCODE_LOCAL_SERVER_ARGS.map(str::to_string));
+    }
+    argv.extend(args);
+    argv
 }
 
 impl App {
@@ -372,8 +382,7 @@ impl App {
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
-        argv.extend(params.args);
+        let argv = agent_launch_argv(kind, params.args);
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
@@ -648,7 +657,7 @@ pub(super) enum AgentRenameError {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_agent_name;
+    use super::{agent_launch_argv, valid_agent_name};
     use std::time::Instant;
 
     #[test]
@@ -668,6 +677,21 @@ mod tests {
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
         }
+    }
+
+    #[test]
+    fn managed_opencode_root_exposes_only_an_ephemeral_local_server() {
+        assert_eq!(
+            agent_launch_argv(crate::detect::Agent::OpenCode, Vec::new()),
+            ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns",]
+        );
+        assert_eq!(
+            agent_launch_argv(
+                crate::detect::Agent::OpenCode,
+                vec!["attach".into(), "http://127.0.0.1:4096".into()],
+            ),
+            ["opencode", "attach", "http://127.0.0.1:4096"]
+        );
     }
 
     #[tokio::test]

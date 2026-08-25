@@ -2,8 +2,9 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=11
+// HERDR_INTEGRATION_VERSION=12
 
+import { createHash } from "node:crypto";
 import net from "node:net";
 
 const SOURCE = "herdr:opencode";
@@ -13,6 +14,11 @@ let reportSeq = Date.now() * 1000;
 const ERROR_FALLBACK_MS = 5_000;
 const ERROR_RETRY_GRACE_MS = 1_000;
 const ERROR_MAX_FALLBACK_MS = 2_147_483_647;
+const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
+const SUBAGENT_START_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_CHARACTERS = 64 * 1024;
+const WIDE_SPLIT_ASPECT_RATIO = 2;
+const SERVER_PROBE_TIMEOUT_MS = 500;
 
 const CHILD_EVENT_STATES = new Map([
   ["permission.asked", "blocked"],
@@ -72,7 +78,7 @@ function promptEventKey(type, properties) {
     : undefined;
 }
 
-export const HerdrAgentStatePlugin = async () => {
+export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
   if (
     process.env.HERDR_ENV !== "1" ||
     !process.env.HERDR_SOCKET_PATH ||
@@ -84,21 +90,24 @@ export const HerdrAgentStatePlugin = async () => {
   let requestChain = Promise.resolve();
   let currentRootSessionID;
   let unscopedErrorBlocked = false;
+  let disposing = false;
   let disposed = false;
   const sessionLifecycle = new Map();
   const activePrompts = new Map();
-  const childParents = new Map();
+  const children = new Map();
   const retiredChildren = new Set();
   const serverCreatedSessions = new Set();
   const activeClients = new Map();
 
-  function requestOnce(method, params) {
-    if (disposed) {
+  const attachServerUrl = serverUrl instanceof URL ? serverUrl.toString() : undefined;
+  const defaultDirectory = typeof directory === "string" && directory ? directory : undefined;
+
+  function requestOnce(method, params, allowWhileDisposing = false) {
+    if (disposed || (disposing && !allowWhileDisposing)) {
       return Promise.resolve();
     }
-    const paneId = process.env.HERDR_PANE_ID;
     const socketPath = process.env.HERDR_SOCKET_PATH;
-    if (!paneId || !socketPath) {
+    if (!socketPath) {
       return Promise.resolve();
     }
 
@@ -109,24 +118,19 @@ export const HerdrAgentStatePlugin = async () => {
         .toString()
         .padStart(6, "0")}`,
       method,
-      params: {
-        pane_id: paneId,
-        source: SOURCE,
-        agent: AGENT,
-        seq: nextReportSeq(),
-        ...params,
-      },
+      params,
     };
 
     return new Promise((resolve) => {
-      if (disposed) {
+      if (disposed || (disposing && !allowWhileDisposing)) {
         resolve();
         return;
       }
 
       let client;
+      let responseBuffer = "";
       let finished = false;
-      const finish = () => {
+      const finish = (response) => {
         if (finished) {
           return;
         }
@@ -135,38 +139,94 @@ export const HerdrAgentStatePlugin = async () => {
           activeClients.delete(client);
           client.destroy();
         }
-        resolve();
+        resolve(response);
+      };
+      const finishFromBuffer = () => {
+        const line = responseBuffer.trim();
+        if (line) {
+          try {
+            const response = JSON.parse(line);
+            if (response?.id === request.id) {
+              finish(response);
+              return;
+            }
+          } catch {
+            // A closed or timed-out socket without a complete response is best effort.
+          }
+        }
+        finish();
+      };
+      const receive = (chunk) => {
+        if (chunk === undefined) {
+          return;
+        }
+        responseBuffer += chunk.toString();
+        if (responseBuffer.length > MAX_RESPONSE_CHARACTERS) {
+          finish();
+          return;
+        }
+        let newline = responseBuffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = responseBuffer.slice(0, newline).trim();
+          responseBuffer = responseBuffer.slice(newline + 1);
+          if (line) {
+            try {
+              const response = JSON.parse(line);
+              if (response?.id === request.id) {
+                finish(response);
+                return;
+              }
+            } catch {
+              // Ignore unrelated malformed lines and keep the bounded response open.
+            }
+          }
+          newline = responseBuffer.indexOf("\n");
+        }
       };
 
       client = net.createConnection(socketEndpoint, () => {
-        if (disposed) {
+        if (disposed || (disposing && !allowWhileDisposing)) {
           finish();
           return;
         }
         client.write(`${JSON.stringify(request)}\n`);
       });
       activeClients.set(client, finish);
-      if (disposed) {
+      if (disposed || (disposing && !allowWhileDisposing)) {
         finish();
         return;
       }
       client.setTimeout(500, finish);
-      client.on("data", finish);
+      client.on("data", receive);
       client.on("error", finish);
-      client.on("end", finish);
-      client.on("close", finish);
+      client.on("end", finishFromBuffer);
+      client.on("close", finishFromBuffer);
     });
   }
 
-  function request(method, params) {
+  function request(method, params, allowWhileDisposing = false) {
     const pending = requestChain.then(() => {
-      if (disposed) {
+      if (disposed || (disposing && !allowWhileDisposing)) {
         return;
       }
-      return requestOnce(method, params);
+      return requestOnce(method, params, allowWhileDisposing);
     });
     requestChain = pending.catch(() => {});
     return pending;
+  }
+
+  function reportRequest(method, params) {
+    const paneId = process.env.HERDR_PANE_ID;
+    if (!paneId) {
+      return Promise.resolve();
+    }
+    return request(method, {
+      pane_id: paneId,
+      source: SOURCE,
+      agent: AGENT,
+      seq: nextReportSeq(),
+      ...params,
+    });
   }
 
   function reportSession(sessionID, sessionStartSource) {
@@ -177,7 +237,7 @@ export const HerdrAgentStatePlugin = async () => {
     if (sessionStartSource) {
       params.session_start_source = sessionStartSource;
     }
-    return request("pane.report_agent_session", params);
+    return reportRequest("pane.report_agent_session", params);
   }
 
   function reportState(state, sessionID, suppressCompletion = false) {
@@ -191,7 +251,177 @@ export const HerdrAgentStatePlugin = async () => {
     if (suppressCompletion) {
       params.suppress_completion = true;
     }
-    return request("pane.report_agent", params);
+    return reportRequest("pane.report_agent", params);
+  }
+
+  function responseResult(response, expectedType) {
+    const result = response?.result;
+    return result?.type === expectedType ? result : undefined;
+  }
+
+  async function serverAcceptsAttach() {
+    if (!attachServerUrl) {
+      return false;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SERVER_PROBE_TIMEOUT_MS);
+    timeout.unref?.();
+    try {
+      const response = await fetch(new URL("/global/health", attachServerUrl), {
+        signal: controller.signal,
+      });
+      await response.body?.cancel();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function subagentName(sessionID) {
+    const suffix = createHash("sha256").update(sessionID).digest("hex").slice(0, 12);
+    return `opencode-${suffix}`;
+  }
+
+  function childDirectory(info) {
+    return typeof info?.directory === "string" && info.directory
+      ? info.directory
+      : defaultDirectory;
+  }
+
+  function paneRect(layout, paneID) {
+    const pane = layout?.panes?.find((candidate) => candidate?.pane_id === paneID);
+    const rect = pane?.rect;
+    return typeof rect?.width === "number" && typeof rect?.height === "number"
+      ? rect
+      : undefined;
+  }
+
+  function splitTarget(layout) {
+    const rootPaneID = process.env.HERDR_PANE_ID;
+    if (!rootPaneID) {
+      return undefined;
+    }
+    const activePanes = new Set(
+      [...children.values()].map((child) => child.paneID).filter(Boolean),
+    );
+    const candidates = Array.isArray(layout?.panes)
+      ? layout.panes.filter((pane) => activePanes.has(pane?.pane_id))
+      : [];
+    let targetPaneID = rootPaneID;
+    let rect = paneRect(layout, rootPaneID);
+    // Keep the root stable after the first split and divide the largest child area.
+    for (const candidate of candidates) {
+      const candidateRect = candidate?.rect;
+      if (
+        typeof candidateRect?.width !== "number" ||
+        typeof candidateRect?.height !== "number"
+      ) {
+        continue;
+      }
+      const candidateArea = candidateRect.width * candidateRect.height;
+      const selectedArea = rect ? rect.width * rect.height : -1;
+      if (candidateArea > selectedArea || targetPaneID === rootPaneID) {
+        targetPaneID = candidate.pane_id;
+        rect = candidateRect;
+      }
+    }
+    return {
+      paneID: targetPaneID,
+      direction:
+        rect && rect.width < rect.height * WIDE_SPLIT_ASPECT_RATIO ? "down" : "right",
+    };
+  }
+
+  function closeChildPane(sessionID, allowWhileDisposing = false) {
+    const child = children.get(sessionID);
+    const paneID = child?.paneID;
+    if (child) {
+      child.paneID = undefined;
+    }
+    if (!paneID) {
+      return Promise.resolve();
+    }
+    return request("pane.close", { pane_id: paneID }, allowWhileDisposing);
+  }
+
+  async function openChildPane(sessionID) {
+    const child = children.get(sessionID);
+    const info = child?.info;
+    const rootPaneID = process.env.HERDR_PANE_ID;
+    if (
+      disposed ||
+      disposing ||
+      !attachServerUrl ||
+      !rootPaneID ||
+      typeof sessionID !== "string" ||
+      !sessionID ||
+      !child ||
+      !info ||
+      info.parentID !== currentRootSessionID ||
+      retiredChildren.has(sessionID) ||
+      !child.working ||
+      child.paneID ||
+      child.spawning
+    ) {
+      return;
+    }
+
+    child.spawning = true;
+    try {
+      if (!(await serverAcceptsAttach()) || disposing || retiredChildren.has(sessionID)) {
+        return;
+      }
+      const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
+      const layout = responseResult(layoutResponse, "pane_layout")?.layout;
+      const target = splitTarget(layout);
+      if (
+        disposing ||
+        !target ||
+        !child.working ||
+        retiredChildren.has(sessionID)
+      ) {
+        return;
+      }
+
+      const directory = childDirectory(info);
+      const splitResponse = await request("pane.split", {
+        target_pane_id: target.paneID,
+        direction: target.direction,
+        ...(directory ? { cwd: directory } : {}),
+        focus: false,
+        env: { [SUBAGENT_SESSION_ENV]: sessionID },
+      });
+      const paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
+      if (typeof paneID !== "string" || !paneID) {
+        return;
+      }
+      if (disposing || !child.working || retiredChildren.has(sessionID)) {
+        await request("pane.close", { pane_id: paneID }, disposing);
+        return;
+      }
+
+      child.paneID = paneID;
+      const startResponse = await request("agent.start", {
+        name: subagentName(sessionID),
+        kind: AGENT,
+        pane_id: paneID,
+        args: [
+          "attach",
+          attachServerUrl,
+          "--session",
+          sessionID,
+          ...(directory ? ["--dir", directory] : []),
+        ],
+        timeout_ms: SUBAGENT_START_TIMEOUT_MS,
+      });
+      if (!responseResult(startResponse, "agent_started")) {
+        await closeChildPane(sessionID, disposing);
+      }
+    } finally {
+      child.spawning = false;
+    }
   }
 
   function lifecycleFor(sessionID) {
@@ -253,24 +483,26 @@ export const HerdrAgentStatePlugin = async () => {
 
   function retireChild(sessionID) {
     if (!sessionID) {
-      return;
+      return Promise.resolve();
     }
     clearPromptsForSession(sessionID);
-    childParents.delete(sessionID);
+    const closing = closeChildPane(sessionID);
+    children.delete(sessionID);
     retiredChildren.add(sessionID);
+    return closing;
   }
 
   function retireChildrenOutsideRoot(rootSessionID) {
-    for (const [childSessionID, parentSessionID] of childParents) {
-      if (parentSessionID !== rootSessionID) {
-        retireChild(childSessionID);
+    for (const [childSessionID, child] of children) {
+      if (child.info.parentID !== rootSessionID) {
+        void retireChild(childSessionID);
       }
     }
   }
 
   function retireAllChildren() {
-    for (const childSessionID of [...childParents.keys()]) {
-      retireChild(childSessionID);
+    for (const childSessionID of [...children.keys()]) {
+      void retireChild(childSessionID);
     }
   }
 
@@ -386,34 +618,38 @@ export const HerdrAgentStatePlugin = async () => {
     await reportState("idle", sessionID, suppressCompletion);
   }
 
-  function dispose() {
-    if (disposed) {
+  async function dispose() {
+    if (disposed || disposing) {
       return;
     }
+    disposing = true;
+    for (const finish of [...activeClients.values()]) {
+      finish();
+    }
+    activeClients.clear();
+    await Promise.all(
+      [...children.keys()].map((sessionID) => closeChildPane(sessionID, true)),
+    );
     disposed = true;
     for (const lifecycle of sessionLifecycle.values()) {
       clearPendingError(lifecycle);
     }
     sessionLifecycle.clear();
     activePrompts.clear();
-    childParents.clear();
+    children.clear();
     retiredChildren.clear();
     serverCreatedSessions.clear();
     currentRootSessionID = undefined;
     unscopedErrorBlocked = false;
-    for (const finish of [...activeClients.values()]) {
-      finish();
-    }
-    activeClients.clear();
     requestChain = Promise.resolve();
   }
 
   return {
     "chat.message": async ({ sessionID }) => {
       if (
-        disposed ||
+        disposed || disposing ||
         (sessionID &&
-          (retiredChildren.has(sessionID) || childParents.has(sessionID)))
+          (retiredChildren.has(sessionID) || children.has(sessionID)))
       ) {
         return;
       }
@@ -423,7 +659,7 @@ export const HerdrAgentStatePlugin = async () => {
       }
     },
     event: async ({ event }) => {
-      if (disposed) {
+      if (disposed || disposing) {
         return;
       }
       const type = event?.type;
@@ -432,7 +668,7 @@ export const HerdrAgentStatePlugin = async () => {
       const info = properties.info;
 
       if (type === "session.deleted" && info?.id && info.parentID) {
-        retireChild(info.id);
+        await retireChild(info.id);
         return;
       }
 
@@ -445,17 +681,39 @@ export const HerdrAgentStatePlugin = async () => {
 
       if (info?.id && info.parentID) {
         if (!currentRootSessionID || info.parentID === currentRootSessionID) {
-          childParents.set(info.id, info.parentID);
+          const child = children.get(info.id) ?? {
+            info,
+            working: false,
+            spawning: false,
+            paneID: undefined,
+          };
+          child.info = info;
+          children.set(info.id, child);
+          if (type === "session.created" && info.parentID === currentRootSessionID) {
+            child.working = true;
+            await openChildPane(info.id);
+          }
         } else {
-          retireChild(info.id);
+          await retireChild(info.id);
         }
         return;
       }
 
-      if (sessionID && childParents.has(sessionID)) {
+      if (sessionID && children.has(sessionID)) {
         if (type === "session.deleted") {
-          retireChild(sessionID);
+          await retireChild(sessionID);
           return;
+        }
+        const childStatus = type === "session.status"
+          ? stateFromSessionStatus(properties.status)
+          : undefined;
+        const child = children.get(sessionID);
+        if (childStatus === "working") {
+          child.working = true;
+          await openChildPane(sessionID);
+        } else if (childStatus === "idle" || type === "session.idle") {
+          child.working = false;
+          await closeChildPane(sessionID);
         }
         const state = updatePromptState(type, properties, sessionID)
           ?? CHILD_EVENT_STATES.get(type);

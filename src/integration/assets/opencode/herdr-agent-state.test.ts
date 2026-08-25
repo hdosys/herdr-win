@@ -1,38 +1,45 @@
-import { beforeEach, expect, mock, test, vi } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
 
 const requests: unknown[] = [];
 const clients: FakeClient[] = [];
 const requestWaiters: Array<() => void> = [];
+const methodResults = new Map<string, unknown[]>();
 let autoAcknowledge = true;
 let importCounter = 0;
+let originalFetch: typeof globalThis.fetch;
 
 type FakeClient = {
   destroyed: boolean;
-  emit: (event: string) => void;
+  emit: (event: string, data?: unknown) => void;
 };
 
 mock.module("node:net", () => ({
   default: {
     createConnection(_path: string, onConnect: () => void) {
-      const handlers = new Map<string, () => void>();
+      const handlers = new Map<string, (data?: unknown) => void>();
       const client = {
         destroyed: false,
         write(input: string) {
-          requests.push(JSON.parse(input.trim()));
+          const request = JSON.parse(input.trim());
+          requests.push(request);
           requestWaiters.shift()?.();
           if (autoAcknowledge) {
-            queueMicrotask(() => client.emit("data"));
+            const results = methodResults.get(request.method);
+            const result = results?.shift() ?? { type: "ok" };
+            queueMicrotask(() => {
+              client.emit("data", `${JSON.stringify({ id: request.id, result })}\n`);
+            });
           }
         },
         setTimeout() {},
-        on(event: string, handler: () => void) {
+        on(event: string, handler: (data?: unknown) => void) {
           handlers.set(event, handler);
         },
         destroy() {
           client.destroyed = true;
         },
-        emit(event: string) {
-          handlers.get(event)?.();
+        emit(event: string, data?: unknown) {
+          handlers.get(event)?.(data);
         },
       };
       clients.push(client);
@@ -46,10 +53,17 @@ beforeEach(() => {
   requests.length = 0;
   clients.length = 0;
   requestWaiters.length = 0;
+  methodResults.clear();
   autoAcknowledge = true;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 200 });
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
 });
 
 async function loadPluginFactory() {
@@ -58,12 +72,29 @@ async function loadPluginFactory() {
   return HerdrAgentStatePlugin;
 }
 
-async function loadPlugin() {
-  return (await loadPluginFactory())();
+async function loadPlugin(context?: { directory?: string; serverUrl?: URL }) {
+  return (await loadPluginFactory())(context);
 }
 
 function waitForNextRequest(): Promise<void> {
   return new Promise((resolve) => requestWaiters.push(resolve));
+}
+
+function enqueueResult(method: string, result: unknown) {
+  const results = methodResults.get(method) ?? [];
+  results.push(result);
+  methodResults.set(method, results);
+}
+
+function acknowledgeRequest(clientIndex: number, requestIndex: number) {
+  const request = requests[requestIndex];
+  if (!isRecord(request) || typeof request.id !== "string") {
+    throw new Error("missing request id");
+  }
+  clients[clientIndex]?.emit(
+    "data",
+    `${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`,
+  );
 }
 
 function sessionStatusEvent(sessionID: string, status: Record<string, unknown>) {
@@ -130,10 +161,10 @@ test("serializes lifecycle reports", async () => {
   });
   expect(clients).toHaveLength(1);
 
-  clients[0]?.emit("data");
+  acknowledgeRequest(0, 0);
   await secondDispatched;
   expect(clients).toHaveLength(2);
-  clients[1]?.emit("data");
+  acknowledgeRequest(1, 1);
   await Promise.all([working, idle]);
 
   expect(requests.map(requestState)).toEqual(["working", "idle"]);
@@ -466,6 +497,129 @@ test("chat.message establishes new root ownership", async () => {
     "pane.report_agent",
   ]);
   expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
+});
+
+test("opens direct child sessions in adaptive same-tab splits", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+
+  enqueueResult("pane.layout", {
+    type: "pane_layout",
+    layout: {
+      panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
+    },
+  });
+  enqueueResult("pane.split", {
+    type: "pane_info",
+    pane: { pane_id: "test:p2" },
+  });
+  enqueueResult("agent.start", {
+    type: "agent_started",
+    agent: { pane_id: "test:p2" },
+    argv: [],
+  });
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-one",
+        info: {
+          id: "child-one",
+          parentID: "root-session",
+          directory: "C:\\repo\\one",
+        },
+      },
+    },
+  });
+
+  enqueueResult("pane.layout", {
+    type: "pane_layout",
+    layout: {
+      panes: [
+        { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+        { pane_id: "test:p2", rect: { width: 90, height: 50 } },
+      ],
+    },
+  });
+  enqueueResult("pane.split", {
+    type: "pane_info",
+    pane: { pane_id: "test:p3" },
+  });
+  enqueueResult("agent.start", {
+    type: "agent_started",
+    agent: { pane_id: "test:p3" },
+    argv: [],
+  });
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-two",
+        info: { id: "child-two", parentID: "root-session" },
+      },
+    },
+  });
+
+  const splits = requests.filter((request) => requestMethod(request) === "pane.split");
+  expect(splits).toHaveLength(2);
+  expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
+  expect(requestParam(splits[0], "direction")).toBe("right");
+  expect(requestParam(splits[0], "focus")).toBe(false);
+  expect(requestParam(splits[0], "cwd")).toBe("C:\\repo\\one");
+  expect(requestParam(splits[0], "env")).toEqual({
+    HERDR_OPENCODE_SUBAGENT_SESSION_ID: "child-one",
+  });
+  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p2");
+  expect(requestParam(splits[1], "direction")).toBe("down");
+
+  const starts = requests.filter((request) => requestMethod(request) === "agent.start");
+  expect(starts).toHaveLength(2);
+  expect(requestParam(starts[0], "name")).toMatch(/^opencode-[0-9a-f]{12}$/);
+  expect(requestParam(starts[0], "kind")).toBe("opencode");
+  expect(requestParam(starts[0], "pane_id")).toBe("test:p2");
+  expect(requestParam(starts[0], "args")).toEqual([
+    "attach",
+    "http://127.0.0.1:4096/",
+    "--session",
+    "child-one",
+    "--dir",
+    "C:\\repo\\one",
+  ]);
+  expect(requestParam(starts[0], "timeout_ms")).toBe(30_000);
+  expect(requestParam(starts[0], "source")).toBeUndefined();
+
+  requests.length = 0;
+  await plugin.event(sessionStatusEvent("child-one", { type: "idle" }));
+  expect(requests.map(requestMethod)).toEqual(["pane.close"]);
+  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+});
+
+test("does not split when the root OpenCode server is not externally reachable", async () => {
+  globalThis.fetch = async () => {
+    throw new Error("connection refused");
+  };
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+
+  expect(requests).toHaveLength(0);
 });
 
 test("same-root chat cannot clear an unscoped error block", async () => {

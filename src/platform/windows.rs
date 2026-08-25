@@ -105,6 +105,7 @@ const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
 const INTERACTIVE_SERVER_BOOTSTRAP_ARG: &str = "--herdr-private-interactive-server-bootstrap-v1";
 const INTERACTIVE_SERVER_BOOTSTRAP_FILE: &str = "bootstrap.json";
+const INTERACTIVE_SERVER_BOOTSTRAP_DIR: &str = "server-launch";
 const INTERACTIVE_SERVER_BOOTSTRAP_MAX_BYTES: u64 = 1024 * 1024;
 const INTERACTIVE_SERVER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 const INTERACTIVE_SERVER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -906,7 +907,9 @@ impl PendingInteractiveServerBootstrap {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let counter = NEXT_SERVER_BOOTSTRAP.fetch_add(1, AtomicOrdering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let base = interactive_server_bootstrap_base()?;
+        std::fs::create_dir_all(&base)?;
+        let root = base.join(format!(
             "herdr-server-launch-{:x}-{timestamp:x}-{counter:x}",
             std::process::id()
         ));
@@ -961,6 +964,17 @@ impl PendingInteractiveServerBootstrap {
     fn transfer_to_server(&mut self) {
         self.cleanup = false;
     }
+}
+
+fn interactive_server_bootstrap_base() -> std::io::Result<PathBuf> {
+    let base = crate::config::state_dir().join(INTERACTIVE_SERVER_BOOTSTRAP_DIR);
+    if !base.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "interactive server state path must be absolute",
+        ));
+    }
+    Ok(base)
 }
 
 impl Drop for PendingInteractiveServerBootstrap {
@@ -1065,7 +1079,7 @@ fn validate_interactive_server_bootstrap_path(path: &std::path::Path) -> std::io
             "interactive server bootstrap state path is invalid",
         ));
     }
-    let temp = std::path::absolute(std::env::temp_dir())?;
+    let base = interactive_server_bootstrap_base()?;
     let root = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1073,7 +1087,7 @@ fn validate_interactive_server_bootstrap_path(path: &std::path::Path) -> std::io
         )
     })?;
     let root_name = root.file_name().and_then(OsStr::to_str).unwrap_or_default();
-    if root.parent() != Some(temp.as_path())
+    if root.parent() != Some(base.as_path())
         || !root_name.starts_with("herdr-server-launch-")
         || !root_name
             .trim_start_matches("herdr-server-launch-")
@@ -3488,6 +3502,23 @@ mod tests {
             "HERDR_INTERACTIVE_SERVER_PID=41\nHERDR_INTERACTIVE_SERVER_PID=42\n"
         )
         .is_err());
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_uses_session_stable_state_base() {
+        let mut command = Command::new(std::env::current_exe().expect("resolve test executable"));
+        command.arg("server");
+
+        let pending = super::PendingInteractiveServerBootstrap::create(&command)
+            .expect("create interactive server bootstrap");
+        let expected_base =
+            crate::config::state_dir().join(super::INTERACTIVE_SERVER_BOOTSTRAP_DIR);
+        assert_eq!(pending.root.parent(), Some(expected_base.as_path()));
+        assert_eq!(
+            super::validate_interactive_server_bootstrap_path(&pending.path)
+                .expect("validate interactive server bootstrap path"),
+            pending.path
+        );
     }
 
     #[test]

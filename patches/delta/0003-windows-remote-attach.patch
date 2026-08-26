@@ -1,7 +1,7 @@
 From 9c57b71818d22982c8ec6c28a05ec16b323f5f04 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
-Subject: [PATCH 2/10] feat(remote): support Windows SSH hosts
+Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
 
 ---
  Cargo.lock                                    |  213 --

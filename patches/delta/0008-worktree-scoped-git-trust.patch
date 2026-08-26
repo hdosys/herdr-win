@@ -1,16 +1,35 @@
-From f3f59a382b98bee3837e7cdf2b4a000e56208acd Mon Sep 17 00:00:00 2001
+From d357f4786bddca0d0730e6b46aeb08bc4d715d31 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 17:49:01 +0200
 Subject: [PATCH 7/10] fix(worktree): scope Git trust to selected paths
 
 refs #3044
 ---
+ CHANGELOG.md                      |   3 +
  docs/next/CHANGELOG.md            |   3 +
- src/app/api/worktrees/deferred.rs |   3 +-
- src/app/worktrees.rs              |   6 +-
+ src/app/api/worktrees/deferred.rs |  17 ++++-
+ src/app/runtime.rs                |   9 ++-
+ src/app/worktrees.rs              |  28 ++++++--
+ src/pane.rs                       |  22 +++++-
+ src/pty/actor.rs                  |  33 +++++++--
+ src/terminal/runtime.rs           |   4 +-
  src/worktree.rs                   | 107 ++++++++++++++++++++++--------
- 4 files changed, 89 insertions(+), 30 deletions(-)
+ 9 files changed, 182 insertions(+), 44 deletions(-)
 
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 576a7abcdf532aad296c5bb7a0092393d92808c1..07da9d2b86c17639a06bf8c981010a292fa00933 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,9 @@
+ ### Added
+ - Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
+ 
++### Fixed
++- Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
++
+ ## [0.8.2] - 2026-08-19
+ 
+ ### Added
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4399782d932362f79a99f8aa596aa7728b84d860..4048b9fef48bda76a7063882fb053f84ec68a3ed 100644
 --- a/docs/next/CHANGELOG.md
@@ -26,7 +45,7 @@ index 4399782d932362f79a99f8aa596aa7728b84d860..4048b9fef48bda76a7063882fb053f84
  
  ### Added
 diff --git a/src/app/api/worktrees/deferred.rs b/src/app/api/worktrees/deferred.rs
-index 3cd5e9f1f502b9ee487eb5c35099bbe0e0214337..75500a0a60b787f6e037ec5bbef0c1b616086827 100644
+index 3cd5e9f1f502b9ee487eb5c35099bbe0e0214337..6afe4319e7b07b747b0f61c992c94531b17eae89 100644
 --- a/src/app/api/worktrees/deferred.rs
 +++ b/src/app/api/worktrees/deferred.rs
 @@ -259,7 +259,8 @@ impl App {
@@ -39,8 +58,54 @@ index 3cd5e9f1f502b9ee487eb5c35099bbe0e0214337..75500a0a60b787f6e037ec5bbef0c1b6
              {
                  Self::send_api_response(
                      respond_to,
+@@ -296,8 +297,18 @@ impl App {
+             return;
+         }
+ 
+-        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force) {
+-            self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
++        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force)
++            && !self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx)
++        {
++            Self::send_api_response(
++                respond_to,
++                encode_error(
++                    id,
++                    "worktree_remove_failed",
++                    "Could not stop the worktree terminal. Close it and retry removal.",
++                ),
++            );
++            return;
+         }
+ 
+         let operation_id = self.next_api_worktree_operation_id();
+diff --git a/src/app/runtime.rs b/src/app/runtime.rs
+index 8367a22350ff01dc3683f4930d2efef2a8178bf8..933d80fca7fe8f1ab3ccafd3549f2faa4ea2ecd2 100644
+--- a/src/app/runtime.rs
++++ b/src/app/runtime.rs
+@@ -30,13 +30,18 @@ impl App {
+             .retain_mut(|child| retain_detached_process_after_wait(child.id(), child.try_wait()));
+     }
+ 
+-    pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::terminal::TerminalId) {
++    pub(crate) fn shutdown_terminal_runtime(
++        &mut self,
++        terminal_id: crate::terminal::TerminalId,
++    ) -> bool {
+         let target = super::TerminalInputTarget {
+             terminal_id: terminal_id.clone(),
+         };
+         self.release_input_target_headless(&target);
+         if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
+-            runtime.shutdown();
++            runtime.shutdown()
++        } else {
++            true
+         }
+     }
+ 
 diff --git a/src/app/worktrees.rs b/src/app/worktrees.rs
-index 0087c8fe948c1743da5b660b2cfb331c3e191e65..3903eb35505fc64d2caaa44582d316316183dbd4 100644
+index 0087c8fe948c1743da5b660b2cfb331c3e191e65..f92237d7c4df948c701cfabe14f63820fa0623cf 100644
 --- a/src/app/worktrees.rs
 +++ b/src/app/worktrees.rs
 @@ -641,7 +641,8 @@ impl App {
@@ -53,7 +118,25 @@ index 0087c8fe948c1743da5b660b2cfb331c3e191e65..3903eb35505fc64d2caaa44582d31631
                  {
                      remove.force_confirmation = true;
                      remove.error = None;
-@@ -751,7 +752,8 @@ impl App {
+@@ -667,7 +668,16 @@ impl App {
+                 .iter()
+                 .position(|ws| ws.id == workspace_id)
+             {
+-                self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
++                if !self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx) {
++                    if let Some(remove) = self.state.worktree_remove.as_mut() {
++                        remove.removing = false;
++                        remove.error = Some(
++                            "Could not stop the worktree terminal. Close it and retry removal."
++                                .into(),
++                        );
++                    }
++                    return;
++                }
+             }
+         }
+ 
+@@ -751,7 +761,8 @@ impl App {
          }
          #[cfg(windows)]
          if !remove.force_confirmation
@@ -63,6 +146,197 @@ index 0087c8fe948c1743da5b660b2cfb331c3e191e65..3903eb35505fc64d2caaa44582d31631
          {
              remove.force_confirmation = true;
              remove.error = None;
+@@ -968,6 +979,7 @@ impl App {
+     }
+ 
+     pub(crate) fn close_removed_linked_worktree_workspace(&mut self, ws_idx: usize) {
++        let removed_workspace_was_active = self.state.active == Some(ws_idx);
+         let parent_key = self
+             .state
+             .workspaces
+@@ -979,6 +991,9 @@ impl App {
+         self.state.selected = ws_idx;
+         self.state.close_selected_workspace();
+ 
++        if !removed_workspace_was_active {
++            return;
++        }
+         let Some(parent_key) = parent_key else {
+             return;
+         };
+@@ -995,15 +1010,18 @@ impl App {
+     pub(crate) fn shutdown_workspace_terminal_runtimes_for_worktree_remove(
+         &mut self,
+         ws_idx: usize,
+-    ) {
++    ) -> bool {
++        let mut complete = true;
+         for terminal_id in self.state.terminal_ids_for_workspace(ws_idx) {
+             tracing::debug!(
+                 workspace_index = ws_idx,
+                 terminal_id = %terminal_id,
+                 "shutting down terminal runtime before worktree removal"
+             );
+-            self.shutdown_terminal_runtime(terminal_id);
++            let terminal_complete = self.shutdown_terminal_runtime(terminal_id);
++            complete &= terminal_complete;
+         }
++        complete
+     }
+ }
+ 
+diff --git a/src/pane.rs b/src/pane.rs
+index 7997ff24d25f51f95fafea2db8aac7a627fd534e..f68999bcc9f64fd789e2fa502207867eb2a23ebb 100644
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -1069,6 +1069,15 @@ impl PaneRuntimeIo {
+         }
+     }
+ 
++    #[cfg(windows)]
++    fn wait_for_shutdown(&self, timeout: std::time::Duration) -> bool {
++        match self {
++            PaneRuntimeIo::Actor(actor) => actor.wait_for_shutdown(timeout),
++            #[cfg(test)]
++            PaneRuntimeIo::TestChannel { .. } => true,
++        }
++    }
++
+     #[cfg(unix)]
+     fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
+         match self {
+@@ -1591,7 +1600,7 @@ fn publish_reported_cwd(
+ }
+ 
+ impl PaneRuntime {
+-    pub fn shutdown(mut self) {
++    pub fn shutdown(mut self) -> bool {
+         if let Some(handle) = self.detect_handle.take() {
+             handle.abort();
+         }
+@@ -1601,7 +1610,18 @@ impl PaneRuntime {
+             self.child_pid.load(Ordering::Acquire),
+             self.child_wait_completed.as_deref(),
+         );
++        #[cfg(windows)]
++        let io_shutdown_complete = self.io.wait_for_shutdown(std::time::Duration::from_secs(2));
++        #[cfg(not(windows))]
++        let io_shutdown_complete = true;
++        if !io_shutdown_complete {
++            warn!(
++                pane = self.pane_id.raw(),
++                "PTY master did not close before the shutdown deadline"
++            );
++        }
+         self.preserve_processes_on_drop = true;
++        io_shutdown_complete
+     }
+ 
+     #[cfg(unix)]
+diff --git a/src/pty/actor.rs b/src/pty/actor.rs
+index 6fde50517094e8a3dbab40e38dc55d0ee26191d7..035583ff57f57d47242e13b43c2a1a3a85ac0885 100644
+--- a/src/pty/actor.rs
++++ b/src/pty/actor.rs
+@@ -7,7 +7,7 @@ pub(crate) use unix::*;
+ #[cfg(windows)]
+ mod windows {
+     use std::io::{Read, Write};
+-    use std::sync::{mpsc as std_mpsc, Arc, Mutex};
++    use std::sync::{mpsc as std_mpsc, Arc, Condvar, Mutex};
+     use std::time::Duration;
+ 
+     use bytes::Bytes;
+@@ -55,6 +55,7 @@ mod windows {
+         write_tx: std_mpsc::Sender<Bytes>,
+         response_order: Arc<Mutex<()>>,
+         accepting: Arc<Mutex<bool>>,
++        shutdown_complete: Arc<(Mutex<bool>, Condvar)>,
+     }
+ 
+     impl PtyIoActorHandle {
+@@ -123,6 +124,23 @@ mod windows {
+             }
+             let _ = self.control_tx.send(PtyIoControlCommand::Shutdown);
+         }
++
++        pub(crate) fn wait_for_shutdown(&self, timeout: Duration) -> bool {
++            let (complete, notify) = &*self.shutdown_complete;
++            let complete = complete
++                .lock()
++                .unwrap_or_else(|poisoned| poisoned.into_inner());
++            if *complete {
++                return true;
++            }
++            match notify.wait_timeout_while(complete, timeout, |complete| !*complete) {
++                Ok((complete, _)) => *complete,
++                Err(poisoned) => {
++                    let (complete, _) = poisoned.into_inner();
++                    *complete
++                }
++            }
++        }
+     }
+ 
+     pub(crate) struct PtyIoActor;
+@@ -148,6 +166,7 @@ mod windows {
+             let (write_tx, write_rx) = std_mpsc::channel::<Bytes>();
+             let response_order = Arc::new(Mutex::new(()));
+             let accepting = Arc::new(Mutex::new(!initially_quiesced));
++            let shutdown_complete = Arc::new((Mutex::new(false), Condvar::new()));
+ 
+             std::thread::spawn(move || {
+                 for bytes in write_rx {
+@@ -206,6 +225,7 @@ mod windows {
+ 
+             {
+                 let write_tx = write_tx.clone();
++                let shutdown_complete = Arc::clone(&shutdown_complete);
+                 std::thread::spawn(move || {
+                     for command in control_rx {
+                         match command {
+@@ -230,6 +250,13 @@ mod windows {
+                             PtyIoControlCommand::Shutdown => break,
+                         }
+                     }
++                    drop(master);
++                    let (complete, notify) = &*shutdown_complete;
++                    let mut complete = complete
++                        .lock()
++                        .unwrap_or_else(|poisoned| poisoned.into_inner());
++                    *complete = true;
++                    notify.notify_all();
+                     debug!(pane_id, "windows pty control thread exiting");
+                 });
+             }
+@@ -240,12 +267,10 @@ mod windows {
+                 write_tx,
+                 response_order,
+                 accepting,
++                shutdown_complete,
+             })
+         }
+     }
+-
+-    #[allow(dead_code)]
+-    fn _assert_duration_send(_: Duration) {}
+ }
+ 
+ #[cfg(windows)]
+diff --git a/src/terminal/runtime.rs b/src/terminal/runtime.rs
+index 5051a46b3c1a8458371e4ad017b342297904f5dd..2e9f5cacf884951de3f75405abc9271923823bbd 100644
+--- a/src/terminal/runtime.rs
++++ b/src/terminal/runtime.rs
+@@ -17,8 +17,8 @@ use crate::layout::PaneId;
+ pub struct TerminalRuntime(crate::pane::PaneRuntime);
+ 
+ impl TerminalRuntime {
+-    pub fn shutdown(self) {
+-        self.0.shutdown();
++    pub fn shutdown(self) -> bool {
++        self.0.shutdown()
+     }
+ 
+     #[cfg(unix)]
 diff --git a/src/worktree.rs b/src/worktree.rs
 index 0bb091d7b7bfa114f15d282c85c8830c95721967..0f798e5dd39398d03c86069ebce7d9b1c73db494 100644
 --- a/src/worktree.rs

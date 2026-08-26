@@ -1,4 +1,4 @@
-From 4e4d394efacda79e469347d46537f9c660fee83f Mon Sep 17 00:00:00 2001
+From 9c57b71818d22982c8ec6c28a05ec16b323f5f04 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/10] feat(remote): support Windows SSH hosts
@@ -25,23 +25,24 @@ Subject: [PATCH 2/10] feat(remote): support Windows SSH hosts
  src/cli/server.rs                             |  106 +-
  src/cli/spec.rs                               |    7 +-
  src/cli/status.rs                             |   31 +-
+ src/config.rs                                 |    1 -
  src/ipc.rs                                    |   43 +
  src/main.rs                                   |   30 +-
  src/platform/mod.rs                           |    7 +
- src/platform/windows.rs                       | 1038 ++++++++--
+ src/platform/windows.rs                       | 1232 +++++++++--
  src/platform/windows_interactive_launch.ps1   |   76 +
  src/remote.rs                                 |   41 +-
- src/remote/attach.rs                          | 1749 ++++++++++++++++-
+ src/remote/attach.rs                          | 1885 ++++++++++++++++-
  src/remote/windows.rs                         |  843 ++++++++
  src/remote/windows_attach_probe.ps1           |   88 +
  src/remote/windows_bootstrap.ps1              |  195 ++
  src/remote/windows_package_local_payload.ps1  |   37 +
- src/remote/windows_payload_layout.ps1         |  114 ++
+ src/remote/windows_payload_layout.ps1         |  114 +
  src/server/autodetect.rs                      |  161 +-
  src/server/headless.rs                        |  268 ++-
  src/ui.rs                                     |   67 +-
  src/update.rs                                 |    3 +
- 37 files changed, 4785 insertions(+), 573 deletions(-)
+ 38 files changed, 5110 insertions(+), 579 deletions(-)
  create mode 100644 src/platform/windows_interactive_launch.ps1
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
@@ -1161,6 +1162,18 @@ index 74bb3e2a15f5f62264c26de70707179affc6fb43..4bb9295f9aa924096cfd93eaed38f2e0
 +        assert_eq!(value["binary"], binary);
 +    }
 +}
+diff --git a/src/config.rs b/src/config.rs
+index 0595ae2f7675c2cb963ec90a37c34c780a01b99a..3261e9119d09416008e9565cba01bcaa534f87ec 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -56,7 +56,6 @@ pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;
+ pub const DEFAULT_HEADLESS_COLS: u16 = 120;
+ pub const DEFAULT_HEADLESS_ROWS: u16 = 40;
+ 
+-#[cfg(test)]
+ pub(crate) fn app_dir_name() -> &'static str {
+     io::app_dir_name()
+ }
 diff --git a/src/ipc.rs b/src/ipc.rs
 index 36e69ea2a571de096e3150779eb9cae6e803d7a8..e18d58b6dc93b0e0a6216c91264f773cb89f933c 100644
 --- a/src/ipc.rs
@@ -1321,15 +1334,18 @@ index a63b75654d1ae30fe8b24c1cd15f8427389d50ad..4d21190dd4dada7550575d562ec7f628
  fn configure_background_command_platform(_command: &mut std::process::Command) {}
  
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06aa729dad0 100644
+index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..15e266a869b709264dce02461ecf266b5d1689c1 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
-@@ -1,5 +1,4 @@
+@@ -1,7 +1,6 @@
  use std::{
 -    cmp::Ordering,
      collections::{HashMap, HashSet, VecDeque},
-     ffi::{c_void, OsStr},
+-    ffi::{c_void, OsStr},
++    ffi::{c_void, OsStr, OsString},
      mem::{size_of, MaybeUninit},
+     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+     path::PathBuf,
 @@ -20,13 +19,17 @@ use windows_sys::{
      Win32::{
          Foundation::{
@@ -1382,12 +1398,25 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
                  THREAD_SUSPEND_RESUME,
              },
          },
-@@ -86,6 +94,16 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
+@@ -67,8 +75,9 @@ use windows_sys::{
+                 },
+             },
+             Shell::{
+-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
+-                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
++                CommandLineToArgvW, GetUserProfileDirectoryW, ShellExecuteW, Shell_NotifyIconW,
++                NIF_ICON, NIF_INFO, NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE,
++                NIM_MODIFY, NOTIFYICONDATAW,
+             },
+             WindowsAndMessaging::{
+                 CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
+@@ -86,6 +95,17 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
  const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
  const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
  const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
 +const INTERACTIVE_SERVER_BOOTSTRAP_ARG: &str = "--herdr-private-interactive-server-bootstrap-v1";
 +const INTERACTIVE_SERVER_BOOTSTRAP_FILE: &str = "bootstrap.json";
++const INTERACTIVE_SERVER_BOOTSTRAP_DIR: &str = "server-launch";
 +const INTERACTIVE_SERVER_BOOTSTRAP_MAX_BYTES: u64 = 1024 * 1024;
 +const INTERACTIVE_SERVER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 +const INTERACTIVE_SERVER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1399,7 +1428,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
  
  pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
      title.strip_prefix("Administrator: ").unwrap_or(title)
-@@ -98,6 +116,8 @@ const PROCESS_RUNTIME_MARKER_CACHE_RETENTION: Duration = Duration::from_secs(60)
+@@ -98,6 +118,8 @@ const PROCESS_RUNTIME_MARKER_CACHE_RETENTION: Duration = Duration::from_secs(60)
  const PROCESS_RUNTIME_MARKER_NEGATIVE_TTL: Duration = Duration::from_secs(1);
  
  static NEXT_PANE_RUNTIME_MARKER: AtomicU64 = AtomicU64::new(1);
@@ -1408,7 +1437,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
  static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRuntimeMarker>>> =
      LazyLock::new(|| Mutex::new(HashMap::new()));
  static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
-@@ -590,39 +610,37 @@ pub(crate) struct StatusCommandGuard {
+@@ -590,39 +612,37 @@ pub(crate) struct StatusCommandGuard {
      job: usize,
  }
  
@@ -1477,7 +1506,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
  
          let Some(process) = child.raw_handle() else {
              unsafe {
-@@ -784,136 +802,759 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
+@@ -784,138 +804,842 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
      command.creation_flags(CREATE_NO_WINDOW);
  }
  
@@ -1510,6 +1539,30 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +    cleanup: bool,
 +}
 +
++fn interactive_server_inherited_environment(
++    environment: impl IntoIterator<Item = (OsString, OsString)>,
++) -> std::io::Result<Vec<InteractiveServerEnvironmentValue>> {
++    environment
++        .into_iter()
++        .filter_map(|(name, value)| {
++            let name = match unicode_windows_value(&name, "inherited environment variable name") {
++                Ok(name) => name,
++                Err(err) => return Some(Err(err)),
++            };
++            // cmd.exe carries per-drive current directories as hidden `=C:`
++            // entries. They cannot be restored with set_var, and the launch
++            // state already carries the exact current directory separately.
++            if name.starts_with('=') {
++                return None;
++            }
++            Some(
++                unicode_windows_value(&value, "inherited environment variable value")
++                    .map(|value| InteractiveServerEnvironmentValue { name, value }),
++            )
++        })
++        .collect()
++}
++
 +impl PendingInteractiveServerBootstrap {
 +    fn create(command: &std::process::Command) -> std::io::Result<Self> {
 +        let arguments = command
@@ -1540,14 +1593,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        let working_directory =
 +            unicode_windows_value(current_directory.as_os_str(), "server working directory")?;
 +
-+        let inherited_environment = std::env::vars_os()
-+            .map(|(name, value)| {
-+                Ok(InteractiveServerEnvironmentValue {
-+                    name: unicode_windows_value(&name, "inherited environment variable name")?,
-+                    value: unicode_windows_value(&value, "inherited environment variable value")?,
-+                })
-+            })
-+            .collect::<std::io::Result<Vec<_>>>()?;
++        let inherited_environment = interactive_server_inherited_environment(std::env::vars_os())?;
 +        let environment_changes = command
 +            .get_envs()
 +            .map(|(name, value)| {
@@ -1570,7 +1616,9 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +            .map(|duration| duration.as_nanos())
 +            .unwrap_or(0);
 +        let counter = NEXT_SERVER_BOOTSTRAP.fetch_add(1, AtomicOrdering::Relaxed);
-+        let root = std::env::temp_dir().join(format!(
++        let base = interactive_server_bootstrap_base()?;
++        std::fs::create_dir_all(&base)?;
++        let root = base.join(format!(
 +            "herdr-server-launch-{:x}-{timestamp:x}-{counter:x}",
 +            std::process::id()
 +        ));
@@ -1625,6 +1673,55 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +    fn transfer_to_server(&mut self) {
 +        self.cleanup = false;
 +    }
++}
++
++fn interactive_server_bootstrap_base() -> std::io::Result<PathBuf> {
++    use std::os::windows::ffi::OsStringExt as _;
++
++    let token = open_process_token(unsafe { GetCurrentProcess() })?;
++    let mut required = 0;
++    // SAFETY: the token belongs to this process and `required` is writable.
++    unsafe {
++        GetUserProfileDirectoryW(token.as_raw_handle().cast(), null_mut(), &mut required);
++    }
++    if required == 0 {
++        return Err(std::io::Error::last_os_error());
++    }
++    let mut profile = vec![0u16; required as usize];
++    // SAFETY: `profile` has the size requested by the first API call and the
++    // same valid token remains open for the duration of this call.
++    if unsafe {
++        GetUserProfileDirectoryW(
++            token.as_raw_handle().cast(),
++            profile.as_mut_ptr(),
++            &mut required,
++        )
++    } == 0
++    {
++        return Err(std::io::Error::last_os_error());
++    }
++    let end = profile
++        .iter()
++        .position(|unit| *unit == 0)
++        .unwrap_or(profile.len());
++    if end == 0 {
++        return Err(std::io::Error::other(
++            "Windows returned an empty current-user profile directory",
++        ));
++    }
++    let profile = PathBuf::from(std::ffi::OsString::from_wide(&profile[..end]));
++    let base = profile
++        .join("AppData")
++        .join("Local")
++        .join(crate::config::app_dir_name())
++        .join(INTERACTIVE_SERVER_BOOTSTRAP_DIR);
++    if !base.is_absolute() {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "interactive server state path must be absolute",
++        ));
++    }
++    Ok(base)
 +}
 +
 +impl Drop for PendingInteractiveServerBootstrap {
@@ -1696,7 +1793,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        return Err(std::io::Error::other(
 +            "interactive server bootstrap is still owned by a terminating process job",
 +        ));
-+    }
+     }
 +    detach_interactive_server_console()?;
 +
 +    std::fs::remove_file(&path).map_err(|err| {
@@ -1721,38 +1818,6 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +    args.truncate(1);
 +    args.push("server".to_string());
 +    Ok(args)
-+}
-+
-+fn validate_interactive_server_bootstrap_path(path: &std::path::Path) -> std::io::Result<PathBuf> {
-+    if !path.is_absolute()
-+        || path.file_name() != Some(OsStr::new(INTERACTIVE_SERVER_BOOTSTRAP_FILE))
-+    {
-+        return Err(std::io::Error::new(
-+            std::io::ErrorKind::InvalidInput,
-+            "interactive server bootstrap state path is invalid",
-+        ));
-+    }
-+    let temp = std::path::absolute(std::env::temp_dir())?;
-+    let root = path.parent().ok_or_else(|| {
-+        std::io::Error::new(
-+            std::io::ErrorKind::InvalidInput,
-+            "interactive server bootstrap state has no parent directory",
-+        )
-+    })?;
-+    let root_name = root.file_name().and_then(OsStr::to_str).unwrap_or_default();
-+    if root.parent() != Some(temp.as_path())
-+        || !root_name.starts_with("herdr-server-launch-")
-+        || !root_name
-+            .trim_start_matches("herdr-server-launch-")
-+            .chars()
-+            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
-+    {
-+        return Err(std::io::Error::new(
-+            std::io::ErrorKind::InvalidInput,
-+            "interactive server bootstrap state is outside its private launch directory",
-+        ));
-     }
-+    Ok(path.to_path_buf())
  }
  
 -fn launch_server_daemon_with_wmi(command: &std::process::Command) -> std::io::Result<u32> {
@@ -1805,6 +1870,44 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 -            environment_variables: effective_command_environment(command)?,
 -        },
 -    };
++fn validate_interactive_server_bootstrap_path(path: &std::path::Path) -> std::io::Result<PathBuf> {
++    if !path.is_absolute()
++        || path.file_name() != Some(OsStr::new(INTERACTIVE_SERVER_BOOTSTRAP_FILE))
++    {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "interactive server bootstrap state path is invalid",
++        ));
++    }
++    let base = interactive_server_bootstrap_base()?;
++    let root = path.parent().ok_or_else(|| {
++        std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "interactive server bootstrap state has no parent directory",
++        )
++    })?;
++    let root_name = root.file_name().and_then(OsStr::to_str).unwrap_or_default();
++    if root.parent() != Some(base.as_path())
++        || !root_name.starts_with("herdr-server-launch-")
++        || !root_name
++            .trim_start_matches("herdr-server-launch-")
++            .chars()
++            .all(|ch| ch.is_ascii_hexdigit() || ch == '-')
++    {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "interactive server bootstrap state is outside its private launch directory",
++        ));
++    }
++    Ok(path.to_path_buf())
++}
+ 
+-    let connection = wmi::WMIConnection::new()
+-        .map_err(|err| std::io::Error::other(format!("failed to connect to WMI: {err}")))?;
+-    let output: CreateOutput = connection
+-        .exec_class_method::<Win32_Process, _>("Create", &input)
+-        .map_err(|err| std::io::Error::other(format!("WMI Win32_Process.Create failed: {err}")))?;
+-    if output.return_value != 0 {
 +fn validate_interactive_server_bootstrap(
 +    bootstrap: &InteractiveServerBootstrap,
 +) -> std::io::Result<()> {
@@ -1904,13 +2007,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        launch_server_daemon_in_interactive_session(command, interactive_session)
 +    }
 +}
- 
--    let connection = wmi::WMIConnection::new()
--        .map_err(|err| std::io::Error::other(format!("failed to connect to WMI: {err}")))?;
--    let output: CreateOutput = connection
--        .exec_class_method::<Win32_Process, _>("Create", &input)
--        .map_err(|err| std::io::Error::other(format!("WMI Win32_Process.Create failed: {err}")))?;
--    if output.return_value != 0 {
++
 +fn launch_server_daemon_in_interactive_session(
 +    command: &std::process::Command,
 +    session_id: u32,
@@ -2008,8 +2105,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        )
 +    })?;
 +    let pid = parse_interactive_server_pid(&stdout)?;
-+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE)
-+        .ok_or_else(|| {
++    let process = open_interactive_server_process(pid).ok_or_else(|| {
 +        std::io::Error::new(
 +            std::io::ErrorKind::NotFound,
 +            "interactive server process exited before validation",
@@ -2115,6 +2211,10 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +    Ok(session_id)
 +}
 +
++fn open_interactive_server_process(pid: u32) -> Option<ProcessHandle> {
++    ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE)
++}
++
 +fn parse_interactive_server_pid(output: &str) -> std::io::Result<u32> {
 +    const PREFIX: &str = "HERDR_INTERACTIVE_SERVER_PID=";
 +    let matches = output
@@ -2159,14 +2259,14 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        if !process_handle_is_running(process)? {
 +            return Err(std::io::Error::other(
 +                "interactive server exited before consuming its launch state",
-+            ));
-+        }
+             ));
+         }
 +        if Instant::now() >= deadline {
 +            return Err(std::io::Error::new(
 +                std::io::ErrorKind::TimedOut,
 +                "interactive server did not consume its launch state within 5 seconds",
-             ));
-         }
++            ));
++        }
 +        std::thread::sleep(Duration::from_millis(25));
      }
 -    environment.sort_unstable_by(|(left, _), (right, _)| windows_environment_key_cmp(left, right));
@@ -2174,8 +2274,8 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 -        .into_iter()
 -        .map(|(key, value)| format!("{key}={value}"))
 -        .collect())
- }
- 
+-}
+-
 -fn windows_environment_key_cmp(left: &str, right: &str) -> Ordering {
 -    let left_wide: Vec<u16> = left.encode_utf16().collect();
 -    let right_wide: Vec<u16> = right.encode_utf16().collect();
@@ -2193,11 +2293,13 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 -        CSTR_EQUAL => Ordering::Equal,
 -        CSTR_GREATER_THAN => Ordering::Greater,
 -        _ => left.cmp(right),
++}
++
 +fn process_handle_is_running(process: &ProcessHandle) -> std::io::Result<bool> {
 +    let mut exit_code = 0;
 +    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 {
 +        return Err(std::io::Error::last_os_error());
-     }
++    }
 +    Ok(exit_code == STILL_ACTIVE)
 +}
 +
@@ -2251,16 +2353,26 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +}
 +
 +fn terminate_process_and_wait(process: &ProcessHandle, timeout: Duration) -> std::io::Result<()> {
-+    if unsafe { TerminateProcess(process.0, 1) } == 0 && process_handle_is_running(process)? {
-+        return Err(std::io::Error::last_os_error());
++    if unsafe { TerminateProcess(process.0, 1) } == 0 {
++        let err = std::io::Error::last_os_error();
++        if process_handle_is_running(process)? {
++            return Err(err);
++        }
 +    }
-+    match wait_for_handle(process.0, timeout)? {
-+        true => Ok(()),
-+        false => Err(std::io::Error::new(
-+            std::io::ErrorKind::TimedOut,
-+            "timed out waiting for the rejected interactive server to exit",
-+        )),
++
++    // A Task Scheduler process can deny SYNCHRONIZE to the same user's SSH
++    // logon token. The query handle can still observe the terminated state.
++    let deadline = Instant::now() + timeout;
++    while process_handle_is_running(process)? {
++        if Instant::now() >= deadline {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::TimedOut,
++                "timed out waiting for the rejected interactive server to exit",
++            ));
++        }
++        std::thread::sleep(Duration::from_millis(25));
 +    }
++    Ok(())
 +}
 +
 +fn wait_for_process_handle(
@@ -2279,9 +2391,9 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        result => Err(std::io::Error::other(format!(
 +            "unexpected process wait result {result}"
 +        ))),
-+    }
-+}
-+
+     }
+ }
+ 
 +pub(crate) fn wait_child_bounded(
 +    child: &mut std::process::Child,
 +    timeout: Duration,
@@ -2345,10 +2457,12 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +        .flat_map(u16::to_le_bytes)
 +        .collect::<Vec<_>>();
 +    base64::engine::general_purpose::STANDARD.encode(utf16)
- }
- 
++}
++
  fn unicode_windows_value(value: &OsStr, label: &str) -> std::io::Result<String> {
-@@ -967,7 +1608,7 @@ pub fn current_process_is_detached_server_daemon() -> bool {
+     value.to_str().map(str::to_owned).ok_or_else(|| {
+         std::io::Error::new(
+@@ -967,7 +1691,7 @@ pub fn current_process_is_detached_server_daemon() -> bool {
          return false;
      }
  
@@ -2357,15 +2471,16 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
  }
  
  pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-@@ -2516,6 +3157,7 @@ impl Drop for InputSourceRestore {
+@@ -2516,6 +3240,8 @@ impl Drop for InputSourceRestore {
  mod tests {
      use std::{
          fs,
 +        os::windows::process::CommandExt as _,
++        path::PathBuf,
          process::{Command, Stdio},
          sync::Arc,
          thread,
-@@ -2525,6 +3167,7 @@ mod tests {
+@@ -2525,6 +3251,7 @@ mod tests {
      use windows_sys::Win32::System::Console::{
          AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
      };
@@ -2373,12 +2488,15 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
  
      #[test]
      fn private_remote_directory_supports_long_paths() {
-@@ -2775,69 +3418,60 @@ mod tests {
+@@ -2775,69 +3502,168 @@ mod tests {
  
      const CONSOLE_TEST_CHILD_ENV: &str = "HERDR_TEST_CONSOLE_CHILD_MODE";
      const CONSOLE_TEST_PARENT_PID_ENV: &str = "HERDR_TEST_CONSOLE_PARENT_PID";
 -    const WMI_DAEMON_TEST_CHILD_ENV: &str = "HERDR_TEST_WMI_DAEMON_CHILD";
++    const INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV: &str =
++        "HERDR_TEST_INTERACTIVE_BOOTSTRAP_BASE_CHILD";
 +    const INTERACTIVE_DETACH_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_DETACH_CHILD";
++    const INTERACTIVE_REJECTION_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_REJECTION_CHILD";
  
      #[test]
 -    fn windows_environment_keys_use_unicode_case_insensitive_ordering() {
@@ -2409,17 +2527,9 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 -                ),
 -            )
 -            .expect("write WMI daemon test capture");
-+    fn interactive_server_bootstrap_detaches_its_console() {
-+        if std::env::var_os(INTERACTIVE_DETACH_TEST_CHILD_ENV).is_some() {
-+            assert!(
-+                !unsafe { GetConsoleWindow() }.is_null(),
-+                "interactive bootstrap test child did not start with a console"
-+            );
-+            super::detach_interactive_server_console().expect("detach interactive server console");
-+            assert!(
-+                unsafe { GetConsoleWindow() }.is_null(),
-+                "interactive server retained its console"
-+            );
++    fn rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait() {
++        if std::env::var_os(INTERACTIVE_REJECTION_TEST_CHILD_ENV).is_some() {
++            thread::sleep(Duration::from_secs(30));
              return;
          }
  
@@ -2434,30 +2544,140 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 -        fs::create_dir_all(&base).unwrap();
 -        let capture = base.join("capture.txt");
          let test_exe = std::env::current_exe().expect("resolve test executable");
-         let mut child = Command::new(test_exe);
-         child
+-        let mut child = Command::new(test_exe);
+-        child
 -            .arg("windows_wmi_daemon_preserves_environment_and_working_directory")
 -            .current_dir(&base)
 -            .env(WMI_DAEMON_TEST_CHILD_ENV, &capture)
--            .stdin(Stdio::null())
--            .stdout(Stdio::null())
++        let mut child = Command::new(test_exe)
++            .arg("rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait")
++            .env(INTERACTIVE_REJECTION_TEST_CHILD_ENV, "1")
+             .stdin(Stdio::null())
+             .stdout(Stdio::null())
 -            .stderr(Stdio::null());
--
++            .stderr(Stdio::null())
++            .spawn()
++            .expect("spawn rejected interactive server test child");
++        let process = super::ProcessHandle::open(
++            child.id(),
++            super::PROCESS_QUERY_LIMITED_INFORMATION | super::PROCESS_TERMINATE,
++        )
++        .unwrap_or_else(|| {
++            let _ = child.kill();
++            let _ = child.wait();
++            panic!("open rejected interactive server test child without synchronize access");
++        });
+ 
 -        let pid = super::launch_server_daemon_with_wmi(&child)
 -            .expect("launch detached process through WMI");
 -        assert_ne!(pid, 0, "WMI returned an invalid process id");
--
++        super::terminate_process_and_wait(&process, Duration::from_secs(5))
++            .expect("terminate and wait for rejected interactive server test child");
++        let status = child
++            .wait()
++            .expect("reap rejected interactive server test child");
++        assert!(!status.success(), "rejected test child was not terminated");
++    }
+ 
 -        let expected = format!("{}\ntrue", base.display());
 -        let deadline = Instant::now() + Duration::from_secs(10);
 -        loop {
 -            if fs::read_to_string(&capture).is_ok_and(|captured| captured == expected) {
 -                break;
 -            }
--            assert!(
++    #[test]
++    fn interactive_server_bootstrap_omits_cmd_drive_environment() {
++        let inherited = super::interactive_server_inherited_environment([
++            (
++                std::ffi::OsString::from("=C:"),
++                std::ffi::OsString::from(r"C:\work"),
++            ),
++            (
++                std::ffi::OsString::from("HERDR_TEST_VALUE"),
++                std::ffi::OsString::from("kept"),
++            ),
++        ])
++        .expect("collect inherited environment");
++
++        assert_eq!(inherited.len(), 1);
++        assert_eq!(inherited[0].name, "HERDR_TEST_VALUE");
++        assert_eq!(inherited[0].value, "kept");
++    }
++
++    #[test]
++    fn interactive_server_bootstrap_uses_session_stable_profile_base() {
++        let mut command = Command::new(std::env::current_exe().expect("resolve test executable"));
++        command.arg("server");
++
++        let pending = super::PendingInteractiveServerBootstrap::create(&command)
++            .expect("create interactive server bootstrap");
++        let expected_base = super::interactive_server_bootstrap_base()
++            .expect("resolve stable interactive server bootstrap base");
++        assert_eq!(pending.root.parent(), Some(expected_base.as_path()));
++        assert_eq!(
++            super::validate_interactive_server_bootstrap_path(&pending.path)
++                .expect("validate interactive server bootstrap path"),
++            pending.path
++        );
++    }
++
++    #[test]
++    fn interactive_server_bootstrap_base_ignores_process_environment() {
++        if let Some(fake_base) = std::env::var_os(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV) {
++            let bootstrap_base = super::interactive_server_bootstrap_base()
++                .expect("resolve interactive server bootstrap base");
++            assert!(!bootstrap_base.starts_with(PathBuf::from(fake_base)));
++            return;
++        }
++
++        let fake_base = std::env::temp_dir().join(format!(
++            "herdr-fake-session-environment-{}",
++            std::process::id()
++        ));
++        let output = Command::new(std::env::current_exe().expect("resolve test executable"))
++            .arg(
++                "platform::windows::tests::interactive_server_bootstrap_base_ignores_process_environment",
++            )
++            .arg("--exact")
++            .env(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV, &fake_base)
++            .env("XDG_STATE_HOME", &fake_base)
++            .env("LOCALAPPDATA", &fake_base)
++            .env("USERPROFILE", &fake_base)
++            .env("HOME", &fake_base)
++            .env("TEMP", &fake_base)
++            .env("TMP", &fake_base)
++            .stdin(Stdio::null())
++            .output()
++            .expect("run interactive bootstrap base child test");
++        assert!(
++            output.status.success(),
++            "bootstrap base followed process environment: {}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++    }
++
++    #[test]
++    fn interactive_server_bootstrap_detaches_its_console() {
++        if std::env::var_os(INTERACTIVE_DETACH_TEST_CHILD_ENV).is_some() {
+             assert!(
 -                Instant::now() < deadline,
 -                "WMI daemon child did not write the expected capture"
--            );
++                !unsafe { GetConsoleWindow() }.is_null(),
++                "interactive bootstrap test child did not start with a console"
+             );
 -            thread::sleep(Duration::from_millis(50));
++            super::detach_interactive_server_console().expect("detach interactive server console");
++            assert!(
++                unsafe { GetConsoleWindow() }.is_null(),
++                "interactive server retained its console"
++            );
++            return;
+         }
+-        let _ = fs::remove_dir_all(base);
++
++        let test_exe = std::env::current_exe().expect("resolve test executable");
++        let mut child = Command::new(test_exe);
++        child
 +            .arg("interactive_server_bootstrap_detaches_its_console")
 +            .env(INTERACTIVE_DETACH_TEST_CHILD_ENV, "1")
 +            .creation_flags(CREATE_NEW_CONSOLE);
@@ -2467,8 +2687,7 @@ index 4fef3251a66798edd21172971cdf2a5a87d1aa5c..d8e5e0e15422bd55d454afb0b251a06a
 +            let _ = child.kill();
 +            let _ = super::wait_child_bounded(&mut child, Duration::from_secs(5));
 +            panic!("assign interactive detach test child: {err}");
-         }
--        let _ = fs::remove_dir_all(base);
++        }
 +        let status = match super::wait_child_bounded(&mut child, Duration::from_secs(5))
 +            .expect("wait for interactive detach test child")
 +        {
@@ -2628,7 +2847,7 @@ index 19904ef2de185e6a03412ef92219cb5d176ea17c..9d76f1f71a9fa1254216597a976543e7
 +    }
  }
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524bb814a66b 100644
+index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc120948eaf 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -12,7 +12,8 @@ use interprocess::local_socket::traits::Listener as _;
@@ -2724,10 +2943,11 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  
      Ok((cleaned, remote))
  }
-@@ -178,20 +215,78 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
+@@ -177,33 +214,127 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
+         .config
          .remote
          .manage_ssh_config;
-     let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
+-    let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
 -    let prepared_remote = prepare_remote_herdr(&remote_ssh, remote.live_handoff)?;
 -    ensure_remote_server_ready(
 -        &remote_ssh,
@@ -2736,6 +2956,20 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 -        prepared_remote.stop_after_install_approved,
 -        remote.live_handoff,
 -    )?;
++    let interactive_progress = remote_progress_enabled(
++        remote.json,
++        io::stdin().is_terminal(),
++        io::stderr().is_terminal(),
++    );
++    let remote_ssh = RemoteSsh::new(
++        remote.target.clone(),
++        manage_ssh_config,
++        interactive_progress,
++    );
++    remote_ssh.progress(format_args!(
++        "Connecting to {} and checking remote Herdr...",
++        remote.target
++    ));
 +    let detected = detect_remote_host(&remote_ssh)?;
 +    if remote.provision {
 +        let result = provision_remote(&remote_ssh, detected, remote.yes)?;
@@ -2804,6 +3038,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +        }
 +    };
  
++    remote_ssh.progress(format_args!(
++        "Opening the remote session on {}; starting its Herdr server if needed...",
++        remote.target
++    ));
      let _bridge = SshStdioBridge::start(
          remote.target,
 -        prepared_remote.remote_herdr,
@@ -2813,7 +3051,16 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          remote_ssh.options(),
      )?;
  
-@@ -204,6 +299,21 @@ struct RemotePlatform {
+     run_client_process(&local_socket, &reattach_command, remote.keybindings)
+ }
+ 
++fn remote_progress_enabled(json: bool, stdin_terminal: bool, stderr_terminal: bool) -> bool {
++    !json && stdin_terminal && stderr_terminal
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ struct RemotePlatform {
+     os: &'static str,
      arch: &'static str,
  }
  
@@ -2835,7 +3082,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  impl RemotePlatform {
      fn from_uname(os: &str, arch: &str) -> Option<Self> {
          let os = match os.trim() {
-@@ -219,8 +329,22 @@ impl RemotePlatform {
+@@ -219,8 +350,22 @@ impl RemotePlatform {
          Some(Self { os, arch })
      }
  
@@ -2859,7 +3106,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "linux"
          } else if cfg!(target_os = "macos") {
              "macos"
-@@ -249,6 +373,15 @@ struct RemoteHerdr {
+@@ -249,6 +394,15 @@ struct RemoteHerdr {
      install_suffix: String,
      shell_path: String,
      platform: RemotePlatform,
@@ -2875,7 +3122,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  impl RemoteHerdr {
-@@ -259,6 +392,30 @@ impl RemoteHerdr {
+@@ -259,6 +413,30 @@ impl RemoteHerdr {
              install_suffix,
              shell_path,
              platform,
@@ -2906,7 +3153,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          }
      }
  
-@@ -266,13 +423,23 @@ impl RemoteHerdr {
+@@ -266,13 +444,23 @@ impl RemoteHerdr {
          self.shell_path = shell_path;
          self
      }
@@ -2931,7 +3178,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  impl RemoteAssetRef {
-@@ -291,6 +458,15 @@ impl RemoteAssetRef {
+@@ -291,6 +479,15 @@ impl RemoteAssetRef {
              }
          }
      }
@@ -2947,7 +3194,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  #[derive(Deserialize)]
-@@ -386,11 +562,52 @@ fn current_channel() -> &'static str {
+@@ -386,11 +583,52 @@ fn current_channel() -> &'static str {
  struct InstallSource {
      path: PathBuf,
      temporary_dir: Option<PathBuf>,
@@ -3000,7 +3247,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  struct PreparedRemoteHerdr {
-@@ -399,6 +616,39 @@ struct PreparedRemoteHerdr {
+@@ -399,6 +637,39 @@ struct PreparedRemoteHerdr {
      stop_after_install_approved: bool,
  }
  
@@ -3040,7 +3287,41 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  #[derive(Clone)]
  struct ManagedSshOptions {
      config_path: PathBuf,
-@@ -460,6 +710,13 @@ impl RemoteSsh {
+@@ -420,10 +691,11 @@ impl Drop for ManagedSshConfig {
+ struct RemoteSsh {
+     target: String,
+     managed_config: Option<ManagedSshConfig>,
++    interactive_progress: bool,
+ }
+ 
+ impl RemoteSsh {
+-    fn new(target: String, manage_ssh_config: bool) -> Self {
++    fn new(target: String, manage_ssh_config: bool, interactive_progress: bool) -> Self {
+         let managed_config = if manage_ssh_config {
+             write_managed_ssh_config()
+                 .inspect_err(|err| {
+@@ -437,6 +709,7 @@ impl RemoteSsh {
+         Self {
+             target,
+             managed_config,
++            interactive_progress,
+         }
+     }
+ 
+@@ -444,6 +717,12 @@ impl RemoteSsh {
+         &self.target
+     }
+ 
++    fn progress(&self, message: impl std::fmt::Display) {
++        if self.interactive_progress {
++            eprintln!("{message}");
++        }
++    }
++
+     fn options(&self) -> Option<&ManagedSshOptions> {
+         self.managed_config.as_ref().map(|config| &config.options)
+     }
+@@ -460,6 +739,13 @@ impl RemoteSsh {
          command
      }
  
@@ -3054,7 +3335,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      fn sh_output(&self, script: &str) -> io::Result<Output> {
          let mut child = self
              .command()
-@@ -486,6 +743,64 @@ impl RemoteSsh {
+@@ -486,6 +772,64 @@ impl RemoteSsh {
          self.command().arg(command).output()
      }
  
@@ -3119,7 +3400,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      fn install_herdr(&self, remote_herdr: &RemoteHerdr, source_path: &Path) -> io::Result<()> {
          let output = self.sh_output(&remote_install_prepare_script(remote_herdr))?;
          if !output.status.success() {
-@@ -529,6 +844,102 @@ impl RemoteSsh {
+@@ -529,6 +873,115 @@ impl RemoteSsh {
              )))
          }
      }
@@ -3132,6 +3413,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +    ) -> io::Result<String> {
 +        let archive_name = windows_payload_archive_name()?;
 +        let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
++        self.progress(format_args!(
++            "Preparing a temporary Herdr install on {}...",
++            self.target
++        ));
 +        let output = self.powershell_script_output(
 +            remote_herdr,
 +            &windows_install_prepare_script(remote_herdr, &archive_name),
@@ -3144,6 +3429,11 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +        }
 +
 +        let destination = windows_scp_destination(&self.target, &format!(".herdr/{archive_name}"));
++        self.progress(format_args!(
++            "Transferring Herdr {} to {}...",
++            current_version(),
++            self.target
++        ));
 +        let transfer = self
 +            .scp_command()
 +            .arg(source_path)
@@ -3168,6 +3458,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +            )));
 +        }
 +
++        self.progress(format_args!(
++            "Validating the Herdr package on {}...",
++            self.target
++        ));
 +        let output = self.powershell_script_output(
 +            remote_herdr,
 +            &windows_install_stage_script(remote_herdr, &temporary_archive, expected_sha256),
@@ -3222,7 +3516,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  fn remote_install_prepare_script(remote_herdr: &RemoteHerdr) -> String {
-@@ -578,6 +989,123 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
+@@ -578,6 +1031,123 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
      )
  }
  
@@ -3346,7 +3640,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  impl Drop for RemoteSsh {
      fn drop(&mut self) {
          let Some(_options) = self
-@@ -620,11 +1148,31 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
+@@ -620,11 +1190,31 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
      }
  }
  
@@ -3378,7 +3672,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          }
      }
  
-@@ -632,6 +1180,34 @@ impl InstallSource {
+@@ -632,6 +1222,34 @@ impl InstallSource {
          Self {
              path,
              temporary_dir: Some(temporary_dir),
@@ -3413,7 +3707,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          }
      }
  
-@@ -644,9 +1220,10 @@ impl InstallSource {
+@@ -644,9 +1262,10 @@ impl InstallSource {
  
  fn prepare_remote_herdr(
      ssh: &RemoteSsh,
@@ -3425,7 +3719,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      let remote_herdr = RemoteHerdr::for_platform(platform);
      let override_binary = remote_binary_override_path()?;
      let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
-@@ -676,16 +1253,24 @@ fn prepare_remote_herdr(
+@@ -676,22 +1295,45 @@ fn prepare_remote_herdr(
              .ok()
              .and_then(|exists| exists.then_some(&remote_herdr))
      }) {
@@ -3453,9 +3747,42 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          &install_source_description(&remote_herdr.platform, override_binary.as_deref()),
 +        yes || stop_after_install_approved,
      )?;
++    ssh.progress(format_args!(
++        "Preparing Herdr {} for {}...",
++        current_version(),
++        ssh.target()
++    ));
      let source = resolve_install_source(&remote_herdr.platform, override_binary)?;
++    ssh.progress(format_args!(
++        "Transferring and installing Herdr {} on {}...",
++        current_version(),
++        ssh.target()
++    ));
      let install_result = ssh.install_herdr(&remote_herdr, &source.path);
-@@ -708,6 +1293,137 @@ fn prepare_remote_herdr(
+     source.cleanup();
+     install_result?;
+ 
++    ssh.progress(format_args!(
++        "Verifying Herdr {} on {}...",
++        current_version(),
++        ssh.target()
++    ));
+     if !remote_binary_matches(ssh, &remote_herdr)? {
+         return Err(io::Error::other(format!(
+             "installed remote herdr at {}, but it did not report version {}",
+@@ -700,6 +1342,11 @@ fn prepare_remote_herdr(
+         )));
+     }
+     warn_if_remote_bin_not_on_path(ssh)?;
++    ssh.progress(format_args!(
++        "Herdr {} is installed and verified on {}.",
++        current_version(),
++        ssh.target()
++    ));
+ 
+     Ok(PreparedRemoteHerdr {
+         remote_herdr,
+@@ -708,6 +1355,157 @@ fn prepare_remote_herdr(
      })
  }
  
@@ -3515,6 +3842,11 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +        yes || stop_before_activation,
 +    )?;
 +
++    ssh.progress(format_args!(
++        "Preparing Herdr {} for {}...",
++        current_version(),
++        ssh.target()
++    ));
 +    let source = resolve_windows_install_source(&platform, override_payload)?;
 +    if source.kind != InstallSourceKind::WindowsZip {
 +        source.cleanup();
@@ -3551,16 +3883,31 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +            return Err(err);
 +        }
 +    }
++    ssh.progress(format_args!(
++        "Activating Herdr {} on {}...",
++        current_version(),
++        ssh.target()
++    ));
 +    if let Err(err) = ssh.activate_windows_payload(&managed, &stage) {
 +        ssh.cleanup_windows_stage(&managed, &stage);
 +        return Err(err);
 +    }
++    ssh.progress(format_args!(
++        "Verifying Herdr {} on {}...",
++        current_version(),
++        ssh.target()
++    ));
 +    if !remote_binary_matches(ssh, &managed)? {
 +        return Err(io::Error::other(format!(
 +            "installed Windows remote Herdr at {}, but its binary, version, protocol, or payload did not match",
 +            managed.shell_path
 +        )));
 +    }
++    ssh.progress(format_args!(
++        "Herdr {} is installed and verified on {}.",
++        current_version(),
++        ssh.target()
++    ));
 +
 +    Ok(PreparedRemoteHerdr {
 +        remote_herdr: managed,
@@ -3593,7 +3940,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
      let output = ssh.sh_output("uname -s\nuname -m\n")?;
      if !output.status.success() {
-@@ -727,6 +1443,144 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
+@@ -727,6 +1525,144 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
      })
  }
  
@@ -3738,7 +4085,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  fn remote_binary_candidates(
      ssh: &RemoteSsh,
      remote_herdr: &RemoteHerdr,
-@@ -865,28 +1719,54 @@ fn is_mise_shim_path(path: &str) -> bool {
+@@ -865,28 +1801,54 @@ fn is_mise_shim_path(path: &str) -> bool {
  }
  
  fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
@@ -3811,7 +4158,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
-@@ -952,39 +1832,256 @@ fn install_source_description_for(
+@@ -952,39 +1914,256 @@ fn install_source_description_for(
      }
  }
  
@@ -4081,7 +4428,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          live_handoff: bool,
          detached_server_daemon: bool,
      },
-@@ -1012,11 +2109,17 @@ fn ensure_remote_server_ready(
+@@ -1012,11 +2191,21 @@ fn ensure_remote_server_ready(
      remote_binary_changed: bool,
      stop_after_install_approved: bool,
      live_handoff_enabled: bool,
@@ -4089,6 +4436,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +    restart_required: bool,
  ) -> io::Result<()> {
 -    let status = remote_server_status(ssh, remote_herdr)?;
++    ssh.progress(format_args!(
++        "Checking the Herdr server on {}...",
++        ssh.target()
++    ));
 +    let status = match known_status {
 +        Some(status) => status,
 +        None => remote_server_status(ssh, remote_herdr)?,
@@ -4100,7 +4451,18 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          live_handoff,
          detached_server_daemon,
      } = status
-@@ -1050,6 +2153,11 @@ fn ensure_remote_server_ready(
+@@ -1034,6 +2223,10 @@ fn ensure_remote_server_ready(
+     };
+ 
+     if live_handoff_enabled && live_handoff {
++        ssh.progress(format_args!(
++            "Handing the Herdr server on {} to the new binary...",
++            ssh.target()
++        ));
+         match live_handoff_remote_server(ssh, remote_herdr) {
+             Ok(()) => return Ok(()),
+             Err(err) => {
+@@ -1050,6 +2243,11 @@ fn ensure_remote_server_ready(
  
      if confirm_remote_server_stop(ssh.target(), version.as_deref(), protocol, reason)? {
          stop_remote_server(ssh, remote_herdr)?;
@@ -4112,7 +4474,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      }
      Ok(())
  }
-@@ -1110,6 +2218,7 @@ fn confirm_remote_install_with_running_server(
+@@ -1110,6 +2308,7 @@ fn confirm_remote_install_with_running_server(
      let RemoteServerStatus::Running {
          version,
          protocol,
@@ -4120,7 +4482,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          live_handoff,
          detached_server_daemon,
      } = &status
-@@ -1210,12 +2319,291 @@ fn remote_install_running_server_plan(
+@@ -1210,12 +2409,311 @@ fn remote_install_running_server_plan(
      RemoteInstallRunningServerPlan::StopRequired(reason)
  }
  
@@ -4190,6 +4552,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +}
 +
 +fn validate_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    ssh.progress(format_args!(
++        "Checking the Herdr configuration on {}...",
++        ssh.target()
++    ));
 +    let output = remote_herdr_output(ssh, remote_herdr, &["config", "check"])?;
 +    if output.status.success() {
 +        Ok(())
@@ -4332,6 +4698,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +}
 +
 +fn reload_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    ssh.progress(format_args!(
++        "Applying the Herdr configuration on {}...",
++        ssh.target()
++    ));
 +    let output = remote_herdr_output(ssh, remote_herdr, &["server", "reload-config", "--json"])?;
 +    if !output.status.success() {
 +        return Err(command_failed(
@@ -4347,6 +4717,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +        ))
 +    })?;
 +    if result.status == RemoteConfigReloadStatus::Applied {
++        ssh.progress(format_args!(
++            "The Herdr configuration is active on {}.",
++            ssh.target()
++        ));
 +        return Ok(());
 +    }
 +    Err(io::Error::other(format!(
@@ -4357,6 +4731,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +}
 +
 +fn start_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
++    ssh.progress(format_args!(
++        "Starting the Herdr server on {}...",
++        ssh.target()
++    ));
 +    let output = remote_herdr_output(ssh, remote_herdr, &["server", "start"])?;
 +    if !output.status.success() {
 +        return Err(command_failed("remote server start failed", &output));
@@ -4377,6 +4755,10 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
 +                &selected_binary,
 +            ) =>
 +        {
++            ssh.progress(format_args!(
++                "The Herdr server is running on {}.",
++                ssh.target()
++            ));
 +            Ok(())
 +        }
 +        _ => Err(io::Error::other(
@@ -4414,7 +4796,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      if !output.status.success() {
          return Err(command_failed("remote server status failed", &output));
      }
-@@ -1226,7 +2614,27 @@ fn remote_server_status(
+@@ -1226,7 +2724,27 @@ fn remote_server_status(
  
  #[derive(Debug, Deserialize)]
  struct RemoteClientStatusJson {
@@ -4442,7 +4824,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  #[derive(Debug, Deserialize)]
-@@ -1234,6 +2642,8 @@ struct RemoteServerStatusJson {
+@@ -1234,6 +2752,8 @@ struct RemoteServerStatusJson {
      running: bool,
      version: Option<String>,
      protocol: Option<u32>,
@@ -4451,7 +4833,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      capabilities: Option<RemoteServerCapabilitiesJson>,
  }
  
-@@ -1248,28 +2658,39 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
+@@ -1248,28 +2768,39 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
      serde_json::from_str(status).ok()
  }
  
@@ -4494,12 +4876,27 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  fn confirm_remote_server_stop(
-@@ -1367,17 +2788,13 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
+@@ -1359,25 +2890,28 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
+         return Err(command_failed("remote server live handoff failed", &output));
+     }
+ 
+-    eprintln!(
+-        "handed off the remote herdr server on {}; reconnecting to the prepared server.",
++    ssh.progress(format_args!(
++        "The Herdr server on {} is using the new binary. Reconnecting...",
+         ssh.target()
+-    );
++    ));
+     Ok(())
  }
  
  fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
 -    let command = format!("{} server stop", remote_herdr.shell_path);
 -    let output = ssh.sh_output(&command)?;
++    ssh.progress(format_args!(
++        "Stopping the Herdr server on {}...",
++        ssh.target()
++    ));
 +    let output = remote_herdr_output(ssh, remote_herdr, &["server", "stop"])?;
      if !output.status.success() {
          return Err(command_failed("remote server stop failed", &output));
@@ -4508,13 +4905,15 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      wait_for_remote_server_shutdown(ssh, remote_herdr)?;
 -    eprintln!(
 -        "stopped the remote herdr server on {}; it will restart when the remote client bridge attaches.",
--        ssh.target()
++    ssh.progress(format_args!(
++        "The Herdr server is stopped on {}.",
+         ssh.target()
 -    );
-+    eprintln!("stopped the remote herdr server on {}.", ssh.target());
++    ));
      Ok(())
  }
  
-@@ -1443,6 +2860,21 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -1443,6 +2977,21 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
          let _ = fs::remove_dir_all(&dir);
          return Err(io::Error::other("download failed"));
      }
@@ -4536,7 +4935,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      if let Some(expected) = &asset.sha256 {
          if let Err(err) = crate::checksum::verify_sha256(&path, expected) {
              let _ = fs::remove_dir_all(&dir);
-@@ -1453,7 +2885,18 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -1453,7 +3002,18 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
          }
      }
  
@@ -4556,7 +4955,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
-@@ -1480,6 +2923,7 @@ fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
+@@ -1480,6 +3040,7 @@ fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
      RemoteReleaseAsset {
          url: asset.url().to_string(),
          sha256: asset.sha256().map(str::to_string),
@@ -4564,7 +4963,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      }
  }
  
-@@ -1581,7 +3025,11 @@ fn confirm_remote_install(
+@@ -1581,7 +3142,11 @@ fn confirm_remote_install(
      target: &str,
      remote_herdr: &RemoteHerdr,
      source_description: &str,
@@ -4576,7 +4975,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      if !io::stdin().is_terminal() {
          return Err(io::Error::other(format!(
              "matching remote herdr {} is not installed at {}; run from an interactive terminal to approve installation",
-@@ -1614,14 +3062,89 @@ fn confirm_remote_install(
+@@ -1614,14 +3179,89 @@ fn confirm_remote_install(
      Ok(())
  }
  
@@ -4673,7 +5072,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
  }
  
  fn reattach_command(
-@@ -1668,9 +3191,8 @@ struct SshStdioBridge {
+@@ -1668,9 +3308,8 @@ struct SshStdioBridge {
  impl SshStdioBridge {
      fn start(
          target: String,
@@ -4684,7 +5083,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          ssh_options: Option<&ManagedSshOptions>,
      ) -> io::Result<Self> {
          crate::ipc::prepare_socket_path(&local_socket, |path| {
-@@ -1709,8 +3231,7 @@ impl SshStdioBridge {
+@@ -1709,8 +3348,7 @@ impl SshStdioBridge {
                          if let Err(err) = bridge_connection(
                              stream,
                              &target,
@@ -4694,7 +5093,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
                              thread_ssh_options.as_ref(),
                              &thread_stop,
                          ) {
-@@ -1817,8 +3338,7 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
+@@ -1817,8 +3455,7 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
  fn bridge_connection(
      stream: crate::ipc::LocalStream,
      target: &str,
@@ -4704,7 +5103,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      ssh_options: Option<&ManagedSshOptions>,
      _bridge_stop: &Arc<AtomicBool>,
  ) -> io::Result<()> {
-@@ -1827,7 +3347,7 @@ fn bridge_connection(
+@@ -1827,7 +3464,7 @@ fn bridge_connection(
      command
          .arg("-T")
          .arg(target)
@@ -4713,7 +5112,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          .stdin(Stdio::piped())
          .stdout(Stdio::piped())
          .stderr(Stdio::inherit());
-@@ -1872,8 +3392,7 @@ fn bridge_connection(
+@@ -1872,8 +3509,7 @@ fn bridge_connection(
  fn bridge_connection(
      stream: crate::ipc::LocalStream,
      target: &str,
@@ -4723,7 +5122,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      ssh_options: Option<&ManagedSshOptions>,
      bridge_stop: &Arc<AtomicBool>,
  ) -> io::Result<()> {
-@@ -1882,7 +3401,7 @@ fn bridge_connection(
+@@ -1882,7 +3518,7 @@ fn bridge_connection(
      command
          .arg("-T")
          .arg(target)
@@ -4732,7 +5131,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
          .stdin(Stdio::piped())
          .stdout(Stdio::piped())
          .stderr(Stdio::inherit());
-@@ -2204,9 +3723,8 @@ mod tests {
+@@ -2204,9 +3840,8 @@ mod tests {
          });
          let bridge = SshStdioBridge::start(
              "example".to_string(),
@@ -4743,7 +5142,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              None,
          )
          .expect("start bridge listener");
-@@ -2264,9 +3782,8 @@ mod tests {
+@@ -2264,9 +3899,8 @@ mod tests {
          });
          let bridge = SshStdioBridge::start(
              "example".to_string(),
@@ -4754,7 +5153,46 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              None,
          )
          .expect("start bridge listener");
-@@ -2546,6 +4063,26 @@ mod tests {
+@@ -2364,6 +3998,7 @@ mod tests {
+         let ssh = RemoteSsh {
+             target: "example".to_string(),
+             managed_config: Some(managed_config),
++            interactive_progress: false,
+         };
+ 
+         let command = ssh.command();
+@@ -2402,6 +4037,7 @@ mod tests {
+         let ssh = RemoteSsh {
+             target: "example".to_string(),
+             managed_config: Some(managed_config),
++            interactive_progress: false,
+         };
+         let args = ssh
+             .command()
+@@ -2433,6 +4069,7 @@ mod tests {
+         let ssh = RemoteSsh {
+             target: "example".to_string(),
+             managed_config: None,
++            interactive_progress: false,
+         };
+ 
+         let command = ssh.command();
+@@ -2496,6 +4133,14 @@ mod tests {
+         assert_eq!(remote.keybindings, RemoteKeybindings::Local);
+     }
+ 
++    #[test]
++    fn remote_progress_is_interactive_and_never_json() {
++        assert!(remote_progress_enabled(false, true, true));
++        assert!(!remote_progress_enabled(true, true, true));
++        assert!(!remote_progress_enabled(false, false, true));
++        assert!(!remote_progress_enabled(false, true, false));
++    }
++
+     #[test]
+     fn extract_remote_args_removes_equals_form() {
+         let args = vec!["herdr".into(), "--remote=user@host".into()];
+@@ -2546,6 +4191,26 @@ mod tests {
          assert!(remote.live_handoff);
      }
  
@@ -4781,7 +5219,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
      #[test]
      fn extract_remote_args_preserves_child_remote_options_after_separator() {
          let args = vec![
-@@ -2721,7 +4258,8 @@ mod tests {
+@@ -2721,7 +4386,8 @@ mod tests {
              arch: "x86_64",
          });
          assert_eq!(
@@ -4791,7 +5229,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
          );
      }
-@@ -2736,7 +4274,8 @@ mod tests {
+@@ -2736,7 +4402,8 @@ mod tests {
              .expect("path binary");
  
          assert_eq!(
@@ -4801,7 +5239,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "exec /usr/bin/herdr remote-client-bridge"
          );
      }
-@@ -2752,7 +4291,8 @@ mod tests {
+@@ -2752,7 +4419,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -4811,7 +5249,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "exec '/opt/herdr bin/herdr' remote-client-bridge"
          );
      }
-@@ -2768,7 +4308,8 @@ mod tests {
+@@ -2768,7 +4436,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -4821,7 +5259,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "exec /opt/homebrew/bin/herdr remote-client-bridge"
          );
          assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
-@@ -2855,7 +4396,8 @@ mod tests {
+@@ -2855,7 +4524,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -4831,7 +5269,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
              "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
          );
      }
-@@ -2916,6 +4458,7 @@ mod tests {
+@@ -2916,6 +4586,7 @@ mod tests {
              RemoteServerStatus::Running {
                  version: Some("0.6.0".into()),
                  protocol: Some(8),
@@ -4839,7 +5277,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
                  live_handoff: true,
                  detached_server_daemon: true
              }
-@@ -2932,6 +4475,7 @@ mod tests {
+@@ -2932,6 +4603,7 @@ mod tests {
              RemoteServerStatus::Running {
                  version: Some("0.6.0".into()),
                  protocol: Some(8),
@@ -4847,7 +5285,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..336ab6c634917a69738862d5d1af524b
                  live_handoff: false,
                  detached_server_daemon: false
              }
-@@ -3177,6 +4721,33 @@ mod tests {
+@@ -3177,6 +4849,33 @@ mod tests {
          );
      }
  

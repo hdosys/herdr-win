@@ -1,7 +1,7 @@
 From b875487ec4338ad3cce1d55a0f89ebc7953f6f6a Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 23 Aug 2026 00:13:32 +0200
-Subject: [PATCH 9/9] fix(agent): restore authority after transient takeover
+Subject: [PATCH 9/10] fix(agent): restore authority after transient takeover
 
 Refs herdrdev/herdr#1033
 ---

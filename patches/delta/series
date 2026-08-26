@@ -7,3 +7,4 @@
 0008-worktree-scoped-git-trust.patch
 0009-session-agent-autostart.patch
 0010-agent-transient-hook-takeover.patch
+0011-metadata-token-capacity.patch

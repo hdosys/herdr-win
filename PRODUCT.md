@@ -195,6 +195,9 @@ tests remain the detailed implementation truth.
   recognized foreground Agent regains hook authority when it returns. A real
   process exit or explicit hook clear still prevents the stale session from
   reclaiming authority.
+- One pane or workspace metadata report atomically updates or clears at most 64
+  custom tokens, and each pane or workspace retains at most 64. Existing key,
+  value, source, sequence, and TTL validation remains fail-closed.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
   first uses an exact version- and protocol-matching `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at

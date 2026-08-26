@@ -33,8 +33,9 @@ configuration repository.
   temporary Cargo target.
   Evidence: the v0.8.2 review found cross-mailbox owner leaks that a complete-queue
   compile hid. Moving the leaked deferred auto-start call from 0003 to its 0009
-  owner made all nine prefixes compile in 349.340 seconds; disabling incremental
-  output also removed a measured 5.4 GiB disposable-cache failure. Owner:
+  owner made the queue compile prefix by prefix; after appending the metadata owner,
+  all ten prefixes passed in 416.595 seconds. Disabling incremental output also
+  removed a measured 5.4 GiB disposable-cache failure. Owner:
   `scripts/delta_workflow.py`, its focused tests, and the refresh procedure in
   `CONTRIBUTING.md`.
 

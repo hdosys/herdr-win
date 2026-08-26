@@ -1,0 +1,289 @@
+From bab79214a4d3886f10e39fefaa81c0696bacb625 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Wed, 26 Aug 2026 13:52:34 +0200
+Subject: [PATCH 10/10] feat(api): expand metadata token capacity
+
+---
+ docs/next/CHANGELOG.md              |  1 +
+ docs/next/api/herdr-api.schema.json | 14 +++----
+ src/api/schema/common.rs            |  4 +-
+ src/app/api/panes.rs                | 29 +++++++++++++++
+ src/app/api/workspaces.rs           | 58 +++++++++++++++++++++++++++--
+ src/app/api_helpers.rs              | 16 ++++++--
+ 6 files changed, 105 insertions(+), 17 deletions(-)
+
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index a8322335b03fd4753d64da571d546f4d4fcdcd02..0f3fc76a41796bdbfed40227cea3ed62bab8bc17 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -6,6 +6,7 @@
+ - New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
+ 
+ ### Changed
++- Pane and workspace metadata reports can atomically update and retain up to 64 custom tokens while preserving the existing key, value, source, and TTL bounds.
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
+ 
+ ### Fixed
+diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
+index b53ad548124354ae7ae23612fbdc7709a68cb430..cb94dbfc6e8c0ceae81850e48d6883f685991cfc 100644
+--- a/docs/next/api/herdr-api.schema.json
++++ b/docs/next/api/herdr-api.schema.json
+@@ -857,7 +857,7 @@
+               "additionalProperties": {
+                 "type": "string"
+               },
+-              "maxProperties": 32,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -1101,7 +1101,7 @@
+               "additionalProperties": {
+                 "type": "string"
+               },
+-              "maxProperties": 32,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -2958,7 +2958,7 @@
+                   "null"
+                 ]
+               },
+-              "maxProperties": 16,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -4244,7 +4244,7 @@
+                   "null"
+                 ]
+               },
+-              "maxProperties": 16,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -6215,7 +6215,7 @@
+               "additionalProperties": {
+                 "type": "string"
+               },
+-              "maxProperties": 32,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -7491,7 +7491,7 @@
+               "additionalProperties": {
+                 "type": "string"
+               },
+-              "maxProperties": 32,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+@@ -9967,7 +9967,7 @@
+               "additionalProperties": {
+                 "type": "string"
+               },
+-              "maxProperties": 32,
++              "maxProperties": 64,
+               "propertyNames": {
+                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
+               },
+diff --git a/src/api/schema/common.rs b/src/api/schema/common.rs
+index 7313002cda2210fbfa29a8be5fa2167b4bfd8c98..f0197516d54968ac086be0ed3adb0f70430bfdf0 100644
+--- a/src/api/schema/common.rs
++++ b/src/api/schema/common.rs
+@@ -5,7 +5,7 @@ pub(super) fn metadata_token_patch_schema(
+ ) -> schemars::Schema {
+     schemars::json_schema!({
+         "type": "object",
+-        "maxProperties": 16,
++        "maxProperties": 64,
+         "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,32}$" },
+         "additionalProperties": { "type": ["string", "null"] }
+     })
+@@ -16,7 +16,7 @@ pub(super) fn metadata_token_values_schema(
+ ) -> schemars::Schema {
+     schemars::json_schema!({
+         "type": "object",
+-        "maxProperties": 32,
++        "maxProperties": 64,
+         "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,32}$" },
+         "additionalProperties": { "type": "string" }
+     })
+diff --git a/src/app/api/panes.rs b/src/app/api/panes.rs
+index 5118382806722a9e80d810ce852cc86dffea56ed..f4f2808fce7773137eb8f767eaff1118ea9b1e12 100644
+--- a/src/app/api/panes.rs
++++ b/src/app/api/panes.rs
+@@ -3901,6 +3901,35 @@ mod tests {
+         assert!(app.state.terminals[&terminal_id].agent_metadata.is_empty());
+     }
+ 
++    #[test]
++    fn pane_metadata_accepts_sixty_four_tokens_and_rejects_resource_overflow() {
++        let (mut app, pane_id) = app_with_test_workspace();
++        let mut params = metadata_params(pane_id.clone());
++        params.title = None;
++        params.tokens = (0..MAX_METADATA_TOKEN_KEYS_PER_RESOURCE)
++            .map(|index| (format!("key{index}"), Some("value".into())))
++            .collect();
++
++        let response = app.handle_pane_report_metadata("maximum".into(), params);
++        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
++
++        let mut overflow = metadata_params(pane_id.clone());
++        overflow.title = None;
++        overflow.tokens =
++            std::collections::HashMap::from([("overflow".into(), Some("rejected".into()))]);
++        let response = app.handle_pane_report_metadata("overflow".into(), overflow);
++        assert_eq!(metadata_error_code(&response), "metadata_token_limit");
++
++        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
++        let terminal_id = &app.state.workspaces[0]
++            .pane_state(internal_pane_id)
++            .unwrap()
++            .attached_terminal_id;
++        let values = app.state.terminals[terminal_id].metadata_tokens.values();
++        assert_eq!(values.len(), MAX_METADATA_TOKEN_KEYS_PER_RESOURCE);
++        assert!(!values.contains_key("overflow"));
++    }
++
+     #[test]
+     fn pane_tokens_are_independent_from_presentation_guards() {
+         let (mut app, pane_id) = app_with_test_workspace();
+diff --git a/src/app/api/workspaces.rs b/src/app/api/workspaces.rs
+index 76b5866ba96dcf95f356c748fb9c7a9911804153..000cc1a35e42691cc87cf2b6559b570b2363c2ed 100644
+--- a/src/app/api/workspaces.rs
++++ b/src/app/api/workspaces.rs
+@@ -7,7 +7,10 @@ use crate::api::schema::{
+ };
+ use crate::app::{App, DeferredWorkspaceShell};
+ 
+-use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
++use super::super::api_helpers::{
++    normalize_metadata_source, normalize_metadata_tokens, normalize_metadata_ttl,
++    MAX_METADATA_TOKEN_KEYS_PER_RESOURCE,
++};
+ use super::responses::{encode_error, encode_success};
+ 
+ impl App {
+@@ -282,7 +285,7 @@ impl App {
+             Ok(ttl) => ttl,
+             Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
+         };
+-        let tokens = match super::super::api_helpers::normalize_metadata_tokens(params.tokens) {
++        let tokens = match normalize_metadata_tokens(params.tokens) {
+             Ok(tokens) => tokens,
+             Err(message) => return encode_error(id, "invalid_metadata_token", message),
+         };
+@@ -297,14 +300,14 @@ impl App {
+             return encode_success(id, ResponseResult::Ok {});
+         }
+         if workspace.metadata_tokens.key_count_after_patch(&tokens)
+-            > super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
++            > MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
+         {
+             return encode_error(
+                 id,
+                 "metadata_token_limit",
+                 format!(
+                     "workspace metadata may contain at most {} tokens",
+-                    super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
++                    MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
+                 ),
+             );
+         }
+@@ -598,6 +601,53 @@ mod tests {
+         )));
+     }
+ 
++    #[test]
++    fn workspace_metadata_accepts_sixty_four_tokens_and_rejects_resource_overflow() {
++        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
++        let mut app = App::new(
++            &Config::default(),
++            true,
++            None,
++            api_rx,
++            crate::api::EventHub::default(),
++        );
++        app.state.workspaces = vec![Workspace::test_new("one")];
++        let workspace_id = app.public_workspace_id(0);
++        let response = app.handle_workspace_report_metadata(
++            "maximum".into(),
++            WorkspaceReportMetadataParams {
++                workspace_id: workspace_id.clone(),
++                source: "user:test".into(),
++                tokens: (0..MAX_METADATA_TOKEN_KEYS_PER_RESOURCE)
++                    .map(|index| (format!("key{index}"), Some("value".into())))
++                    .collect(),
++                seq: None,
++                ttl_ms: None,
++            },
++        );
++        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
++
++        let response = app.handle_workspace_report_metadata(
++            "overflow".into(),
++            WorkspaceReportMetadataParams {
++                workspace_id,
++                source: "user:test".into(),
++                tokens: std::collections::HashMap::from([(
++                    "overflow".into(),
++                    Some("rejected".into()),
++                )]),
++                seq: None,
++                ttl_ms: None,
++            },
++        );
++        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
++        assert_eq!(error.error.code, "metadata_token_limit");
++
++        let values = app.workspace_info(0).tokens;
++        assert_eq!(values.len(), MAX_METADATA_TOKEN_KEYS_PER_RESOURCE);
++        assert!(!values.contains_key("overflow"));
++    }
++
+     #[test]
+     fn workspace_token_ttl_expires_through_runtime_and_emits_update() {
+         let event_hub = crate::api::EventHub::default();
+diff --git a/src/app/api_helpers.rs b/src/app/api_helpers.rs
+index a224938d3b4b7c98142fcd2067822bfca6107a59..0b0c2e955bb5c4dda6efc6b0e2b2c73bf52e562f 100644
+--- a/src/app/api_helpers.rs
++++ b/src/app/api_helpers.rs
+@@ -202,8 +202,8 @@ pub(super) fn normalize_reported_agent_label(agent: &str) -> Option<String> {
+ pub(super) const METADATA_TTL_MAX_MS: u64 = 86_400_000;
+ pub(super) const METADATA_SOURCE_MAX_CHARS: usize = 80;
+ const METADATA_TTL_MIN_MS: u64 = 1;
+-const MAX_METADATA_TOKEN_KEYS_PER_REQUEST: usize = 16;
+-pub(super) const MAX_METADATA_TOKEN_KEYS_PER_RESOURCE: usize = 32;
++const MAX_METADATA_TOKEN_KEYS_PER_REQUEST: usize = 64;
++pub(super) const MAX_METADATA_TOKEN_KEYS_PER_RESOURCE: usize = 64;
+ const MAX_METADATA_TOKEN_KEY_LEN: usize = 32;
+ const MAX_METADATA_TOKEN_VALUE_LEN: usize = 80;
+ 
+@@ -308,9 +308,17 @@ mod metadata_token_tests {
+             )]))
+             .is_err());
+         }
+-        let too_many = (0..=MAX_METADATA_TOKEN_KEYS_PER_REQUEST)
++        let maximum = (0..MAX_METADATA_TOKEN_KEYS_PER_REQUEST)
+             .map(|index| (format!("key{index}"), Some("value".into())))
+             .collect();
+-        assert!(normalize_metadata_tokens(too_many).is_err());
++        assert_eq!(
++            normalize_metadata_tokens(maximum).unwrap().len(),
++            MAX_METADATA_TOKEN_KEYS_PER_REQUEST
++        );
++
++        let one_too_many = (0..=MAX_METADATA_TOKEN_KEYS_PER_REQUEST)
++            .map(|index| (format!("key{index}"), Some("value".into())))
++            .collect();
++        assert!(normalize_metadata_tokens(one_too_many).is_err());
+     }
+ }
+-- 
+2.55.0.windows.3
+

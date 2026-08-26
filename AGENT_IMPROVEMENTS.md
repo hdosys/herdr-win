@@ -194,10 +194,10 @@ configuration repository.
 
 - **Status: proposed. Exercise restored OpenCode roots in the native split
   probe.** Start the existing adaptive-split acceptance from a persisted OpenCode
-  session after a Herdr restart, then create direct children and assert the native
-  panes. Evidence: all 32 asset tests and the fresh managed-launch contract passed,
-  while the live restored process used `opencode --session ...` without the
-  loopback server flags and therefore exposed no endpoint for child attachment.
-  The restored command path was the only missing owner. Owner: the OpenCode native
-  Candidate acceptance boundary, reusing its current split probe rather than a
-  second harness.
+  session after a Herdr restart, then create several direct children concurrently
+  and assert the native panes. Evidence: the fresh managed-launch contract and all
+  32 sequential asset tests first passed while a restored process exposed no
+  attachable endpoint. After that fix, seven simultaneous child events all read the
+  pre-split layout and repeatedly divided the Main pane because no prior child pane
+  ID had been recorded. Owner: the OpenCode native Candidate acceptance boundary,
+  reusing its current split probe rather than a second harness.

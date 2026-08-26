@@ -2000,6 +2000,7 @@ impl HeadlessServer {
         if !update.suppress_completion && self.app.state.sound.allows(update.known_agent) {
             if let Some(sound) =
                 crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                    self.app.state.notify_on_agent_completion,
                     suppress_active_tab_notifications,
                     update.previous_state,
                     update.state,
@@ -2019,6 +2020,7 @@ impl HeadlessServer {
             return;
         }
         let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
+            self.app.state.notify_on_agent_completion,
             suppress_active_tab_notifications,
             update,
         ) else {
@@ -2388,6 +2390,7 @@ impl HeadlessServer {
                 {
                     if let Some(sound) =
                         crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                            self.app.state.notify_on_agent_completion,
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,
@@ -2486,6 +2489,7 @@ impl HeadlessServer {
                 {
                     if let Some(sound) =
                         crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                            self.app.state.notify_on_agent_completion,
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,
@@ -3939,6 +3943,7 @@ impl HeadlessServer {
             {
                 if let Some(kind) =
                     crate::app::actions::notification_toast_for_state_change_with_agent_labels(
+                        self.app.state.notify_on_agent_completion,
                         suppress_active_tab_notifications,
                         *prev_state,
                         new_state,
@@ -3984,6 +3989,7 @@ impl HeadlessServer {
             {
                 if let Some(sound) =
                     crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                        self.app.state.notify_on_agent_completion,
                         suppress_active_tab_notifications,
                         *prev_state,
                         new_state,
@@ -7644,6 +7650,7 @@ next_tab = ""
                 message: None,
                 seq: None,
                 session_ref: None,
+                suppress_completion: false,
             })
         );
         assert!(
@@ -11914,6 +11921,7 @@ next_tab = ""
                     seq: Some(19),
                     agent_session_id: None,
                     agent_session_path: None,
+                    suppress_completion: false,
                 }),
             },
             respond_to,

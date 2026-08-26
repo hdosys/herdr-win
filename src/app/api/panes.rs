@@ -1252,6 +1252,7 @@ impl App {
             state: detect_state_from_api(params.state),
             message: params.message,
             seq: params.seq,
+            suppress_completion: params.suppress_completion,
         });
 
         encode_success(id, ResponseResult::Ok {})

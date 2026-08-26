@@ -216,7 +216,20 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         .config
         .remote
         .manage_ssh_config;
-    let remote_ssh = RemoteSsh::new(remote.target.clone(), manage_ssh_config);
+    let interactive_progress = remote_progress_enabled(
+        remote.json,
+        io::stdin().is_terminal(),
+        io::stderr().is_terminal(),
+    );
+    let remote_ssh = RemoteSsh::new(
+        remote.target.clone(),
+        manage_ssh_config,
+        interactive_progress,
+    );
+    remote_ssh.progress(format_args!(
+        "Connecting to {} and checking remote Herdr...",
+        remote.target
+    ));
     let detected = detect_remote_host(&remote_ssh)?;
     if remote.provision {
         let result = provision_remote(&remote_ssh, detected, remote.yes)?;
@@ -285,6 +298,10 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         }
     };
 
+    remote_ssh.progress(format_args!(
+        "Opening the remote session on {}; starting its Herdr server if needed...",
+        remote.target
+    ));
     let _bridge = SshStdioBridge::start(
         remote.target,
         remote_command,
@@ -293,6 +310,10 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     )?;
 
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
+}
+
+fn remote_progress_enabled(json: bool, stdin_terminal: bool, stderr_terminal: bool) -> bool {
+    !json && stdin_terminal && stderr_terminal
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,10 +693,11 @@ impl Drop for ManagedSshConfig {
 struct RemoteSsh {
     target: String,
     managed_config: Option<ManagedSshConfig>,
+    interactive_progress: bool,
 }
 
 impl RemoteSsh {
-    fn new(target: String, manage_ssh_config: bool) -> Self {
+    fn new(target: String, manage_ssh_config: bool, interactive_progress: bool) -> Self {
         let managed_config = if manage_ssh_config {
             write_managed_ssh_config()
                 .inspect_err(|err| {
@@ -689,11 +711,18 @@ impl RemoteSsh {
         Self {
             target,
             managed_config,
+            interactive_progress,
         }
     }
 
     fn target(&self) -> &str {
         &self.target
+    }
+
+    fn progress(&self, message: impl std::fmt::Display) {
+        if self.interactive_progress {
+            eprintln!("{message}");
+        }
     }
 
     fn options(&self) -> Option<&ManagedSshOptions> {
@@ -855,6 +884,10 @@ impl RemoteSsh {
     ) -> io::Result<String> {
         let archive_name = windows_payload_archive_name()?;
         let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
+        self.progress(format_args!(
+            "Preparing a temporary Herdr install on {}...",
+            self.target
+        ));
         let output = self.powershell_script_output(
             remote_herdr,
             &windows_install_prepare_script(remote_herdr, &archive_name),
@@ -867,6 +900,11 @@ impl RemoteSsh {
         }
 
         let destination = windows_scp_destination(&self.target, &format!(".herdr/{archive_name}"));
+        self.progress(format_args!(
+            "Transferring Herdr {} to {}...",
+            current_version(),
+            self.target
+        ));
         let transfer = self
             .scp_command()
             .arg(source_path)
@@ -891,6 +929,10 @@ impl RemoteSsh {
             )));
         }
 
+        self.progress(format_args!(
+            "Validating the Herdr package on {}...",
+            self.target
+        ));
         let output = self.powershell_script_output(
             remote_herdr,
             &windows_install_stage_script(remote_herdr, &temporary_archive, expected_sha256),
@@ -1274,11 +1316,26 @@ fn prepare_remote_herdr(
         &install_source_description(&remote_herdr.platform, override_binary.as_deref()),
         yes || stop_after_install_approved,
     )?;
+    ssh.progress(format_args!(
+        "Preparing Herdr {} for {}...",
+        current_version(),
+        ssh.target()
+    ));
     let source = resolve_install_source(&remote_herdr.platform, override_binary)?;
+    ssh.progress(format_args!(
+        "Transferring and installing Herdr {} on {}...",
+        current_version(),
+        ssh.target()
+    ));
     let install_result = ssh.install_herdr(&remote_herdr, &source.path);
     source.cleanup();
     install_result?;
 
+    ssh.progress(format_args!(
+        "Verifying Herdr {} on {}...",
+        current_version(),
+        ssh.target()
+    ));
     if !remote_binary_matches(ssh, &remote_herdr)? {
         return Err(io::Error::other(format!(
             "installed remote herdr at {}, but it did not report version {}",
@@ -1287,6 +1344,11 @@ fn prepare_remote_herdr(
         )));
     }
     warn_if_remote_bin_not_on_path(ssh)?;
+    ssh.progress(format_args!(
+        "Herdr {} is installed and verified on {}.",
+        current_version(),
+        ssh.target()
+    ));
 
     Ok(PreparedRemoteHerdr {
         remote_herdr,
@@ -1351,6 +1413,11 @@ fn prepare_remote_windows_herdr(
         yes || stop_before_activation,
     )?;
 
+    ssh.progress(format_args!(
+        "Preparing Herdr {} for {}...",
+        current_version(),
+        ssh.target()
+    ));
     let source = resolve_windows_install_source(&platform, override_payload)?;
     if source.kind != InstallSourceKind::WindowsZip {
         source.cleanup();
@@ -1387,16 +1454,31 @@ fn prepare_remote_windows_herdr(
             return Err(err);
         }
     }
+    ssh.progress(format_args!(
+        "Activating Herdr {} on {}...",
+        current_version(),
+        ssh.target()
+    ));
     if let Err(err) = ssh.activate_windows_payload(&managed, &stage) {
         ssh.cleanup_windows_stage(&managed, &stage);
         return Err(err);
     }
+    ssh.progress(format_args!(
+        "Verifying Herdr {} on {}...",
+        current_version(),
+        ssh.target()
+    ));
     if !remote_binary_matches(ssh, &managed)? {
         return Err(io::Error::other(format!(
             "installed Windows remote Herdr at {}, but its binary, version, protocol, or payload did not match",
             managed.shell_path
         )));
     }
+    ssh.progress(format_args!(
+        "Herdr {} is installed and verified on {}.",
+        current_version(),
+        ssh.target()
+    ));
 
     Ok(PreparedRemoteHerdr {
         remote_herdr: managed,
@@ -2114,6 +2196,10 @@ fn ensure_remote_server_ready(
     known_status: Option<RemoteServerStatus>,
     restart_required: bool,
 ) -> io::Result<()> {
+    ssh.progress(format_args!(
+        "Checking the Herdr server on {}...",
+        ssh.target()
+    ));
     let status = match known_status {
         Some(status) => status,
         None => remote_server_status(ssh, remote_herdr)?,
@@ -2139,6 +2225,10 @@ fn ensure_remote_server_ready(
     };
 
     if live_handoff_enabled && live_handoff {
+        ssh.progress(format_args!(
+            "Handing the Herdr server on {} to the new binary...",
+            ssh.target()
+        ));
         match live_handoff_remote_server(ssh, remote_herdr) {
             Ok(()) => return Ok(()),
             Err(err) => {
@@ -2387,6 +2477,10 @@ fn provision_remote(
 }
 
 fn validate_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
+    ssh.progress(format_args!(
+        "Checking the Herdr configuration on {}...",
+        ssh.target()
+    ));
     let output = remote_herdr_output(ssh, remote_herdr, &["config", "check"])?;
     if output.status.success() {
         Ok(())
@@ -2529,6 +2623,10 @@ enum RemoteConfigReloadStatus {
 }
 
 fn reload_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
+    ssh.progress(format_args!(
+        "Applying the Herdr configuration on {}...",
+        ssh.target()
+    ));
     let output = remote_herdr_output(ssh, remote_herdr, &["server", "reload-config", "--json"])?;
     if !output.status.success() {
         return Err(command_failed(
@@ -2544,6 +2642,10 @@ fn reload_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Resu
         ))
     })?;
     if result.status == RemoteConfigReloadStatus::Applied {
+        ssh.progress(format_args!(
+            "The Herdr configuration is active on {}.",
+            ssh.target()
+        ));
         return Ok(());
     }
     Err(io::Error::other(format!(
@@ -2554,6 +2656,10 @@ fn reload_remote_config(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Resu
 }
 
 fn start_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
+    ssh.progress(format_args!(
+        "Starting the Herdr server on {}...",
+        ssh.target()
+    ));
     let output = remote_herdr_output(ssh, remote_herdr, &["server", "start"])?;
     if !output.status.success() {
         return Err(command_failed("remote server start failed", &output));
@@ -2574,6 +2680,10 @@ fn start_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Resul
                 &selected_binary,
             ) =>
         {
+            ssh.progress(format_args!(
+                "The Herdr server is running on {}.",
+                ssh.target()
+            ));
             Ok(())
         }
         _ => Err(io::Error::other(
@@ -2782,21 +2892,28 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
         return Err(command_failed("remote server live handoff failed", &output));
     }
 
-    eprintln!(
-        "handed off the remote herdr server on {}; reconnecting to the prepared server.",
+    ssh.progress(format_args!(
+        "The Herdr server on {} is using the new binary. Reconnecting...",
         ssh.target()
-    );
+    ));
     Ok(())
 }
 
 fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
+    ssh.progress(format_args!(
+        "Stopping the Herdr server on {}...",
+        ssh.target()
+    ));
     let output = remote_herdr_output(ssh, remote_herdr, &["server", "stop"])?;
     if !output.status.success() {
         return Err(command_failed("remote server stop failed", &output));
     }
 
     wait_for_remote_server_shutdown(ssh, remote_herdr)?;
-    eprintln!("stopped the remote herdr server on {}.", ssh.target());
+    ssh.progress(format_args!(
+        "The Herdr server is stopped on {}.",
+        ssh.target()
+    ));
     Ok(())
 }
 
@@ -3882,6 +3999,7 @@ mod tests {
         let ssh = RemoteSsh {
             target: "example".to_string(),
             managed_config: Some(managed_config),
+            interactive_progress: false,
         };
 
         let command = ssh.command();
@@ -3920,6 +4038,7 @@ mod tests {
         let ssh = RemoteSsh {
             target: "example".to_string(),
             managed_config: Some(managed_config),
+            interactive_progress: false,
         };
         let args = ssh
             .command()
@@ -3951,6 +4070,7 @@ mod tests {
         let ssh = RemoteSsh {
             target: "example".to_string(),
             managed_config: None,
+            interactive_progress: false,
         };
 
         let command = ssh.command();
@@ -4012,6 +4132,14 @@ mod tests {
         let remote = remote.unwrap();
         assert_eq!(remote.target, "dev");
         assert_eq!(remote.keybindings, RemoteKeybindings::Local);
+    }
+
+    #[test]
+    fn remote_progress_is_interactive_and_never_json() {
+        assert!(remote_progress_enabled(false, true, true));
+        assert!(!remote_progress_enabled(true, true, true));
+        assert!(!remote_progress_enabled(false, false, true));
+        assert!(!remote_progress_enabled(false, true, false));
     }
 
     #[test]

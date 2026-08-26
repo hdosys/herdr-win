@@ -1,4 +1,4 @@
-From 8b5578144659c749bcac3b5c8674cf20e3b35cbd Mon Sep 17 00:00:00 2001
+From 9133eba1ea1040eb0725b71cd776f44b25c06291 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/10] feat(session): auto-start configured agent
@@ -9,22 +9,23 @@ Refs herdrdev/herdr#321
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
  justfile                                      |   8 +-
- src/app/agents.rs                             | 253 +++++++++++++++++-
- src/app/api/panes.rs                          |  30 +++
+ src/agent_resume.rs                           |  23 +-
+ src/app/agents.rs                             | 284 +++++++++++++++++-
+ src/app/api/panes.rs                          |  30 ++
  src/app/api/tabs.rs                           |  10 +-
  src/app/creation.rs                           |   2 +
- src/app/mod.rs                                |  90 ++++++-
+ src/app/mod.rs                                |  90 +++++-
  src/app/runtime.rs                            |   3 +
  src/config.rs                                 |  20 ++
  src/config/io.rs                              |  18 ++
  src/config/model.rs                           |  22 +-
  src/main.rs                                   |   4 +
  src/pane.rs                                   |   6 +
- src/platform/mod.rs                           |  33 ++-
- src/platform/windows.rs                       |  41 ++-
+ src/platform/mod.rs                           |  82 ++++-
+ src/platform/windows.rs                       |  89 ++++--
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 19 files changed, 550 insertions(+), 18 deletions(-)
+ 20 files changed, 682 insertions(+), 37 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
@@ -106,8 +107,56 @@ index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977
  
  # Enforce deterministic UI hot-path architecture boundaries
  ui-hot-path-architecture-test:
+diff --git a/src/agent_resume.rs b/src/agent_resume.rs
+index cd1ae7bb2fe39f7952189edcef8db9fc5697b094..3624f878f835e59c6c3919fdc1899dfb487d4b34 100644
+--- a/src/agent_resume.rs
++++ b/src/agent_resume.rs
+@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
+ const MAX_SESSION_ID_LEN: usize = 512;
+ const MAX_SESSION_PATH_LEN: usize = 4096;
+ 
++pub(crate) fn opencode_local_server_argv() -> Vec<String> {
++    ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns"]
++        .map(str::to_string)
++        .into()
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct AgentSessionRef {
+     pub kind: AgentSessionRefKind,
+@@ -166,11 +172,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
+             ]
+         }
+         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
+-            vec![
+-                "opencode".into(),
+-                "--session".into(),
+-                session_ref.value.clone(),
+-            ]
++            let mut argv = opencode_local_server_argv();
++            argv.extend(["--session".into(), session_ref.value.clone()]);
++            argv
+         }
+         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
+             vec![
+@@ -394,7 +398,14 @@ mod tests {
+             )
+             .unwrap()
+             .argv,
+-            vec!["opencode", "--session", "opencode-session"]
++            vec![
++                "opencode",
++                "--hostname=127.0.0.1",
++                "--port=0",
++                "--no-mdns",
++                "--session",
++                "opencode-session"
++            ]
+         );
+         assert_eq!(
+             plan(
 diff --git a/src/app/agents.rs b/src/app/agents.rs
-index b2aac01cf404b98824ecdda9fb509238a1ffcc07..053097a40ec28deaf1e8e4321499479bf87f194d 100644
+index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b55f99284 100644
 --- a/src/app/agents.rs
 +++ b/src/app/agents.rs
 @@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
@@ -119,7 +168,32 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..053097a40ec28deaf1e8e4321499479b
  use crate::api::schema::AgentStartParams;
  
  const DEFAULT_AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
-@@ -142,6 +142,186 @@ impl App {
+@@ -11,7 +11,6 @@ pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
+ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
+     "agent start timeout must be greater than 3000ms and at most 300000ms";
+ const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
+-
+ fn valid_agent_name(name: &str) -> bool {
+     let mut chars = name.chars();
+     matches!(chars.next(), Some('a'..='z'))
+@@ -19,6 +18,16 @@ fn valid_agent_name(name: &str) -> bool {
+         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+ }
+ 
++fn agent_launch_argv(kind: crate::detect::Agent, args: Vec<String>) -> Vec<String> {
++    let mut argv = if kind == crate::detect::Agent::OpenCode && args.is_empty() {
++        crate::agent_resume::opencode_local_server_argv()
++    } else {
++        vec![crate::detect::interactive_agent_executable(kind).to_string()]
++    };
++    argv.extend(args);
++    argv
++}
++
+ impl App {
+     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
+         self.state
+@@ -142,6 +151,186 @@ impl App {
              })
      }
  
@@ -306,18 +380,45 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..053097a40ec28deaf1e8e4321499479b
      pub(super) fn start_agent(
          &mut self,
          params: AgentStartParams,
-@@ -469,6 +649,7 @@ pub(super) enum AgentRenameError {
+@@ -192,8 +381,7 @@ impl App {
+         let shell_name = available_shell_name(runtime)
+             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+ 
+-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
+-        argv.extend(params.args);
++        let argv = agent_launch_argv(kind, params.args);
+         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
+             .ok_or(AgentStartError::InvalidArgument)?;
+         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
+@@ -468,7 +656,8 @@ pub(super) enum AgentRenameError {
+ 
  #[cfg(test)]
  mod tests {
-     use super::valid_agent_name;
+-    use super::valid_agent_name;
++    use super::{agent_launch_argv, valid_agent_name};
 +    use std::time::Instant;
  
      #[test]
      fn agent_names_use_a_small_cli_safe_grammar() {
-@@ -488,4 +669,74 @@ mod tests {
+@@ -488,4 +677,89 @@ mod tests {
              assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
          }
      }
++
++    #[test]
++    fn managed_opencode_root_exposes_only_an_ephemeral_local_server() {
++        assert_eq!(
++            agent_launch_argv(crate::detect::Agent::OpenCode, Vec::new()),
++            ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns",]
++        );
++        assert_eq!(
++            agent_launch_argv(
++                crate::detect::Agent::OpenCode,
++                vec!["attach".into(), "http://127.0.0.1:4096".into()],
++            ),
++            ["opencode", "attach", "http://127.0.0.1:4096"]
++        );
++    }
 +
 +    #[tokio::test]
 +    async fn new_tab_agent_auto_start_reuses_managed_launch_for_each_root() {
@@ -645,10 +746,10 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
      fn startup_uses_configured_sidebar_state() {
          let mut config = Config::default();
 diff --git a/src/app/runtime.rs b/src/app/runtime.rs
-index 8367a22350ff01dc3683f4930d2efef2a8178bf8..e7464b4d32faaced0892a0d5e1bca5cb33c45a14 100644
+index 933d80fca7fe8f1ab3ccafd3549f2faa4ea2ecd2..6559ad7d8918e0c7e84f0998444f8582d841daff 100644
 --- a/src/app/runtime.rs
 +++ b/src/app/runtime.rs
-@@ -297,6 +297,8 @@ impl App {
+@@ -302,6 +302,8 @@ impl App {
              self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
          }
  
@@ -657,7 +758,7 @@ index 8367a22350ff01dc3683f4930d2efef2a8178bf8..e7464b4d32faaced0892a0d5e1bca5cb
          if self
              .config_diagnostic_deadline
              .is_some_and(|deadline| now >= deadline)
-@@ -623,6 +625,7 @@ impl App {
+@@ -628,6 +630,7 @@ impl App {
              self.next_auto_update_check,
              self.next_agent_manifest_update_check,
              self.agent_metadata_deadline,
@@ -666,10 +767,10 @@ index 8367a22350ff01dc3683f4930d2efef2a8178bf8..e7464b4d32faaced0892a0d5e1bca5cb
              self.session_save_deadline,
              self.selection_autoscroll_deadline,
 diff --git a/src/config.rs b/src/config.rs
-index cf62e8ffcf31698205dae8e54ba1490d1668fba2..d65e65edeb0569f3b7d6e8538efc1ac1c0b74403 100644
+index b803a17f883dff8366dcbc1d1b90bf0be0129355..c1c2d50a4e4a455d1017c3ec0b7596063ac878c4 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -91,11 +91,31 @@ impl Config {
+@@ -90,11 +90,31 @@ impl Config {
              .chain(self.ui.sound.diagnostics())
              .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
              .chain(window_title_diagnostics(&self.ui.window_title))
@@ -817,10 +918,10 @@ index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..f06448898103d6fab277b9b670b80163
  # a Herdr server restart. Requires official integrations that report session refs.
  # resume_agents_on_restore = true
 diff --git a/src/pane.rs b/src/pane.rs
-index 7997ff24d25f51f95fafea2db8aac7a627fd534e..5104b68e5d1618ada6574fc0e0eed66fd234253f 100644
+index f68999bcc9f64fd789e2fa502207867eb2a23ebb..2f2ec67a13e935a8c16aa64c51b12e13c3289edd 100644
 --- a/src/pane.rs
 +++ b/src/pane.rs
-@@ -2965,6 +2965,12 @@ impl PaneRuntime {
+@@ -2985,6 +2985,12 @@ impl PaneRuntime {
          crate::platform::process_cwd(pid)
      }
  
@@ -834,7 +935,7 @@ index 7997ff24d25f51f95fafea2db8aac7a627fd534e..5104b68e5d1618ada6574fc0e0eed66f
          let pid = self.child_pid.load(Ordering::Acquire);
          (pid > 0).then_some(pid)
 diff --git a/src/platform/mod.rs b/src/platform/mod.rs
-index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4cba595633 100644
+index d125f74a52480146b691adf61d1e78cc90625e00..8eb8035c1746ee04f12354377739a93b79f473bb 100644
 --- a/src/platform/mod.rs
 +++ b/src/platform/mod.rs
 @@ -279,7 +279,6 @@ fn normalized_process_name(name: &str) -> String {
@@ -845,7 +946,7 @@ index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4c
  pub(crate) fn is_powershell_process_name(name: &str) -> bool {
      matches!(
          normalized_process_name(name).as_str(),
-@@ -287,6 +286,38 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
+@@ -287,12 +286,47 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
      )
  }
  
@@ -884,11 +985,87 @@ index d125f74a52480146b691adf61d1e78cc90625e00..23959b5355a14e02ca88626337e06c4c
  #[cfg(any(target_os = "linux", target_os = "macos"))]
  pub(crate) fn interactive_unix_shell_command(
      argv: &[String],
+     shell_name: &str,
+     quote_posix_arg: fn(&str) -> String,
+ ) -> Option<String> {
++    if normalized_process_name(shell_name) == "nu" {
++        return interactive_nushell_command(argv);
++    }
+     let quote = if is_powershell_process_name(shell_name) {
+         quote_powershell_arg
+     } else {
+@@ -307,6 +341,35 @@ pub(crate) fn interactive_unix_shell_command(
+     Some(command)
+ }
+ 
++#[cfg(any(test, target_os = "linux", target_os = "macos"))]
++fn interactive_nushell_command(argv: &[String]) -> Option<String> {
++    let mut parts = argv.iter();
++    let mut command = format!("^{}", quote_nushell_arg(parts.next()?));
++    for part in parts {
++        command.push(' ');
++        command.push_str(&quote_nushell_arg(part));
++    }
++    Some(command)
++}
++
++#[cfg(any(test, target_os = "linux", target_os = "macos"))]
++fn quote_nushell_arg(value: &str) -> String {
++    let mut quoted = String::with_capacity(value.len() + 2);
++    quoted.push('"');
++    for ch in value.chars() {
++        match ch {
++            '\\' => quoted.push_str("\\\\"),
++            '"' => quoted.push_str("\\\""),
++            '\n' => quoted.push_str("\\n"),
++            '\r' => quoted.push_str("\\r"),
++            '\t' => quoted.push_str("\\t"),
++            ch => quoted.push(ch),
++        }
++    }
++    quoted.push('"');
++    quoted
++}
++
+ pub(crate) fn quote_powershell_arg(value: &str) -> String {
+     if !value.is_empty()
+         && value.bytes().all(|byte| {
+@@ -405,6 +468,19 @@ impl PrefixInputSource for RealPrefixInputSource {
+     }
+ }
+ 
++#[cfg(test)]
++mod nushell_command_tests {
++    #[test]
++    fn preserves_windows_paths_and_quotes() {
++        let argv = vec![r"C:\Program Files\agent.exe".into(), r#"a\b\"c"#.into()];
++
++        assert_eq!(
++            super::interactive_nushell_command(&argv).as_deref(),
++            Some(r#"^"C:\\Program Files\\agent.exe" "a\\b\\\"c""#)
++        );
++    }
++}
++
+ #[cfg(all(test, unix))]
+ mod tests {
+     use super::*;
+@@ -495,6 +571,10 @@ mod tests {
+             interactive_shell_command(&argv, "pwsh").as_deref(),
+             Some("pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'")
+         );
++        assert_eq!(
++            interactive_shell_command(&argv, "nu").as_deref(),
++            Some("^\"pi\" \"\" \"two words\" \"a'b\" \"$HOME\" \"semi;colon\" \"@options\"")
++        );
+     }
+ 
+     #[test]
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
-index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a139c7e5097 100644
+index b99ec85848257429b398254d263fbe814dfd5459..37bfebaedc2499de54c531b92a7ce248dc71730a 100644
 --- a/src/platform/windows.rs
 +++ b/src/platform/windows.rs
-@@ -534,6 +534,14 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString
+@@ -536,6 +536,14 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString
  pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
      let shell_name = shell_name.to_ascii_lowercase();
      let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
@@ -903,7 +1080,7 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
      let script = powershell_agent_script(argv)?;
      if powershell {
          Some(script)
-@@ -544,20 +552,19 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
+@@ -546,20 +554,19 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
  
  fn powershell_agent_script(argv: &[String]) -> Option<String> {
      let (program, args) = argv.split_first()?;
@@ -932,7 +1109,7 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
  }
  
  fn quote_windows_command_line_arg(value: &str) -> String {
-@@ -3317,12 +3324,16 @@ mod tests {
+@@ -3401,12 +3408,16 @@ mod tests {
      }
  
      #[test]
@@ -951,7 +1128,7 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
          );
      }
  
-@@ -3381,7 +3392,7 @@ mod tests {
+@@ -3465,7 +3476,7 @@ mod tests {
              .collect::<Vec<_>>();
          assert_eq!(
              String::from_utf16(&utf16).unwrap(),
@@ -960,11 +1137,15 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
          );
      }
  
-@@ -3403,6 +3414,12 @@ mod tests {
+@@ -3487,6 +3498,16 @@ mod tests {
              "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
          )
          .unwrap();
-+        fs::write(base.join("pi"), "#!/bin/sh\nexit 1\n").unwrap();
++        fs::write(
++            base.join("pi"),
++            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" > \"$HERDR_ARGV_CAPTURE\"\n",
++        )
++        .unwrap();
 +        fs::write(
 +            base.join("pi.ps1"),
 +            "& \"$PSScriptRoot\\pi.cmd\" @args\nexit $LASTEXITCODE\n",
@@ -973,6 +1154,64 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
          let argv = vec![
              "pi".into(),
              String::new(),
+@@ -3499,14 +3520,28 @@ mod tests {
+         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
+         let run_command = |shell: &str, command: &str, capture: &std::path::Path| {
+-            let mut process = if shell == "cmd.exe" {
+-                let mut process = Command::new("cmd.exe");
+-                process.args(["/d", "/c", command]);
+-                process
+-            } else {
+-                let mut process = Command::new("powershell.exe");
+-                process.args(["-NoLogo", "-NoProfile", "-Command", command]);
+-                process
++            let mut process = match shell {
++                "cmd.exe" => {
++                    let mut process = Command::new("cmd.exe");
++                    process.args(["/d", "/c", command]);
++                    process
++                }
++                "powershell.exe" => {
++                    let mut process = Command::new("powershell.exe");
++                    process.args(["-NoLogo", "-NoProfile", "-Command", command]);
++                    process
++                }
++                "nu.exe" => {
++                    let mut process = Command::new("nu.exe");
++                    process.args(["--no-config-file", "--commands", command]);
++                    process
++                }
++                "bash.exe" | "sh.exe" => {
++                    let mut process = Command::new(shell);
++                    process.args(["--noprofile", "--norc", "-c", command]);
++                    process
++                }
++                _ => unreachable!("unsupported test shell"),
+             };
+             process
+                 .env("PATH", &path)
+@@ -3515,7 +3550,19 @@ mod tests {
+                 .unwrap()
+         };
+ 
+-        for shell in ["powershell.exe", "cmd.exe"] {
++        let mut shells = vec!["powershell.exe", "cmd.exe"];
++        for shell in ["nu.exe", "bash.exe", "sh.exe"] {
++            if Command::new(shell)
++                .arg("--version")
++                .stdout(std::process::Stdio::null())
++                .stderr(std::process::Stdio::null())
++                .status()
++                .is_ok_and(|status| status.success())
++            {
++                shells.push(shell);
++            }
++        }
++        for shell in shells {
+             let no_args_capture = base.join(format!("{shell}-no-args.txt"));
+             let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
+             let status = run_command(shell, &no_args_command, &no_args_capture);
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 index 108080f4be9e083904af5b2899e0fd3ef28b2dd1..55de82f7cb04b1858be109c21dfd7365b791565b 100644
 --- a/src/server/headless.rs
@@ -987,7 +1226,7 @@ index 108080f4be9e083904af5b2899e0fd3ef28b2dd1..55de82f7cb04b1858be109c21dfd7365
              .app
              .config_diagnostic_deadline
 diff --git a/src/terminal/runtime.rs b/src/terminal/runtime.rs
-index 5051a46b3c1a8458371e4ad017b342297904f5dd..afb190d09162f6e2b78b9488376ddc68a14dfb7c 100644
+index 2e9f5cacf884951de3f75405abc9271923823bbd..9eb3c5dec0e08741c294d50233beb3b3ec073cb4 100644
 --- a/src/terminal/runtime.rs
 +++ b/src/terminal/runtime.rs
 @@ -551,6 +551,10 @@ impl TerminalRuntime {
@@ -1003,3 +1242,4 @@ index 5051a46b3c1a8458371e4ad017b342297904f5dd..afb190d09162f6e2b78b9488376ddc68
      }
 -- 
 2.55.0.windows.3
+

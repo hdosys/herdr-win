@@ -1196,17 +1196,6 @@ jobs:
             verify_tag_target
           }
 
-          remove_recoverable_release() {
-            local release_json="$1"
-            local reason="$2"
-            local release_id
-            verify_tag_target
-            release_id="$(jq -r .id <<<"$release_json")"
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}"
-            echo "Removed ${reason} release ${tag}."
-          }
-
           verify_asset_shape() {
             local release_json="$1"
             local name="$2"
@@ -1266,11 +1255,11 @@ jobs:
           if [[ "$release_count" == "1" ]]; then
             release_json="$(jq -c '.[0]' <<<"$release_matches")"
             if [[ "$(jq -r .draft <<<"$release_json")" == "true" ]]; then
-              remove_recoverable_release "$release_json" "incomplete draft"
-              release_json=""
+              echo "Existing draft release ${tag} is preserved; refusing promotion." >&2
+              exit 1
             elif [[ "$(jq -r '.immutable // false' <<<"$release_json")" != "true" ]]; then
-              remove_recoverable_release "$release_json" "mutable"
-              release_json=""
+              echo "Existing mutable release ${tag} is preserved; refusing promotion." >&2
+              exit 1
             fi
           fi
 
@@ -1294,8 +1283,7 @@ jobs:
             verify_tag_target
             release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
             if [[ "$(jq -r '.immutable // false' <<<"$release_json")" != "true" ]]; then
-              remove_recoverable_release "$release_json" "mutable"
-              echo "Repository release immutability is not active; refusing publication." >&2
+              echo "Release ${tag} is not immutable; preserving tag and release and refusing manifest publication." >&2
               exit 1
             fi
             verify_release "$release_json"

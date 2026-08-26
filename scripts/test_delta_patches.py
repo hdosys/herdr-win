@@ -403,6 +403,9 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertIn(
             "Release asset ${name} does not match the selected candidate", workflow
         )
+        self.assertNotIn("remove_recoverable_release", workflow)
+        self.assertNotIn("gh api --method DELETE", workflow)
+        self.assertIn("preserving tag and release", workflow)
         self.assertEqual(workflow.count("contents: write"), 1)
         self.assertIn("actions: read", workflow)
         self.assertNotIn("mlugg/setup-zig@", workflow)

@@ -393,6 +393,10 @@ behavior; code and tests remain the detailed implementation truth.
   sidecars. Candidate sidecars remain internal verification inputs; GitHub records
   SHA-256 for every immutable release asset and the update manifest carries the same
   six verified digests.
+- Promotion never deletes or repoints a release tag or GitHub release. An existing
+  draft or mutable release, or a newly created release that is not immutable, is
+  preserved as terminal evidence while promotion fails before publishing the update
+  manifest.
 - A WinGet community submission is generated only after immutable promotion and
   remains external release output under ignored `target/`, not a second checked-in
   package tree. Its multi-file manifest uses package ID `hdosys.herdr-win`, the

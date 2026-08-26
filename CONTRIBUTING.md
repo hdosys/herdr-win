@@ -371,7 +371,9 @@ automatically, or publish releases from ordinary pushes. A conflict fails closed
 On a promotion rerun for the same candidate, the existing immutable release is
 canonical; validate and reuse its complete platform asset set, derive each manifest
 digest independently from the downloaded canonical release, and never replace or
-repoint an asset.
+repoint an asset. Promotion never deletes a tag or GitHub release. Preserve any
+draft or mutable release and fail before manifest publication instead of trying to
+recover by removing public state.
 
 ### Preparing a WinGet manifest update
 

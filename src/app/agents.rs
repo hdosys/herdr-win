@@ -11,8 +11,6 @@ pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
-const OPENCODE_LOCAL_SERVER_ARGS: [&str; 3] = ["--hostname=127.0.0.1", "--port=0", "--no-mdns"];
-
 fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
@@ -21,10 +19,11 @@ fn valid_agent_name(name: &str) -> bool {
 }
 
 fn agent_launch_argv(kind: crate::detect::Agent, args: Vec<String>) -> Vec<String> {
-    let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
-    if kind == crate::detect::Agent::OpenCode && args.is_empty() {
-        argv.extend(OPENCODE_LOCAL_SERVER_ARGS.map(str::to_string));
-    }
+    let mut argv = if kind == crate::detect::Agent::OpenCode && args.is_empty() {
+        crate::agent_resume::opencode_local_server_argv()
+    } else {
+        vec![crate::detect::interactive_agent_executable(kind).to_string()]
+    };
     argv.extend(args);
     argv
 }

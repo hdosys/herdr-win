@@ -62,8 +62,8 @@ use windows_sys::{
                 OpenProcessToken, OpenThread, QueryFullProcessImageNameW, ResumeThread,
                 TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
                 DETACHED_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
-                THREAD_SUSPEND_RESUME,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+                PROCESS_VM_READ, THREAD_SUSPEND_RESUME,
             },
         },
         UI::{
@@ -75,8 +75,9 @@ use windows_sys::{
                 },
             },
             Shell::{
-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
-                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+                CommandLineToArgvW, GetUserProfileDirectoryW, ShellExecuteW, Shell_NotifyIconW,
+                NIF_ICON, NIF_INFO, NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE,
+                NIM_MODIFY, NOTIFYICONDATAW,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
@@ -967,7 +968,45 @@ impl PendingInteractiveServerBootstrap {
 }
 
 fn interactive_server_bootstrap_base() -> std::io::Result<PathBuf> {
-    let base = crate::config::state_dir().join(INTERACTIVE_SERVER_BOOTSTRAP_DIR);
+    use std::os::windows::ffi::OsStringExt as _;
+
+    let token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let mut required = 0;
+    // SAFETY: the token belongs to this process and `required` is writable.
+    unsafe {
+        GetUserProfileDirectoryW(token.as_raw_handle().cast(), null_mut(), &mut required);
+    }
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut profile = vec![0u16; required as usize];
+    // SAFETY: `profile` has the size requested by the first API call and the
+    // same valid token remains open for the duration of this call.
+    if unsafe {
+        GetUserProfileDirectoryW(
+            token.as_raw_handle().cast(),
+            profile.as_mut_ptr(),
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let end = profile
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(profile.len());
+    if end == 0 {
+        return Err(std::io::Error::other(
+            "Windows returned an empty current-user profile directory",
+        ));
+    }
+    let profile = PathBuf::from(std::ffi::OsString::from_wide(&profile[..end]));
+    let base = profile
+        .join("AppData")
+        .join("Local")
+        .join(crate::config::app_dir_name())
+        .join(INTERACTIVE_SERVER_BOOTSTRAP_DIR);
     if !base.is_absolute() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1294,8 +1333,7 @@ fn launch_server_daemon_in_interactive_session(
         )
     })?;
     let pid = parse_interactive_server_pid(&stdout)?;
-    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE)
-        .ok_or_else(|| {
+    let process = open_interactive_server_process(pid).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "interactive server process exited before validation",
@@ -1383,6 +1421,13 @@ fn process_session_id(pid: u32) -> std::io::Result<u32> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(session_id)
+}
+
+fn open_interactive_server_process(pid: u32) -> Option<ProcessHandle> {
+    ProcessHandle::open(
+        pid,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+    )
 }
 
 fn parse_interactive_server_pid(output: &str) -> std::io::Result<u32> {
@@ -3188,6 +3233,7 @@ mod tests {
     use std::{
         fs,
         os::windows::process::CommandExt as _,
+        path::PathBuf,
         process::{Command, Stdio},
         sync::Arc,
         thread,
@@ -3489,7 +3535,10 @@ mod tests {
 
     const CONSOLE_TEST_CHILD_ENV: &str = "HERDR_TEST_CONSOLE_CHILD_MODE";
     const CONSOLE_TEST_PARENT_PID_ENV: &str = "HERDR_TEST_CONSOLE_PARENT_PID";
+    const INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV: &str =
+        "HERDR_TEST_INTERACTIVE_BOOTSTRAP_BASE_CHILD";
     const INTERACTIVE_DETACH_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_DETACH_CHILD";
+    const INTERACTIVE_REJECTION_TEST_CHILD_ENV: &str = "HERDR_TEST_INTERACTIVE_REJECTION_CHILD";
 
     #[test]
     fn interactive_server_pid_requires_one_exact_record() {
@@ -3505,19 +3554,84 @@ mod tests {
     }
 
     #[test]
-    fn interactive_server_bootstrap_uses_session_stable_state_base() {
+    fn rejected_interactive_server_handle_can_terminate_and_wait() {
+        if std::env::var_os(INTERACTIVE_REJECTION_TEST_CHILD_ENV).is_some() {
+            thread::sleep(Duration::from_secs(30));
+            return;
+        }
+
+        let test_exe = std::env::current_exe().expect("resolve test executable");
+        let mut child = Command::new(test_exe)
+            .arg("rejected_interactive_server_handle_can_terminate_and_wait")
+            .env(INTERACTIVE_REJECTION_TEST_CHILD_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn rejected interactive server test child");
+        let process = super::open_interactive_server_process(child.id()).unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("open rejected interactive server test child");
+        });
+
+        super::terminate_process_and_wait(&process, Duration::from_secs(5))
+            .expect("terminate and wait for rejected interactive server test child");
+        let status = child
+            .wait()
+            .expect("reap rejected interactive server test child");
+        assert!(!status.success(), "rejected test child was not terminated");
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_uses_session_stable_profile_base() {
         let mut command = Command::new(std::env::current_exe().expect("resolve test executable"));
         command.arg("server");
 
         let pending = super::PendingInteractiveServerBootstrap::create(&command)
             .expect("create interactive server bootstrap");
-        let expected_base =
-            crate::config::state_dir().join(super::INTERACTIVE_SERVER_BOOTSTRAP_DIR);
+        let expected_base = super::interactive_server_bootstrap_base()
+            .expect("resolve stable interactive server bootstrap base");
         assert_eq!(pending.root.parent(), Some(expected_base.as_path()));
         assert_eq!(
             super::validate_interactive_server_bootstrap_path(&pending.path)
                 .expect("validate interactive server bootstrap path"),
             pending.path
+        );
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_base_ignores_process_environment() {
+        if let Some(fake_base) = std::env::var_os(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV) {
+            let bootstrap_base = super::interactive_server_bootstrap_base()
+                .expect("resolve interactive server bootstrap base");
+            assert!(!bootstrap_base.starts_with(PathBuf::from(fake_base)));
+            return;
+        }
+
+        let fake_base = std::env::temp_dir().join(format!(
+            "herdr-fake-session-environment-{}",
+            std::process::id()
+        ));
+        let output = Command::new(std::env::current_exe().expect("resolve test executable"))
+            .arg(
+                "platform::windows::tests::interactive_server_bootstrap_base_ignores_process_environment",
+            )
+            .arg("--exact")
+            .env(INTERACTIVE_BOOTSTRAP_BASE_TEST_CHILD_ENV, &fake_base)
+            .env("XDG_STATE_HOME", &fake_base)
+            .env("LOCALAPPDATA", &fake_base)
+            .env("USERPROFILE", &fake_base)
+            .env("HOME", &fake_base)
+            .env("TEMP", &fake_base)
+            .env("TMP", &fake_base)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run interactive bootstrap base child test");
+        assert!(
+            output.status.success(),
+            "bootstrap base followed process environment: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

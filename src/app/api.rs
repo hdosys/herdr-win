@@ -690,6 +690,7 @@ impl App {
                     self.state.outer_terminal_focus,
                 );
             let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
+                self.state.notify_on_agent_completion,
                 suppress_active_tab_notifications,
                 update,
             ) else {

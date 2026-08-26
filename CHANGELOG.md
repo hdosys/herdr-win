@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

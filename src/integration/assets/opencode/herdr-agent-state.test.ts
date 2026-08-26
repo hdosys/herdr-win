@@ -543,15 +543,15 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
     { pane_id: "test:p2", rect: { width: 100, height: 50 } },
   ]);
   await openChild("child-three", [
-    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-    { pane_id: "test:p2", rect: { width: 100, height: 25 } },
-    { pane_id: "test:p3", rect: { width: 100, height: 25 } },
+    { pane_id: "test:p1", rect: { width: 200, height: 50 } },
+    { pane_id: "test:p2", rect: { width: 200, height: 25 } },
+    { pane_id: "test:p3", rect: { width: 200, height: 25 } },
   ]);
   await openChild("child-four", [
-    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-    { pane_id: "test:p2", rect: { width: 50, height: 25 } },
-    { pane_id: "test:p4", rect: { width: 50, height: 25 } },
-    { pane_id: "test:p3", rect: { width: 100, height: 25 } },
+    { pane_id: "test:p1", rect: { width: 200, height: 50 } },
+    { pane_id: "test:p2", rect: { width: 100, height: 25 } },
+    { pane_id: "test:p4", rect: { width: 100, height: 25 } },
+    { pane_id: "test:p3", rect: { width: 200, height: 25 } },
   ]);
 
   const splits = requests.filter((request) => requestMethod(request) === "pane.split");

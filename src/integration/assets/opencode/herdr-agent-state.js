@@ -17,7 +17,7 @@ const ERROR_MAX_FALLBACK_MS = 2_147_483_647;
 const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
 const SUBAGENT_START_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_CHARACTERS = 64 * 1024;
-const WIDE_SPLIT_ASPECT_RATIO = 2;
+const MIN_READABLE_SUBAGENT_COLUMNS = 80;
 const SERVER_PROBE_TIMEOUT_MS = 500;
 
 const CHILD_EVENT_STATES = new Map([
@@ -302,7 +302,8 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     let candidates = panes.filter((pane) => childPaneIDs.has(pane?.pane_id));
     // The first child splits the root to establish a permanent left Main column.
     // Later children divide only the largest area in the right child subtree.
-    if (candidates.length === 0) {
+    const splitRoot = candidates.length === 0;
+    if (splitRoot) {
       candidates = panes.filter((pane) => pane?.pane_id === rootPaneID);
     }
     let targetPaneID;
@@ -328,7 +329,7 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     return {
       paneID: targetPaneID,
       direction:
-        rect.width <= rect.height * WIDE_SPLIT_ASPECT_RATIO ? "down" : "right",
+        splitRoot || rect.width >= MIN_READABLE_SUBAGENT_COLUMNS * 2 ? "right" : "down",
     };
   }
 

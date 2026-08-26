@@ -174,6 +174,10 @@ tests remain the detailed implementation truth.
 ## Interaction and Status
 
 - Keyboard-first terminal operation remains complete end to end.
+- Background Agent completion alerts follow Herdr's enabled default. Settings >
+  completion and `ui.notify_on_agent_completion = false` expose one immediate,
+  persistent opt-out for completion popups and done sounds without suppressing
+  questions, permission prompts, or errors.
 - `[session] auto_start_agent` is an opt-in new-tab convenience that starts one
   supported interactive Agent in the root pane of every genuinely new tab through
   Herdr's existing managed launch path. It is unset by default and applies to the
@@ -183,10 +187,9 @@ tests remain the detailed implementation truth.
   shell. Restore or reattach at startup, an unchanged reload, live handoff,
   `--no-session`, and split panes do not trigger it. Exiting or interrupting the
   Agent returns to the tab's underlying shell, and Herdr never writes the setting.
-- On Windows, managed Agent launch resolves npm-installed executable shims through
-  the interactive shell. Argument-bearing PowerShell launches preserve the exact
-  configured arguments, while argument-free starts use concise native command
-  resolution instead of exposing the longer resolver in the pane.
+- Managed Agent launch preserves exact arguments through PowerShell, cmd,
+  Nushell, and Git Bash on Windows. Linux and macOS use shell-native argument
+  quoting, including explicit external-command invocation for Nushell.
 - OpenCode panes remain bound to the root session selected locally in that pane;
   server-global creation events from another attached client cannot take over that
   selection, while child prompts still report blocked and working state through the

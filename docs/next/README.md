@@ -11,7 +11,7 @@ Every release candidate builds matching Windows, Linux, and macOS binaries from 
 > [!IMPORTANT]
 > GitHub's **ahead/behind** banner compares commit ancestry, not release-source freshness. This repository's `master` is a control branch for the patch queue and release automation, not a mirror of upstream `master`. Each build starts from the reviewed stable commit in [`BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) and applies [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series). Because a refresh updates those owners without merging or rebasing upstream `master`, the displayed "behind" count can remain unchanged. GitHub's **Sync fork** action is not this project's refresh mechanism.
 
-[Demo](#see-it-in-action) · [Completion notifications](#completion-notifications-are-opt-in) · [Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
+[Demo](#see-it-in-action) · [Why it exists](#why-it-exists) · [What it adds](#what-differs-from-upstream) · [Install and cross-platform use](#install-and-cross-platform-use) · [Patch flow](#how-the-patch-queue-works) · [Upstream review](#for-upstream-maintainers) · [Maintaining](#maintaining-the-project) · [Herdr Sandbox](#sister-project-herdr-sandbox)
 
 ## See it in action
 
@@ -21,19 +21,6 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 
 > [!NOTE]
 > This README describes the maintained queue on `master`; use a tagged release's changelog as the exact contract for currently downloadable binaries. Upstream Herdr owns the general CLI, configuration, integrations, and product documentation. This repository owns its Windows-focused delta and cross-platform release. Reproduce general issues with upstream Herdr before reporting them here.
-
-## Completion notifications are opt-in
-
-Herdr Win keeps questions, permission prompts, and errors actionable. Completion notifications are off by default because frequent idle transitions are usually noise in multi-agent setups.
-
-To allow completion toasts and sounds, add this to your Herdr `config.toml`:
-
-```toml
-[ui]
-notify_on_agent_completion = true
-```
-
-User-cancelled OpenCode responses stay silent even when completion notifications are enabled.
 
 ## Why it exists
 

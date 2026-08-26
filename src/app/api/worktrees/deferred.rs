@@ -297,8 +297,18 @@ impl App {
             return;
         }
 
-        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force) {
-            self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
+        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force)
+            && !self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx)
+        {
+            Self::send_api_response(
+                respond_to,
+                encode_error(
+                    id,
+                    "worktree_remove_failed",
+                    "Could not stop the worktree terminal. Close it and retry removal.",
+                ),
+            );
+            return;
         }
 
         let operation_id = self.next_api_worktree_operation_id();

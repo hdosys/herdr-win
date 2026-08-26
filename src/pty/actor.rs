@@ -7,7 +7,7 @@ pub(crate) use unix::*;
 #[cfg(windows)]
 mod windows {
     use std::io::{Read, Write};
-    use std::sync::{mpsc as std_mpsc, Arc, Mutex};
+    use std::sync::{mpsc as std_mpsc, Arc, Condvar, Mutex};
     use std::time::Duration;
 
     use bytes::Bytes;
@@ -55,6 +55,7 @@ mod windows {
         write_tx: std_mpsc::Sender<Bytes>,
         response_order: Arc<Mutex<()>>,
         accepting: Arc<Mutex<bool>>,
+        shutdown_complete: Arc<(Mutex<bool>, Condvar)>,
     }
 
     impl PtyIoActorHandle {
@@ -123,6 +124,23 @@ mod windows {
             }
             let _ = self.control_tx.send(PtyIoControlCommand::Shutdown);
         }
+
+        pub(crate) fn wait_for_shutdown(&self, timeout: Duration) -> bool {
+            let (complete, notify) = &*self.shutdown_complete;
+            let complete = complete
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *complete {
+                return true;
+            }
+            match notify.wait_timeout_while(complete, timeout, |complete| !*complete) {
+                Ok((complete, _)) => *complete,
+                Err(poisoned) => {
+                    let (complete, _) = poisoned.into_inner();
+                    *complete
+                }
+            }
+        }
     }
 
     pub(crate) struct PtyIoActor;
@@ -148,6 +166,7 @@ mod windows {
             let (write_tx, write_rx) = std_mpsc::channel::<Bytes>();
             let response_order = Arc::new(Mutex::new(()));
             let accepting = Arc::new(Mutex::new(!initially_quiesced));
+            let shutdown_complete = Arc::new((Mutex::new(false), Condvar::new()));
 
             std::thread::spawn(move || {
                 for bytes in write_rx {
@@ -206,6 +225,7 @@ mod windows {
 
             {
                 let write_tx = write_tx.clone();
+                let shutdown_complete = Arc::clone(&shutdown_complete);
                 std::thread::spawn(move || {
                     for command in control_rx {
                         match command {
@@ -230,6 +250,13 @@ mod windows {
                             PtyIoControlCommand::Shutdown => break,
                         }
                     }
+                    drop(master);
+                    let (complete, notify) = &*shutdown_complete;
+                    let mut complete = complete
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *complete = true;
+                    notify.notify_all();
                     debug!(pane_id, "windows pty control thread exiting");
                 });
             }
@@ -240,12 +267,10 @@ mod windows {
                 write_tx,
                 response_order,
                 accepting,
+                shutdown_complete,
             })
         }
     }
-
-    #[allow(dead_code)]
-    fn _assert_duration_send(_: Duration) {}
 }
 
 #[cfg(windows)]

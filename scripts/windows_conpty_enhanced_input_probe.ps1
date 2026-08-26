@@ -427,6 +427,35 @@ function Wait-ServerState {
     }
 }
 
+function Wait-ServerClientReady {
+    param([string] $Path)
+
+    $prefix = "client socket: "
+    $watcher = New-ReportWatcher -Path $Path
+    try {
+        while ($true) {
+            $ready = @(
+                Read-ReportLines -Path $Path |
+                    Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) }
+            )
+            if ($ready.Count -gt 0) {
+                $clientSocket = $ready[$ready.Count - 1].Substring($prefix.Length).Trim()
+                if ([string]::IsNullOrWhiteSpace($clientSocket)) {
+                    throw "server reported an empty client socket path"
+                }
+                return $clientSocket
+            }
+            $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 500)
+            $null = $watcher.WaitForChanged(
+                [System.IO.WatcherChangeTypes]::Created -bor [System.IO.WatcherChangeTypes]::Changed,
+                $wait
+            )
+        }
+    } finally {
+        $watcher.Dispose()
+    }
+}
+
 $script:Exe = (Resolve-Path -LiteralPath $ExePath).Path
 $script:WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) `
     "herdr-conpty-input-$([guid]::NewGuid().ToString('N'))"
@@ -516,6 +545,8 @@ try {
         -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverStdout `
         -RedirectStandardError $serverStderr
     $serverStatus = Wait-ServerState -Running $true
+    $script:Phase = "waiting for client listener readiness"
+    $serverClientSocket = Wait-ServerClientReady -Path $serverStderr
 
     $terminalExe = if ([string]::IsNullOrWhiteSpace($TerminalPath)) {
         (Get-Command wt.exe -ErrorAction Stop).Source
@@ -569,6 +600,7 @@ try {
         version = $version.stdout.Trim()
         session = $Session
         socket = $script:SocketPath
+        client_socket = $serverClientSocket
         server_binary = $serverStatus.binary
         protocol = $serverStatus.protocol
         terminal = $terminalExe

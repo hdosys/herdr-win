@@ -568,13 +568,15 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
   expect(splits).toHaveLength(2);
   expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
   expect(requestParam(splits[0], "direction")).toBe("right");
+  expect(requestParam(splits[0], "ratio")).toBe(0.5);
   expect(requestParam(splits[0], "focus")).toBe(false);
   expect(requestParam(splits[0], "cwd")).toBe("C:\\repo\\one");
   expect(requestParam(splits[0], "env")).toEqual({
     HERDR_OPENCODE_SUBAGENT_SESSION_ID: "child-one",
   });
-  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p2");
+  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p1");
   expect(requestParam(splits[1], "direction")).toBe("down");
+  expect(requestParam(splits[1], "ratio")).toBe(0.5);
 
   const starts = requests.filter((request) => requestMethod(request) === "agent.start");
   expect(starts).toHaveLength(2);

@@ -290,28 +290,20 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
       : defaultDirectory;
   }
 
-  function paneRect(layout, paneID) {
-    const pane = layout?.panes?.find((candidate) => candidate?.pane_id === paneID);
-    const rect = pane?.rect;
-    return typeof rect?.width === "number" && typeof rect?.height === "number"
-      ? rect
-      : undefined;
-  }
-
   function splitTarget(layout) {
     const rootPaneID = process.env.HERDR_PANE_ID;
     if (!rootPaneID) {
       return undefined;
     }
     const activePanes = new Set(
-      [...children.values()].map((child) => child.paneID).filter(Boolean),
+      [rootPaneID, ...[...children.values()].map((child) => child.paneID)].filter(Boolean),
     );
     const candidates = Array.isArray(layout?.panes)
       ? layout.panes.filter((pane) => activePanes.has(pane?.pane_id))
       : [];
-    let targetPaneID = rootPaneID;
-    let rect = paneRect(layout, rootPaneID);
-    // Keep the root stable after the first split and divide the largest child area.
+    let targetPaneID;
+    let rect;
+    // Divide the largest active area so the complete tab stays evenly tiled.
     for (const candidate of candidates) {
       const candidateRect = candidate?.rect;
       if (
@@ -322,15 +314,18 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
       }
       const candidateArea = candidateRect.width * candidateRect.height;
       const selectedArea = rect ? rect.width * rect.height : -1;
-      if (candidateArea > selectedArea || targetPaneID === rootPaneID) {
+      if (candidateArea > selectedArea) {
         targetPaneID = candidate.pane_id;
         rect = candidateRect;
       }
     }
+    if (!targetPaneID) {
+      return undefined;
+    }
     return {
       paneID: targetPaneID,
       direction:
-        rect && rect.width < rect.height * WIDE_SPLIT_ASPECT_RATIO ? "down" : "right",
+        rect.width <= rect.height * WIDE_SPLIT_ASPECT_RATIO ? "down" : "right",
     };
   }
 
@@ -389,6 +384,7 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
       const splitResponse = await request("pane.split", {
         target_pane_id: target.paneID,
         direction: target.direction,
+        ratio: 0.5,
         ...(directory ? { cwd: directory } : {}),
         focus: false,
         env: { [SUBAGENT_SESSION_ENV]: sessionID },

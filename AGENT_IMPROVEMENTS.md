@@ -151,12 +151,10 @@ configuration repository.
   Expected benefit: remove ten-minute checkout waits and avoid dirty-index risk
   during routine external package updates. Owner: `CONTRIBUTING.md`.
 
-- **Status: proposed. Make Windows worktree removal terminal before dropping its
-  recovery metadata.** Evidence: `herdr worktree remove` closed workspace `wA` and
-  removed its Git registration, then failed with `Permission denied`; the checkout
-  became an empty non-repository directory that remained locked after the owner
-  stopped writing, and Herdr could no longer retry it by workspace ID. Wait for the
-  task-owned shell process to exit and remove the directory before unregistering,
-  or preserve enough state to report the owning process and retry safely. Expected
-  benefit: one bounded cleanup command without an unrecoverable orphan directory.
-  Owner: the Windows `herdr worktree remove` lifecycle.
+- **Status: done. Make Windows worktree removal terminal before dropping its
+  recovery metadata.** The Windows lifecycle now waits for the pane process and
+  ConPTY master to exit, and fails before Git mutation if bounded shutdown does not
+  complete. Evidence: a real Windows Terminal client created and removed a
+  non-forced worktree in 5.460 seconds, leaving neither its directory nor Git
+  registration; cumulative installer build `9eb521456ac0.1f6cc92d2972` validated
+  and packaged. Owner: the Windows `herdr worktree remove` lifecycle.

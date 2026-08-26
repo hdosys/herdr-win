@@ -1,4 +1,4 @@
-From ab79f01627f058bcedf8d440fa16d4b2f22949ff Mon Sep 17 00:00:00 2001
+From 4e4d394efacda79e469347d46537f9c660fee83f Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/9] feat(remote): support Windows SSH hosts
@@ -18,7 +18,7 @@ Subject: [PATCH 2/9] feat(remote): support Windows SSH hosts
  src/api/server.rs                             |   13 +-
  src/api/status.rs                             |    3 +
  src/app/api/workspaces.rs                     |   43 +-
- src/app/creation.rs                           |   94 +
+ src/app/creation.rs                           |   93 +
  src/app/mod.rs                                |    7 +
  src/app/session.rs                            |   18 +-
  src/app/state.rs                              |    9 +-
@@ -41,7 +41,7 @@ Subject: [PATCH 2/9] feat(remote): support Windows SSH hosts
  src/server/headless.rs                        |  268 ++-
  src/ui.rs                                     |   67 +-
  src/update.rs                                 |    3 +
- 37 files changed, 4786 insertions(+), 573 deletions(-)
+ 37 files changed, 4785 insertions(+), 573 deletions(-)
  create mode 100644 src/platform/windows_interactive_launch.ps1
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
@@ -695,10 +695,10 @@ index cf50d3ad40b9692bdc6023d87099a4a102b9297e..76b5866ba96dcf95f356c748fb9c7a99
          let Some(index) = self.parse_workspace_id(&target.workspace_id) else {
              return workspace_not_found(id, &target.workspace_id);
 diff --git a/src/app/creation.rs b/src/app/creation.rs
-index d531e7337084c8fca2235ceb4b37da6990271773..daf5a446c68c32b4f5b7df259372c92cc34d8605 100644
+index d531e7337084c8fca2235ceb4b37da6990271773..c3edff59945f4c8eb656779dcb372f3b505b260c 100644
 --- a/src/app/creation.rs
 +++ b/src/app/creation.rs
-@@ -274,6 +274,100 @@ impl App {
+@@ -274,6 +274,99 @@ impl App {
          Ok(idx)
      }
  
@@ -791,7 +791,6 @@ index d531e7337084c8fca2235ceb4b37da6990271773..daf5a446c68c32b4f5b7df259372c92c
 +            self.render_dirty.clone(),
 +        )?;
 +        self.terminal_runtimes.insert(terminal_id.clone(), runtime);
-+        self.queue_tab_auto_start_agent(ws_idx, tab_idx);
 +        self.schedule_session_save();
 +        Ok(())
 +    }

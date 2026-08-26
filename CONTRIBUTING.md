@@ -188,11 +188,14 @@ python scripts/local_windows_installer.py candidate `
   --test-filter $testFilter
 ```
 
-The command keeps one Sandbox-local release Cargo target, passes the detected logical
-processor count through `--jobs`, runs exactly one focused test when requested, and
-reuses that target for the three packaged binaries. It replaces the fixed setup only
-after the test, source identity, bundle, and package checks pass. Never report an
-isolated topic artifact or ask the user which topic belongs in the installer.
+The command keeps one Sandbox-local Cargo target and passes the detected logical
+processor count through the build. `--test-filter` runs the ordinary behavior check
+through the existing `just test-one` iteration gate before compiling only the three
+packaged release binaries. Use `--release-test-filter` instead only when the selected
+test's signal depends on optimization or another release-profile boundary. It replaces
+the fixed setup only after the selected test, source identity, bundle, and package
+checks pass. Never report an isolated topic artifact or ask the user which topic
+belongs in the installer.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
@@ -268,7 +271,9 @@ that separate operation. For every approved refresh:
    version matches replayed Cargo package version.
 3. Replay and review the complete queue on that commit, dropping upstreamed hunks
    and anything no longer required by current fork behavior from its logical owner.
-4. Update `BASE` only after the reviewed replay succeeds, regenerate every changed
+4. Run `python scripts/delta_workflow.py compile-prefixes` so every ordered mailbox
+   prefix compiles before the refreshed queue can hide cross-mailbox ownership.
+5. Update `BASE` only after the reviewed replay succeeds, regenerate every changed
    mailbox, replay the checked-in queue again from a fresh checkout, and run all
    refresh gates.
 
@@ -355,6 +360,23 @@ canonical; validate and reuse its complete platform asset set, derive each manif
 digest independently from the downloaded canonical release, and never replace or
 repoint an asset.
 
+### Preparing a WinGet manifest update
+
+Start from the exact pull-request branch with Git's sparse mode enabled before any
+checkout populates the working tree. Never convert a full clone or a `--no-checkout`
+clone into this path after the index has represented omitted files:
+
+```powershell
+git clone --filter=blob:none --sparse --single-branch --branch <pr-branch> `
+  https://github.com/microsoft/winget-pkgs.git <checkout>
+git -C <checkout> sparse-checkout set manifests/h/hdosys/herdr-win
+git -C <checkout> status --short --branch
+```
+
+The final status must be clean before editing package manifests. This procedure
+only prepares an external contribution checkout; it does not authorize manifest
+changes, a pull request, or release publication.
+
 ## Verification
 
 During explicit promotion, run the fast inventory checks from the control repository:
@@ -414,7 +436,10 @@ Keep root `README.md` and `docs/next/README.md` byte-for-byte identical. Product
 documentation carried in release source belongs in the logical mailbox that owns
 the behavior. Do not edit changelog, release notes, website, or broad docs unless
 changed behavior requires it, and never edit generated preview/version
-documentation directories.
+documentation directories. The repository pre-commit hook renders a changed staged
+Mermaid block through `mmdc`, requires the mirrored block to match, and rejects
+extreme aspect ratios before generated output can enter the worktree. Set
+`MERMAID_CLI` only when the renderer uses a nonstandard executable path.
 
 ## Pull requests and commits
 

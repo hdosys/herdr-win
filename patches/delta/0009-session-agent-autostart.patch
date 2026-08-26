@@ -1,4 +1,4 @@
-From 0aef02f2e9935e8f103dc6bf7dd6d419668348cc Mon Sep 17 00:00:00 2001
+From 8b5578144659c749bcac3b5c8674cf20e3b35cbd Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/9] feat(session): auto-start configured agent
@@ -12,7 +12,7 @@ Refs herdrdev/herdr#321
  src/app/agents.rs                             | 253 +++++++++++++++++-
  src/app/api/panes.rs                          |  30 +++
  src/app/api/tabs.rs                           |  10 +-
- src/app/creation.rs                           |   1 +
+ src/app/creation.rs                           |   2 +
  src/app/mod.rs                                |  90 ++++++-
  src/app/runtime.rs                            |   3 +
  src/config.rs                                 |  20 ++
@@ -24,7 +24,7 @@ Refs herdrdev/herdr#321
  src/platform/windows.rs                       |  41 ++-
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 19 files changed, 549 insertions(+), 18 deletions(-)
+ 19 files changed, 550 insertions(+), 18 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
@@ -475,7 +475,7 @@ index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392
      }
  }
 diff --git a/src/app/creation.rs b/src/app/creation.rs
-index d531e7337084c8fca2235ceb4b37da6990271773..c1da07558c06b3867ab03bea3b82b22a20574191 100644
+index c3edff59945f4c8eb656779dcb372f3b505b260c..4b8e931a8fe7861f90586edfccbd9ff482dffe1b 100644
 --- a/src/app/creation.rs
 +++ b/src/app/creation.rs
 @@ -270,6 +270,7 @@ impl App {
@@ -486,11 +486,19 @@ index d531e7337084c8fca2235ceb4b37da6990271773..c1da07558c06b3867ab03bea3b82b22a
          self.schedule_session_save();
          Ok(idx)
      }
+@@ -363,6 +364,7 @@ impl App {
+             self.render_dirty.clone(),
+         )?;
+         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
++        self.queue_tab_auto_start_agent(ws_idx, tab_idx);
+         self.schedule_session_save();
+         Ok(())
+     }
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73bad6ec03 100644
+index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae3d9c4f7f 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
-@@ -137,6 +137,8 @@ pub struct App {
+@@ -142,6 +142,8 @@ pub struct App {
      pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
      pub(crate) agent_metadata_deadline: Option<Instant>,
      pub(crate) pending_agent_resume_deadline: Option<Instant>,
@@ -499,7 +507,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
      pub(crate) selection_autoscroll_deadline: Option<Instant>,
      pub(crate) selection_highlight_clear_deadline: Option<Instant>,
      pub(crate) session_save_deadline: Option<Instant>,
-@@ -167,6 +169,14 @@ pub struct App {
+@@ -173,6 +175,14 @@ pub struct App {
      prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
  }
  
@@ -514,7 +522,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
  pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
  pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
  
-@@ -385,6 +395,15 @@ fn resolve_effective_theme(
+@@ -391,6 +401,15 @@ fn resolve_effective_theme(
      )
  }
  
@@ -530,7 +538,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
  impl App {
      pub fn new(
          config: &Config,
-@@ -398,6 +417,12 @@ impl App {
+@@ -404,6 +423,12 @@ impl App {
          let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
          let render_notify = Arc::new(Notify::new());
          let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
@@ -543,7 +551,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
  
          // Try to restore previous session
          let mut restored_terminals = std::collections::HashMap::new();
-@@ -420,7 +445,7 @@ impl App {
+@@ -426,7 +451,7 @@ impl App {
                  0.5_f32,
                  std::collections::HashSet::new(),
              )
@@ -552,7 +560,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
              let history = config
                  .experimental
                  .pane_history
-@@ -782,6 +807,8 @@ impl App {
+@@ -788,6 +813,8 @@ impl App {
              loaded_host_cursor: config.ui.host_cursor,
              agent_metadata_deadline: None,
              pending_agent_resume_deadline: None,
@@ -560,8 +568,8 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
 +            pending_tab_auto_start_agents: Vec::new(),
              session_save_deadline: None,
              session_save_thread: None,
-             detached_process_children: Vec::new(),
-@@ -1437,6 +1464,17 @@ impl App {
+             startup_session_save_blocked: false,
+@@ -1444,6 +1471,17 @@ impl App {
          let invalid_section =
              |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
  
@@ -579,7 +587,7 @@ index 95f8cf0517fd77b54fa9e60a16e93016486a21a5..fc0f2c5f40fccb9b046bc5e388c23b73
          if !invalid_section("keys") {
              match config.live_keybinds_with_diagnostics() {
                  Ok((live, keybind_diagnostics)) => {
-@@ -2761,6 +2799,56 @@ mod tests {
+@@ -2768,6 +2806,56 @@ mod tests {
          assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
      }
  
@@ -966,10 +974,10 @@ index 062fcfe97b8a62438fc6c8e25bc47036fedc0fb3..76d7c929700682e03140205a9bf32a13
              "pi".into(),
              String::new(),
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..f801c1985fe4bb85e98349ae497df937b0ce162d 100644
+index 108080f4be9e083904af5b2899e0fd3ef28b2dd1..55de82f7cb04b1858be109c21dfd7365b791565b 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -4718,6 +4718,8 @@ impl HeadlessServer {
+@@ -4797,6 +4797,8 @@ impl HeadlessServer {
          // No resize polling needed — server has no terminal.
          // Client resize messages drive size changes instead.
  
@@ -995,4 +1003,3 @@ index 5051a46b3c1a8458371e4ad017b342297904f5dd..afb190d09162f6e2b78b9488376ddc68
      }
 -- 
 2.55.0.windows.3
-

@@ -51,6 +51,10 @@ DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
     r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
 )
 FOCUSED_TEST_RESULT_RE = re.compile(r"(?m)^test result: ok\. (?P<passed>[0-9]+) passed;")
+NEXTEST_SUMMARY_RE = re.compile(
+    r"(?m)^\s*Summary \[[^\]]+\] (?P<run>[0-9]+) tests? run: "
+    r"(?P<passed>[0-9]+) passed(?:,|$)"
+)
 LOCAL_VERSION_RE = re.compile(
     r"^herdr-win local \(Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
@@ -369,7 +373,9 @@ def _cargo_test_arguments(
     if jobs < 1:
         raise LocalInstallerError("Cargo requires at least one build job")
     if not test_filter.strip() or test_filter.startswith("-"):
-        raise LocalInstallerError("--test-filter must be one non-option test filter")
+        raise LocalInstallerError(
+            "--release-test-filter must be one non-option test filter"
+        )
     return [
         "test",
         "--release",
@@ -388,9 +394,24 @@ def _cargo_test_arguments(
     ]
 
 
+def _just_test_arguments(test_filter: str) -> list[str]:
+    if not test_filter.strip() or test_filter.startswith("-"):
+        raise LocalInstallerError("--test-filter must be one non-option test filter")
+    return ["test-one", test_filter]
+
+
 def _require_one_focused_test(output: str) -> None:
     passed = [int(match.group("passed")) for match in FOCUSED_TEST_RESULT_RE.finditer(output)]
     if passed != [1]:
+        raise LocalInstallerError("--test-filter must run exactly one passing test")
+
+
+def _require_one_nextest_test(output: str) -> None:
+    matches = [
+        (int(match.group("run")), int(match.group("passed")))
+        for match in NEXTEST_SUMMARY_RE.finditer(output)
+    ]
+    if matches != [(1, 1)]:
         raise LocalInstallerError("--test-filter must run exactly one passing test")
 
 
@@ -756,10 +777,30 @@ def candidate(options: argparse.Namespace) -> None:
     }
     if options.test_filter is not None:
         print(f"focused_test={options.test_filter}")
+        print("focused_test_profile=normal")
+        test_started = time.monotonic()
+        test_result = _run(
+            "just",
+            _just_test_arguments(options.test_filter),
+            cwd=source,
+            timeout=1200,
+            environment_overrides={
+                **build_environment,
+                "CARGO_BUILD_JOBS": str(jobs),
+                "CARGO_TARGET_DIR": str(cargo_target),
+            },
+            removed_environment=("HERDR_RELEASE_VERSION",),
+        )
+        _print_process_output(test_result)
+        _require_one_nextest_test(f"{test_result.stdout}\n{test_result.stderr}")
+        print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
+    elif options.release_test_filter is not None:
+        print(f"focused_test={options.release_test_filter}")
+        print("focused_test_profile=release")
         test_started = time.monotonic()
         test_result = _run(
             "cargo",
-            _cargo_test_arguments(cargo_target, jobs, options.test_filter),
+            _cargo_test_arguments(cargo_target, jobs, options.release_test_filter),
             cwd=source,
             timeout=1200,
             environment_overrides=build_environment,
@@ -854,9 +895,14 @@ def _parser() -> argparse.ArgumentParser:
     candidate_command.add_argument(
         "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
     )
-    candidate_command.add_argument(
+    candidate_test = candidate_command.add_mutually_exclusive_group()
+    candidate_test.add_argument(
         "--test-filter",
-        help="run one focused herdr test with the candidate build target before packaging",
+        help="run one focused herdr test through the normal just test-one gate before packaging",
+    )
+    candidate_test.add_argument(
+        "--release-test-filter",
+        help="run one focused herdr test in the release profile when that boundary is required",
     )
     candidate_command.add_argument(
         "--isolated",

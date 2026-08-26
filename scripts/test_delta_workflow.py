@@ -158,6 +158,7 @@ class DeltaWorkflowTests(unittest.TestCase):
                 "root = pathlib.Path.cwd(); "
                 "prefix = int(os.environ['HERDR_DELTA_PREFIX']); "
                 "assert int(os.environ['CARGO_BUILD_JOBS']) >= 1; "
+                "assert os.environ['CARGO_INCREMENTAL'] == '0'; "
                 "assert (root / 'value.txt').read_text().strip() == 'first'; "
                 "assert (root / 'second.txt').exists() == (prefix == 2); "
                 "pathlib.Path(os.environ['HERDR_PREFIX_LOG']).open('a', encoding='utf-8').write("

@@ -405,6 +405,20 @@ class DeltaPatchTests(unittest.TestCase):
         )
         self.assertEqual(workflow.count("contents: write"), 1)
         self.assertIn("actions: read", workflow)
+        self.assertNotIn("mlugg/setup-zig@", workflow)
+        self.assertEqual(
+            workflow.count(
+                "vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943"
+            ),
+            2,
+        )
+        self.assertIn("brew untap aws/tap", workflow)
+        self.assertIn(
+            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
+            workflow,
+        )
+        self.assertIn("for ($attempt = 1; $attempt -le 18; $attempt++)", workflow)
+        self.assertIn("if ($attempt -eq 18)", workflow)
         self.assertIn('"linux-x86_64": $linux_x86_64', workflow)
         self.assertIn('format -cne "nsis"', workflow)
         self.assertIn("installer_sha", workflow)

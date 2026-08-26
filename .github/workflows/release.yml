@@ -265,10 +265,9 @@ jobs:
           targets: ${{ env.WINDOWS_TARGET }}
 
       - name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
         with:
           version: 0.15.2
-          use-cache: false
 
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -746,14 +745,22 @@ jobs:
 
       - name: Install Zig
         if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
         with:
           version: 0.15.2
-          use-cache: false
+
+      - name: Remove unused ambient Homebrew tap
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if brew tap | grep -Fxq 'aws/tap'; then
+            brew untap aws/tap
+          fi
 
       - name: Restore Homebrew Zig cache
         if: runner.os == 'macOS'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/Homebrew/downloads
           key: homebrew-zig-0.15-${{ runner.os }}-${{ runner.arch }}
@@ -1686,7 +1693,7 @@ jobs:
 
           $manifestUrl = "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/master/website/preview.json"
           $manifest = $null
-          for ($attempt = 1; $attempt -le 12; $attempt++) {
+          for ($attempt = 1; $attempt -le 18; $attempt++) {
             try {
               $manifest = Invoke-RestMethod -Uri $manifestUrl -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 30
             } catch {
@@ -1695,7 +1702,7 @@ jobs:
             if ($null -ne $manifest -and [string]$manifest.build_id -eq $env:BUILD_ID) {
               break
             }
-            if ($attempt -eq 12) {
+            if ($attempt -eq 18) {
               throw "published preview manifest did not advance to $env:BUILD_ID"
             }
             Start-Sleep -Seconds 10

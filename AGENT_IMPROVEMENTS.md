@@ -27,22 +27,23 @@ configuration repository.
   supplied manually; the focused command-construction test now owns that contract.
   Owner: `scripts/delta_workflow.py`, its focused tests, and `CONTRIBUTING.md`.
 
-- **Status: proposed. Compile each mailbox prefix during stable-base refreshes.**
-  Evidence: the v0.8.2 review found mailbox 0003 referring to owners introduced by
-  0004, while 0004 referred to the curl API introduced by 0006. The complete queue
-  could compile while those ordering and ownership leaks remained hidden. Extend
-  the existing delta-queue test owner with a refresh-only check that replays and
-  compiles each prefix in series order. Expected benefit: catch mailbox coupling
-  before regeneration without slowing normal iteration. Owner:
-  `scripts/test_delta_patches.py` and the refresh procedure in `CONTRIBUTING.md`.
+- **Status: done. Compile each mailbox prefix during stable-base refreshes.** The
+  refresh-only `compile-prefixes` command replays and compiles every ordered prefix
+  with all detected logical processors, disabled incremental state, and one shared
+  temporary Cargo target.
+  Evidence: the v0.8.2 review found cross-mailbox owner leaks that a complete-queue
+  compile hid. Moving the leaked deferred auto-start call from 0003 to its 0009
+  owner made all nine prefixes compile in 349.340 seconds; disabling incremental
+  output also removed a measured 5.4 GiB disposable-cache failure. Owner:
+  `scripts/delta_workflow.py`, its focused tests, and the refresh procedure in
+  `CONTRIBUTING.md`.
 
-- **Status: proposed. Render-check changed README Mermaid diagrams before commit.**
-  Evidence: a fully horizontal patch flow was unreadably small at README width,
-  while changing every level to vertical produced a multi-screen diagram. A
-  three-column render preview measured 622 by 484 pixels and exposed the balanced
-  composition before push. Add one exact-block render and aspect-ratio review to
-  the existing README mirror check when Mermaid source changes. Expected benefit:
-  prevent visually unusable diagram iterations without adding a broad visual gate.
+- **Status: done. Render-check changed README Mermaid diagrams before commit.** The
+  staged hook now renders the exact mirrored block and rejects invalid source or an
+  extreme aspect ratio without retaining generated output. Evidence: the revised
+  compact diagram rendered at 686.328 by 518 pixels with aspect ratio 1.325, and
+  the focused parser, mirror, renderer, and staged-change tests passed. Owner:
+  `.githooks/pre-commit`, `scripts/readme_mermaid_check.py`, and its focused tests.
 
 - **Status: done. Use one repository-owned local Windows input acceptance probe.**
   The focused script isolates socket, config, state, client trace, Windows Terminal,
@@ -70,17 +71,13 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Reuse validated binaries for package-excluded candidate
-  changes.** Evidence: a commit changing only the Windows acceptance script still
-  changed the cumulative source identity and spent 140.782 seconds recompiling
-  unchanged packaged Rust paths before 27.350 seconds of packaging, so the build
-  alone exceeded the two-minute soft artifact goal. Content-address the packaged
-  runtime and build inputs separately from cumulative source provenance, and reuse
-  a validated bundle only when every changed path is proven package-excluded.
-  Expected benefit: preserve exact provenance and fail-closed runtime rebuilds
-  while removing unnecessary compilation from test-only candidate updates. Owner:
-  `scripts/local_windows_installer.py`, its focused tests, and the build-identity
-  contracts in `ARCHITECTURE.md` and `CONTRIBUTING.md`.
+- **Status: declined. Reuse validated binaries for package-excluded candidate
+  changes.** The current candidate identity intentionally changes for every tracked
+  diff and untracked source input, and that identity owns the managed runtime path.
+  A package-exclusion classifier would introduce a second source truth and permit a
+  runtime to claim provenance from a snapshot it did not compile. The 140.782-second
+  rebuild did not justify weakening that fail-closed contract; normal-test retiering
+  removes the demonstrated serial test compile without changing identity ownership.
 
 - **Status: done. Make one development stack the only local user installer
   owner.** Product sessions default to the shared `candidate/development`
@@ -92,30 +89,22 @@ configuration repository.
   `scripts/local_windows_installer.py`, its focused tests, `AGENTS.md`, and the
   development procedure in `CONTRIBUTING.md`.
 
-- **Status: done. Share the release-profile Cargo cache between focused native
-  checks and candidate installer builds.** `local_windows_installer.py candidate
-  --test-filter` now runs one focused test before packaging with the same release
-  profile, explicit Windows target, target directory, build identity, and detected
-  logical-processor job count as the packaged binaries, and requires exactly one
-  passing test before packaging. Evidence: the implemented path compiled and passed
-  the focused release test in 186.361 seconds, then reused that target for the
-  packaged-binary build in 0.826 seconds. The executable path removes one cold target
-  graph and rejects failing or unmatched filters before packaging. Owner:
+- **Status: done. Share the release-profile Cargo cache for release-boundary
+  checks.** `local_windows_installer.py candidate --release-test-filter` runs one
+  exact release-profile test with the packaged binaries' target, build identity,
+  and detected logical-processor job count. Evidence: the implemented path passed
+  its focused release test in 186.361 seconds, then reused that target for the
+  packaged-binary build in 0.826 seconds. Owner: the script, its focused tests, and
+  the Candidate procedure in `CONTRIBUTING.md`.
+
+- **Status: done. Retier optimization-insensitive unit tests out of the local
+  installer release-build path.** `--test-filter` now uses the existing normal
+  `just test-one` gate, while explicit `--release-test-filter` retains the optimized
+  boundary path. Evidence: the real cumulative candidate ran one exact normal test
+  in 65.849 seconds, reused its validated release binaries in 0.982 seconds, and
+  produced the setup in 27.243 seconds with 16 jobs. Owner:
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
-
-- **Status: proposed. Retier optimization-insensitive unit tests out of the local
-  installer release-build path.** Evidence: the background-worktree-focus candidate
-  spent 240.039 seconds compiling and running one exact release-profile unit test,
-  then another 147.156 seconds compiling the three production binaries; the full
-  candidate took 420.254 seconds. Run pure behavior filters through the existing
-  normal `just test-one` iteration gate before publication, then let the candidate
-  build only the packaged release binaries. Keep the release-profile filter for
-  tests whose signal actually depends on optimization or a native release boundary.
-  Expected benefit: remove a second serial release compilation from ordinary
-  behavior-fix installer delivery while preserving one focused product check.
-  Owner: `scripts/local_windows_installer.py`, `justfile`, their focused tests, and
-  the Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: done. Make `just test-one` select Windows-valid Rust targets.**
   The Windows recipe now runs through native PowerShell and constrains nextest to
@@ -124,34 +113,26 @@ configuration repository.
   server detach filter passed its native Windows test through the shared recipe.
   Owner: `justfile`.
 
-- **Status: proposed. Give public preview-manifest propagation a sufficient
-  bounded release-ready gate.** Evidence: release publication committed the new
-  manifest and all immutable assets were live, but the exact raw branch URL served
-  the prior manifest for the complete 110-second retry window and exposed the new
-  build shortly afterward. The failed-job replay then re-entered the otherwise
-  successful publish job. Extend the existing post-publish readiness budget from
-  measured propagation or isolate its idempotent verifier so a transient cache miss
-  does not repeat publication. Expected benefit: avoid false failed releases while
-  retaining exact public-feed verification. Owner: `.github/workflows/release.yml`.
+- **Status: done. Give public preview-manifest propagation a sufficient bounded
+  release-ready gate.** The exact raw branch URL now receives 18 bounded attempts
+  instead of 12 before publication is declared stale. Evidence: the prior URL
+  remained stale for the complete 110-second window and exposed the correct build
+  shortly afterward; the extended workflow passed focused inventory and Actionlint
+  checks. Owner: `.github/workflows/release.yml`.
 
-- **Status: proposed. Keep successful portable release jobs free of unrelated
-  runner warnings.** Evidence: every portable artifact passed, while macOS jobs
-  still annotated the release for an unused untrusted preinstalled `aws/tap`, and
-  the pinned cache action reported its Node.js 20 runtime being forced onto Node.js
-  24. Remove only the unused tap exposure and adopt an eligible Node.js 24-native
-  pinned action when available, without trusting the whole tap or weakening action
-  pinning. Expected benefit: keep release annotations actionable. Owner:
-  `.github/workflows/release.yml`.
+- **Status: done. Keep successful portable release jobs free of unrelated runner
+  warnings.** The workflow removes only the unused ambient `aws/tap`, uses the
+  dependency-free Node.js 24 `vercel-labs/setup-zig` action, and upgrades the macOS
+  cache step to Node.js 24-native `actions/cache` v6.1.0. Evidence: both exact
+  latest-stable action tags and pinned commits were inspected, and the workflow
+  passed Actionlint. Owner: `.github/workflows/release.yml`.
 
-- **Status: proposed. Document one clean sparse checkout for WinGet PR updates.**
-  Evidence: a full `winget-pkgs` clone entered a 630,078-file checkout and hit the
-  600-second limit at 68 percent; a later `--no-checkout` sparse setup represented
-  omitted paths as staged deletions. Starting with `git clone --filter=blob:none
-  --sparse --single-branch --branch <pr-branch>` produced the exact clean PR head in
-  84.050 seconds, and selecting the package cone took 3.143 seconds. Add that exact
-  path to the existing release contribution procedure before manifest edits.
-  Expected benefit: remove ten-minute checkout waits and avoid dirty-index risk
-  during routine external package updates. Owner: `CONTRIBUTING.md`.
+- **Status: done. Document one clean sparse checkout for WinGet PR updates.** The
+  contribution procedure now starts sparse mode in the initial single-branch clone,
+  selects only the package cone, and requires a clean status before edits. Evidence:
+  the exact path produced the clean PR head in 84.050 seconds and selected the cone
+  in 3.143 seconds, replacing a full checkout that exceeded 600 seconds. Owner:
+  `CONTRIBUTING.md`.
 
 - **Status: done. Make Windows worktree removal terminal before dropping its
   recovery metadata.** The Windows lifecycle now waits for the pane process and

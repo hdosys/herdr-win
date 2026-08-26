@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
@@ -305,6 +306,7 @@ def compile_delta_prefixes(
         environment.update(
             {
                 "CARGO_BUILD_JOBS": str(os.cpu_count() or 1),
+                "CARGO_INCREMENTAL": "0",
                 "CARGO_TARGET_DIR": str(temporary / "target"),
                 "GIT_TERMINAL_PROMPT": "0",
             }
@@ -318,6 +320,7 @@ def compile_delta_prefixes(
             )
             environment["HERDR_DELTA_PREFIX"] = str(prefix)
             environment["HERDR_DELTA_MAILBOX"] = mailbox
+            compile_started = time.monotonic()
             try:
                 result = subprocess.run(
                     list(check_command),
@@ -339,6 +342,10 @@ def compile_delta_prefixes(
                 raise DeltaWorkflowError(
                     f"delta prefix through {mailbox} failed to compile: {detail}"
                 )
+            print(
+                f"compiled-prefix: {prefix}/{len(mailboxes)} {mailbox} "
+                f"elapsed_seconds={time.monotonic() - compile_started:.3f}"
+            )
     return mailboxes
 
 

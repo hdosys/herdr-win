@@ -23,8 +23,10 @@ from scripts.local_windows_installer import (
     _git_arguments,
     _hashes,
     _isolated_candidate_paths,
+    _just_test_arguments,
     _require_pushed_development_source,
     _require_one_focused_test,
+    _require_one_nextest_test,
     _source_branch,
     parse_identity,
 )
@@ -195,7 +197,15 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         ]
         self.assertEqual(bins, ["herdr", "herdr-launcher", "herdr-installer-helper"])
 
-    def test_candidate_focused_test_shares_windows_target_and_jobs(self) -> None:
+    def test_candidate_normal_focused_test_uses_the_iteration_gate(self) -> None:
+        self.assertEqual(
+            _just_test_arguments("exact_test_filter"),
+            ["test-one", "exact_test_filter"],
+        )
+        with self.assertRaisesRegex(LocalInstallerError, "non-option test filter"):
+            _just_test_arguments("--all")
+
+    def test_candidate_release_focused_test_shares_windows_target_and_jobs(self) -> None:
         cargo_target = Path("C:/cargo-target")
         arguments = _cargo_test_arguments(cargo_target, 16, "exact_test_filter")
 
@@ -218,6 +228,14 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(LocalInstallerError, "exactly one passing test"):
             _require_one_focused_test(
                 "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured\n"
+            )
+
+        _require_one_nextest_test(
+            "Summary [   0.038s] 1 test run: 1 passed, 2693 skipped\n"
+        )
+        with self.assertRaisesRegex(LocalInstallerError, "exactly one passing test"):
+            _require_one_nextest_test(
+                "Summary [   0.038s] 2 tests run: 2 passed, 2692 skipped\n"
             )
 
     def test_dynamic_msvc_runtime_imports_are_rejected_case_insensitively(

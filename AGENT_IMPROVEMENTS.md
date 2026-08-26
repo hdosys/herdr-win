@@ -191,3 +191,13 @@ configuration repository.
   current. Version 13 immediately made the real installed copy detectable and
   replaceable. Owner: the existing delta inventory or Candidate source validator,
   without adding a second integration-version registry.
+
+- **Status: proposed. Exercise restored OpenCode roots in the native split
+  probe.** Start the existing adaptive-split acceptance from a persisted OpenCode
+  session after a Herdr restart, then create direct children and assert the native
+  panes. Evidence: all 32 asset tests and the fresh managed-launch contract passed,
+  while the live restored process used `opencode --session ...` without the
+  loopback server flags and therefore exposed no endpoint for child attachment.
+  The restored command path was the only missing owner. Owner: the OpenCode native
+  Candidate acceptance boundary, reusing its current split probe rather than a
+  second harness.

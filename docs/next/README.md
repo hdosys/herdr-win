@@ -74,32 +74,11 @@ herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com
 ## How the patch queue works
 
 ```mermaid
-flowchart LR
-    subgraph S["Source"]
-        direction TB
-        U["Upstream Herdr<br/>v0.8.2"] --> B["BASE<br/>9eb521456ac0"]
-    end
-
-    subgraph Q["patches/delta/series"]
-        direction TB
-        P1["0001<br/>Terminal fidelity"] --> P3["0003<br/>Windows SSH target"]
-        P3 --> P4["0004<br/>Windows distribution"]
-        P4 --> P5["0005<br/>OpenCode lifecycle"]
-        P5 --> P6["0006<br/>Hardened downloads"]
-        P6 --> P7["0007<br/>Portable docs check"]
-        P7 --> P8["0008<br/>Scoped Git trust"]
-        P8 --> P9["0009<br/>Managed Agent start"]
-        P9 --> P10["0010<br/>Agent hook recovery"]
-    end
-
-    subgraph V["Validated distribution"]
-        direction TB
-        R["Fresh replay"] --> G["Native + cross-platform<br/>gates"]
-        G --> A["Windows setup + ZIP<br/>Linux/macOS binaries + digests"]
-    end
-
-    B --> P1
-    P10 --> R
+flowchart TB
+    S["Source<br/>Upstream Herdr v0.8.2 → BASE 9eb521456ac0"]
+    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;fidelity&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery"]
+    V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
+    S --> Q --> V
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only application order. Each patch is a full-index, binary-safe mailbox with one logical responsibility.

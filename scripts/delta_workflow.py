@@ -22,6 +22,7 @@ BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 PATCH_RE = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 TASK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 GIT_TIMEOUT_SECONDS = 120
+PREFIX_COMPILE_TIMEOUT_SECONDS = 1200
 DEVELOPMENT_BRANCH = "candidate/development"
 DEVELOPMENT_REMOTE_REF = f"refs/heads/{DEVELOPMENT_BRANCH}"
 
@@ -274,6 +275,71 @@ def replay_delta_tree(project_root: Path = PROJECT_ROOT) -> ReplayResult:
     )
     _run_git(project_root, ["diff", "--check", base, tree])
     return ReplayResult(base=base, mailboxes=mailboxes, tree=tree)
+
+
+def compile_delta_prefixes(
+    project_root: Path = PROJECT_ROOT,
+    *,
+    check_command: Sequence[str] = ("cargo", "check", "--locked", "--bins"),
+) -> tuple[str, ...]:
+    """Replay and compile each ordered mailbox prefix for an explicit refresh."""
+
+    project_root = project_root.resolve()
+    if not check_command:
+        raise DeltaWorkflowError("prefix compile command must not be empty")
+    base = _read_base(project_root)
+    mailboxes = _read_series(project_root)
+    replay_environment = {
+        "GIT_COMMITTER_NAME": "herdr-win replay",
+        "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
+    }
+    with tempfile.TemporaryDirectory(prefix="herdr-delta-prefixes-") as temp_dir:
+        temporary = Path(temp_dir)
+        checkout = temporary / "source"
+        _run_git(
+            project_root,
+            ["clone", "--shared", "--no-checkout", str(project_root), str(checkout)],
+        )
+        _run_git(project_root, ["checkout", "--detach", base], cwd=checkout)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "CARGO_BUILD_JOBS": str(os.cpu_count() or 1),
+                "CARGO_TARGET_DIR": str(temporary / "target"),
+                "GIT_TERMINAL_PROMPT": "0",
+            }
+        )
+        for prefix, mailbox in enumerate(mailboxes, start=1):
+            _run_git(
+                project_root,
+                ["am", "--3way", str(project_root / "patches" / "delta" / mailbox)],
+                cwd=checkout,
+                environment=replay_environment,
+            )
+            environment["HERDR_DELTA_PREFIX"] = str(prefix)
+            environment["HERDR_DELTA_MAILBOX"] = mailbox
+            try:
+                result = subprocess.run(
+                    list(check_command),
+                    cwd=checkout,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=PREFIX_COMPILE_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise DeltaWorkflowError(
+                    f"could not compile delta prefix through {mailbox}: {error}"
+                ) from error
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
+                raise DeltaWorkflowError(
+                    f"delta prefix through {mailbox} failed to compile: {detail}"
+                )
+    return mailboxes
 
 
 def _require_tree_object(project_root: Path, tree: str, label: str) -> None:
@@ -1085,6 +1151,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"absolute path to the shared {DEVELOPMENT_BRANCH} worktree",
     )
 
+    commands.add_parser(
+        "compile-prefixes",
+        help="refresh-only replay and compile of every ordered mailbox prefix",
+    )
+
     check = commands.add_parser(
         "check", help="replay into a temporary index without another checkout"
     )
@@ -1165,6 +1236,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"head: {result.head}")
             print(f"tree: {result.tree}")
             print("development-pushed: yes")
+            return 0
+
+        if options.command == "compile-prefixes":
+            mailboxes = compile_delta_prefixes()
+            print(f"compiled-prefixes: {len(mailboxes)}")
+            print(f"last-mailbox: {mailboxes[-1]}")
             return 0
 
         result = verify_replay_tree(options.expected_tree)

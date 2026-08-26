@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,7 @@ from scripts.delta_workflow import (
     DEVELOPMENT_REMOTE_REF,
     DeltaWorkflowError,
     _git_command,
+    compile_delta_prefixes,
     finalize_delta_mailbox,
     materialize_delta_worktree,
     publish_development_worktree,
@@ -145,6 +148,40 @@ class DeltaWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(result.tree, fixture.source_tree)
             self.assertEqual(run_git(fixture.control, ["status", "--porcelain"]), "")
+
+    def test_refresh_compile_checks_each_ordered_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = DeltaFixture(Path(temp_dir))
+            log = Path(temp_dir) / "prefixes.txt"
+            probe = (
+                "import os, pathlib; "
+                "root = pathlib.Path.cwd(); "
+                "prefix = int(os.environ['HERDR_DELTA_PREFIX']); "
+                "assert int(os.environ['CARGO_BUILD_JOBS']) >= 1; "
+                "assert (root / 'value.txt').read_text().strip() == 'first'; "
+                "assert (root / 'second.txt').exists() == (prefix == 2); "
+                "pathlib.Path(os.environ['HERDR_PREFIX_LOG']).open('a', encoding='utf-8').write("
+                "f\"{prefix}:{os.environ['HERDR_DELTA_MAILBOX']}\\n\")"
+            )
+
+            previous = os.environ.get("HERDR_PREFIX_LOG")
+            os.environ["HERDR_PREFIX_LOG"] = str(log)
+            try:
+                mailboxes = compile_delta_prefixes(
+                    fixture.control,
+                    check_command=(sys.executable, "-c", probe),
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("HERDR_PREFIX_LOG", None)
+                else:
+                    os.environ["HERDR_PREFIX_LOG"] = previous
+
+            self.assertEqual(mailboxes, ("0001-first.patch", "0002-second.patch"))
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                ["1:0001-first.patch", "2:0002-second.patch"],
+            )
 
     def test_expected_tree_mismatch_reports_the_semantic_difference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

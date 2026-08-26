@@ -163,3 +163,14 @@ configuration repository.
   and packaged successfully in 157.585 seconds. This removes a false blocker and
   one unnecessary test compile without adding a generic command runner. Owner:
   the Candidate procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Add one native Windows interactive-server launch probe.**
+  Exercise the built product through the existing Task Scheduler launch owner with
+  deliberately different SSH-like and desktop environment values, then assert
+  bootstrap consumption, exact session and user ownership, process cleanup, and
+  zero task residue. Evidence: diagnosing the remote update failure required a
+  temporary full-path test plus repeated product and test builds totaling 385.069
+  seconds, while the native launch itself completed in about 3 seconds. A reusable
+  gate would expose the cross-session failure before installer handoff without
+  reconstructing one-off test code. Owner: the Windows interactive-server test
+  boundary and Candidate procedure in `CONTRIBUTING.md`.

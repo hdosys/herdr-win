@@ -1,531 +1,882 @@
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string] $ExePath,
 
     [string] $Session = "conpty-input-$([guid]::NewGuid().ToString('N'))",
 
-    [string] $ExpectedConsoleHostPath = ""
+    [string] $SocketPath = "",
+
+    [string] $ExpectedConsoleHostPath = "",
+
+    [string] $TerminalPath = "",
+
+    [ValidateRange(30, 300)]
+    [int] $TimeoutSeconds = 120
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-RemainingMilliseconds {
+    param([int] $Maximum = 30000)
+
+    $remaining = [int][Math]::Floor(($script:Deadline - [DateTime]::UtcNow).TotalMilliseconds)
+    if ($remaining -le 0) {
+        throw "enhanced input probe exceeded its bounded deadline"
+    }
+    return [Math]::Min($remaining, $Maximum)
+}
+
+function Invoke-ProcessResult {
+    param(
+        [string] $Command,
+        [string[]] $Arguments,
+        [int] $TimeoutMilliseconds = 0
+    )
+
+    if ($TimeoutMilliseconds -le 0) {
+        $TimeoutMilliseconds = Get-RemainingMilliseconds
+    }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Command
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $startInfo.ArgumentList.Add([string]$argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "could not start $Command"
+    }
+    $process.StandardInput.Close()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+        try { $process.Kill($true) } catch {}
+        $process.WaitForExit(5000) | Out-Null
+        throw "$Command did not exit within $TimeoutMilliseconds milliseconds"
+    }
+    $result = [ordered]@{
+        exit_code = $process.ExitCode
+        stdout = $stdout.GetAwaiter().GetResult()
+        stderr = $stderr.GetAwaiter().GetResult()
+    }
+    $process.Dispose()
+    return $result
+}
+
 function Invoke-Checked {
     param([string] $Command, [string[]] $Arguments)
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "command failed with exit code $LASTEXITCODE`: $Command $($Arguments -join ' ')"
-    }
-}
 
-function Read-Pane {
-    param([string] $PaneId)
-    $output = & $script:Exe pane read $PaneId --source recent-unwrapped --lines 200 --format text 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "pane read failed with exit code $LASTEXITCODE`: $($output -join "`n")"
-    }
-    return $output -join "`n"
-}
-
-function Wait-PaneText {
-    param(
-        [string] $PaneId,
-        [string] $Needle,
-        [int] $TimeoutSeconds = 10
-    )
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        $text = Read-Pane -PaneId $PaneId
-        if ($text.Contains($Needle)) {
-            return $text
+    $result = Invoke-ProcessResult -Command $Command -Arguments $Arguments
+    if ($result.exit_code -ne 0) {
+        $detail = if (-not [string]::IsNullOrWhiteSpace($result.stderr)) {
+            $result.stderr.Trim()
+        } elseif (-not [string]::IsNullOrWhiteSpace($result.stdout)) {
+            $result.stdout.Trim()
+        } else {
+            "no diagnostic"
         }
-        Start-Sleep -Milliseconds 200
-    } while ((Get-Date) -lt $deadline)
-    return $text
+        throw "command failed with exit code $($result.exit_code): $Command $($Arguments -join ' '): $detail"
+    }
+    return $result
+}
+
+function Invoke-HerdrJson {
+    param([string[]] $Arguments)
+
+    $result = Invoke-Checked -Command $script:Exe -Arguments $Arguments
+    try {
+        return $result.stdout | ConvertFrom-Json -Depth 40
+    } catch {
+        throw "Herdr returned invalid JSON for '$($Arguments -join ' ')': $($result.stdout)"
+    }
+}
+
+function Read-ReportLines {
+    param([string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+    try {
+        $stream = [System.IO.FileStream]::new(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        )
+        try {
+            $reader = [System.IO.StreamReader]::new(
+                $stream,
+                [System.Text.UTF8Encoding]::new($false),
+                $true,
+                1024,
+                $false
+            )
+            try {
+                $text = $reader.ReadToEnd()
+            } finally {
+                $reader.Dispose()
+            }
+        } finally {
+            $stream.Dispose()
+        }
+        return @($text -split "\r?\n" | Where-Object { $_.Length -gt 0 })
+    } catch [System.IO.IOException] {
+        return @()
+    }
+}
+
+function New-ReportWatcher {
+    param([string] $Path)
+
+    $watcher = [System.IO.FileSystemWatcher]::new(
+        [System.IO.Path]::GetDirectoryName($Path),
+        [System.IO.Path]::GetFileName($Path)
+    )
+    $watcher.NotifyFilter = [System.IO.NotifyFilters]::FileName -bor `
+        [System.IO.NotifyFilters]::LastWrite -bor [System.IO.NotifyFilters]::Size
+    $watcher.EnableRaisingEvents = $true
+    return $watcher
+}
+
+function Wait-ReportReady {
+    param([string] $Path, [string] $Mode)
+
+    $needle = "READY:$($Mode.ToUpperInvariant())"
+    $watcher = New-ReportWatcher -Path $Path
+    try {
+        while ($true) {
+            $lines = @(Read-ReportLines -Path $Path)
+            $probeError = @($lines | Where-Object { $_.StartsWith("ERROR:") })
+            if ($probeError.Count -gt 0) {
+                throw "$Mode probe failed before readiness: $($probeError -join ', ')"
+            }
+            if ($lines -contains $needle) {
+                return
+            }
+            $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 500)
+            $null = $watcher.WaitForChanged(
+                [System.IO.WatcherChangeTypes]::Created -bor [System.IO.WatcherChangeTypes]::Changed,
+                $wait
+            )
+        }
+    } finally {
+        $watcher.Dispose()
+    }
+}
+
+function Get-LatestProbeHex {
+    param([string] $Path)
+
+    $lines = @(Read-ReportLines -Path $Path | Where-Object { $_.StartsWith("HEX:") })
+    if ($lines.Count -eq 0) {
+        return ""
+    }
+    return $lines[$lines.Count - 1].Substring(4)
+}
+
+function Wait-ReportHex {
+    param(
+        [string] $Path,
+        [scriptblock] $Accept
+    )
+
+    $watcher = New-ReportWatcher -Path $Path
+    try {
+        while ($true) {
+            $hex = Get-LatestProbeHex -Path $Path
+            if (-not [string]::IsNullOrEmpty($hex) -and (& $Accept $hex)) {
+                return $hex
+            }
+            $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 500)
+            $null = $watcher.WaitForChanged(
+                [System.IO.WatcherChangeTypes]::Created -bor [System.IO.WatcherChangeTypes]::Changed,
+                $wait
+            )
+        }
+    } finally {
+        $watcher.Dispose()
+    }
+}
+
+function Wait-ReportHexAppend {
+    param(
+        [string] $Path,
+        [string] $PreviousHex,
+        [string] $ExpectedHex
+    )
+
+    $observed = Wait-ReportHex -Path $Path -Accept {
+        param($hex)
+        $hex.StartsWith($PreviousHex) -and `
+            $hex.Substring($PreviousHex.Length) -ceq $ExpectedHex
+    }
+    return [ordered]@{ delivered = $true; observed_hex = $observed }
+}
+
+function Wait-NativeRecord {
+    param([string] $Path, [string] $ExpectedRecord, [int] $PreviousCount)
+
+    $needle = "RECORD:$ExpectedRecord"
+    $watcher = New-ReportWatcher -Path $Path
+    try {
+        while ($true) {
+            $count = @(Read-ReportLines -Path $Path | Where-Object { $_ -ceq $needle }).Count
+            if ($count -gt $PreviousCount) {
+                return [ordered]@{ delivered = $true; expected_record = $needle }
+            }
+            $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 500)
+            $null = $watcher.WaitForChanged(
+                [System.IO.WatcherChangeTypes]::Created -bor [System.IO.WatcherChangeTypes]::Changed,
+                $wait
+            )
+        }
+    } finally {
+        $watcher.Dispose()
+    }
+}
+
+function Quote-PowerShellLiteral {
+    param([string] $Value)
+    return "'$($Value.Replace("'", "''"))'"
+}
+
+function Wait-PaneExists {
+    param([string] $PaneId)
+
+    while ($true) {
+        $listed = Invoke-HerdrJson @("pane", "list")
+        if (@($listed.result.panes | Where-Object { $_.pane_id -ceq $PaneId }).Count -eq 1) {
+            return
+        }
+        $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 100)
+        Start-Sleep -Milliseconds $wait
+    }
+}
+
+function Wait-PaneRuntime {
+    param([string] $PaneId)
+
+    while ($true) {
+        try {
+            $null = Invoke-Checked -Command $script:Exe -Arguments @(
+                "pane", "read", $PaneId, "--lines", "1"
+            )
+            return
+        } catch {
+            if (-not $_.Exception.Message.Contains('"code":"pane_not_found"')) {
+                throw
+            }
+        }
+        $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 100)
+        Start-Sleep -Milliseconds $wait
+    }
+}
+
+function Start-ProbeInPane {
+    param([string] $Mode, [string] $PaneId)
+
+    $script:Phase = "$Mode`: launching probe"
+    $reportPath = Join-Path $script:WorkDir "$Mode.report"
+    [System.IO.File]::WriteAllText($reportPath, "", [System.Text.UTF8Encoding]::new($false))
+    $command = "& $(Quote-PowerShellLiteral $script:ProbeExe) " +
+        "$(Quote-PowerShellLiteral $Mode) $(Quote-PowerShellLiteral $reportPath)"
+    $null = Invoke-Checked -Command $script:Exe -Arguments @("pane", "run", $PaneId, $command)
+    $script:Phase = "$Mode`: waiting for probe readiness"
+    Wait-ReportReady -Path $reportPath -Mode $Mode
+    return [ordered]@{ pane_id = $PaneId; report_path = $reportPath }
+}
+
+function Wait-TerminalClientProcess {
+    param(
+        [int] $ServerProcessId,
+        [string] $ExitPath,
+        [string] $StderrPath
+    )
+
+    while ($true) {
+        $candidates = @(
+            Get-Process -Name herdr -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Id -ne $ServerProcessId -and
+                        $script:InitialHerdrIds -notcontains $_.Id
+                } |
+                Where-Object {
+                    $path = ""
+                    try { $path = $_.Path } catch {}
+                    $path -ieq $script:Exe
+                }
+        )
+        if ($candidates.Count -gt 1) {
+            throw "isolated Windows Terminal launched more than one Herdr client"
+        }
+        if ($candidates.Count -eq 1) {
+            return $candidates[0].Id
+        }
+        if (Test-Path -LiteralPath $ExitPath -PathType Leaf) {
+            $exitCode = [System.IO.File]::ReadAllText($ExitPath).Trim()
+            $detail = if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
+                [System.IO.File]::ReadAllText($StderrPath).Trim()
+            } else {
+                "no diagnostic"
+            }
+            throw "Windows Terminal client exited before readiness (exit $exitCode): $detail"
+        }
+        $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 100)
+        Start-Sleep -Milliseconds $wait
+    }
 }
 
 function New-ProbePane {
     param([string] $Mode)
-    $created = & $script:Exe workspace create --cwd $PWD.Path 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "workspace create failed with exit code $LASTEXITCODE`: $($created -join "`n")"
-    }
-    $paneId = (($created -join "`n") | ConvertFrom-Json).result.root_pane.pane_id
-    if ([string]::IsNullOrWhiteSpace($paneId)) {
-        throw "workspace create did not return a root pane id: $($created -join "`n")"
-    }
 
-    $command = "& '$script:ProbeExe' $Mode"
-    Invoke-Checked $script:Exe @("pane", "run", $paneId, $command)
-    $ready = "PROBE_READY_$($Mode.ToUpperInvariant())"
-    $text = Wait-PaneText -PaneId $paneId -Needle $ready
-    if (-not $text.Contains($ready)) {
-        throw "$Mode probe did not become ready: $text"
+    $script:Phase = "$Mode`: creating workspace"
+    $created = Invoke-HerdrJson @("workspace", "create", "--cwd", $PWD.Path)
+    $paneId = [string]$created.result.root_pane.pane_id
+    $workspaceId = [string]$created.result.root_pane.workspace_id
+    if ([string]::IsNullOrWhiteSpace($paneId) -or [string]::IsNullOrWhiteSpace($workspaceId)) {
+        throw "workspace create did not return exact pane and workspace ownership"
     }
-    return $paneId
-}
-
-function Get-LatestProbeHex {
-    param([string] $PaneText)
-    $hexMatches = [regex]::Matches($PaneText, "PROBE_ALL:([0-9a-f]+)")
-    if ($hexMatches.Count -eq 0) {
-        return ""
-    }
-    return $hexMatches[$hexMatches.Count - 1].Groups[1].Value
-}
-
-function Wait-PaneHexAppend {
-    param(
-        [string] $PaneId,
-        [string] $PreviousHex,
-        [string] $ExpectedHex,
-        [int] $TimeoutSeconds = 4
-    )
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        $paneText = Read-Pane -PaneId $PaneId
-        $latestHex = Get-LatestProbeHex -PaneText $paneText
-        if ($latestHex.StartsWith($PreviousHex)) {
-            $appendedHex = $latestHex.Substring($PreviousHex.Length)
-            if ($appendedHex -eq $ExpectedHex) {
-                return [ordered]@{ delivered = $true; pane = $paneText }
-            }
-        }
-        Start-Sleep -Milliseconds 200
-    } while ((Get-Date) -lt $deadline)
-    return [ordered]@{ delivered = $false; pane = $paneText }
+    $script:WorkspaceIds.Add($workspaceId)
+    $script:Phase = "$Mode`: waiting for pane identity"
+    Wait-PaneExists -PaneId $paneId
+    $script:Phase = "$Mode`: waiting for pane runtime"
+    Wait-PaneRuntime -PaneId $paneId
+    return Start-ProbeInPane -Mode $Mode -PaneId $paneId
 }
 
 function Send-KeyAndObserve {
-    param(
-        [string] $PaneId,
-        [string] $Key,
-        [string] $ExpectedHex
+    param([object] $Pane, [string] $Key, [string] $ExpectedHex)
+
+    $script:Phase = "sending key $Key to $($Pane.pane_id)"
+    $before = Get-LatestProbeHex -Path $Pane.report_path
+    $null = Invoke-Checked -Command $script:Exe -Arguments @(
+        "pane", "send-keys", $Pane.pane_id, $Key
     )
-    $before = Get-LatestProbeHex -PaneText (Read-Pane -PaneId $PaneId)
-    Invoke-Checked $script:Exe @("pane", "send-keys", $PaneId, $Key)
-    $observed = Wait-PaneHexAppend -PaneId $PaneId -PreviousHex $before -ExpectedHex $ExpectedHex
+    $observed = Wait-ReportHexAppend -Path $Pane.report_path `
+        -PreviousHex $before -ExpectedHex $ExpectedHex
     return [ordered]@{
         key = $Key
         expected_hex = $ExpectedHex
         delivered = $observed.delivered
-        pane = $observed.pane
     }
 }
 
 function Send-RawAndObserve {
-    param(
-        [string] $PaneId,
-        [string] $Text,
-        [string] $ExpectedHex
+    param([object] $Pane, [string] $Text, [string] $ExpectedHex)
+
+    $script:Phase = "sending raw input to $($Pane.pane_id)"
+    $before = Get-LatestProbeHex -Path $Pane.report_path
+    $null = Invoke-Checked -Command $script:Exe -Arguments @(
+        "pane", "send-text", $Pane.pane_id, $Text
     )
-    $before = Get-LatestProbeHex -PaneText (Read-Pane -PaneId $PaneId)
-    & $script:Exe pane send-text $PaneId $Text | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "pane send-text failed with exit code $LASTEXITCODE"
-    }
-    $observed = Wait-PaneHexAppend -PaneId $PaneId -PreviousHex $before -ExpectedHex $ExpectedHex
-    return [ordered]@{
-        expected_hex = $ExpectedHex
-        delivered = $observed.delivered
-        pane = $observed.pane
-    }
+    $observed = Wait-ReportHexAppend -Path $Pane.report_path `
+        -PreviousHex $before -ExpectedHex $ExpectedHex
+    return [ordered]@{ expected_hex = $ExpectedHex; delivered = $observed.delivered }
 }
 
 function Send-NativeRecordAndObserve {
-    param(
-        [string] $PaneId,
-        [string] $Text,
-        [string] $ExpectedRecord
+    param([object] $Pane, [string] $Text, [string] $ExpectedRecord)
+
+    $script:Phase = "sending native record to $($Pane.pane_id)"
+    $needle = "RECORD:$ExpectedRecord"
+    $before = @(Read-ReportLines -Path $Pane.report_path | Where-Object { $_ -ceq $needle }).Count
+    $null = Invoke-Checked -Command $script:Exe -Arguments @(
+        "pane", "send-text", $Pane.pane_id, $Text
     )
-    $needle = "PROBE_RECORD:$ExpectedRecord"
-    $before = ([regex]::Matches((Read-Pane -PaneId $PaneId), [regex]::Escape($needle))).Count
-    & $script:Exe pane send-text $PaneId $Text | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "pane send-text failed with exit code $LASTEXITCODE"
-    }
-    $deadline = (Get-Date).AddSeconds(10)
-    do {
-        $paneText = Read-Pane -PaneId $PaneId
-        $after = ([regex]::Matches($paneText, [regex]::Escape($needle))).Count
-        if ($after -gt $before) {
-            break
+    return Wait-NativeRecord -Path $Pane.report_path `
+        -ExpectedRecord $ExpectedRecord -PreviousCount $before
+}
+
+function Wait-ServerState {
+    param([bool] $Running)
+
+    $last = $null
+    while ($true) {
+        try {
+            $last = Invoke-HerdrJson @("status", "server", "--json")
+            if ([bool]$last.running -eq $Running) {
+                if (-not $Running) {
+                    return $last
+                }
+                if (-not [string]::Equals(
+                    [string]$last.socket,
+                    $script:SocketPath,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )) {
+                    throw "server status reported another socket: $($last.socket)"
+                }
+                if ([string]$last.session -cne $Session) {
+                    throw "server status reported another session: $($last.session)"
+                }
+                return $last
+            }
+        } catch {
+            $last = $_.Exception.Message
         }
-        Start-Sleep -Milliseconds 200
-    } while ((Get-Date) -lt $deadline)
-    return [ordered]@{
-        expected_record = $needle
-        delivered = $after -gt $before
-        pane = $paneText
+        $wait = [Math]::Min((Get-RemainingMilliseconds -Maximum 10000), 250)
+        Start-Sleep -Milliseconds $wait
     }
 }
 
-$script:Exe = (Resolve-Path $ExePath).Path
-$workDir = Join-Path ([System.IO.Path]::GetTempPath()) "herdr-conpty-input-$([guid]::NewGuid().ToString('N'))"
-$probeSource = Join-Path $workDir "probe.rs"
-$script:ProbeExe = Join-Path $workDir "probe.exe"
-$oldSession = $env:HERDR_SESSION
-$oldSocket = $env:HERDR_SOCKET_PATH
-$oldClientSocket = $env:HERDR_CLIENT_SOCKET_PATH
+$script:Exe = (Resolve-Path -LiteralPath $ExePath).Path
+$script:WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) `
+    "herdr-conpty-input-$([guid]::NewGuid().ToString('N'))"
+$script:ProbeExe = Join-Path $script:WorkDir "probe.exe"
+$probeSource = Join-Path $PSScriptRoot "windows_conpty_input_probe.rs"
+$script:WorkspaceIds = [System.Collections.Generic.List[string]]::new()
+$script:Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+$script:Phase = "initialization"
 $server = $null
+$serverStderr = $null
+$terminalClientPid = $null
+$terminalClientExitPath = $null
+$terminalClientStderrPath = $null
+$terminalConsoleHostIds = @()
 $report = [ordered]@{}
 $failed = $false
-$initialConsoleHostIds = @(Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+$primaryFailure = ""
+$cleanupErrors = [System.Collections.Generic.List[string]]::new()
+$environmentNames = @(
+    "HERDR_SESSION",
+    "HERDR_SOCKET_PATH",
+    "HERDR_CLIENT_SOCKET_PATH",
+    "HERDR_CONFIG_PATH",
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "HERDR_LOG"
+)
+$oldEnvironment = @{}
+foreach ($name in $environmentNames) {
+    $oldEnvironment[$name] = [System.Environment]::GetEnvironmentVariable(
+        $name,
+        [System.EnvironmentVariableTarget]::Process
+    )
+}
+$initialConsoleHostIds = @(
+    Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Id }
+)
+$script:InitialHerdrIds = @(
+    Get-Process -Name herdr -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Id }
+)
 $expectedConsoleHost = if ([string]::IsNullOrWhiteSpace($ExpectedConsoleHostPath)) {
     $null
 } else {
-    (Resolve-Path $ExpectedConsoleHostPath).Path
+    (Resolve-Path -LiteralPath $ExpectedConsoleHostPath).Path
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path $workDir | Out-Null
-@'
-use std::ffi::c_void;
-
-const STD_INPUT_HANDLE: u32 = -10i32 as u32;
-const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
-const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
-const ENABLE_LINE_INPUT: u32 = 0x0002;
-const ENABLE_ECHO_INPUT: u32 = 0x0004;
-const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
-
-type Handle = *mut c_void;
-
-#[link(name = "Kernel32")]
-extern "system" {
-    fn GetStdHandle(kind: u32) -> Handle;
-    fn GetConsoleMode(handle: Handle, mode: *mut u32) -> i32;
-    fn SetConsoleMode(handle: Handle, mode: u32) -> i32;
-    fn ReadFile(
-        handle: Handle,
-        buffer: *mut c_void,
-        bytes_to_read: u32,
-        bytes_read: *mut u32,
-        overlapped: *mut c_void,
-    ) -> i32;
-    fn ReadConsoleInputW(
-        handle: Handle,
-        records: *mut InputRecord,
-        length: u32,
-        records_read: *mut u32,
-    ) -> i32;
-    fn WriteFile(
-        handle: Handle,
-        buffer: *const c_void,
-        bytes_to_write: u32,
-        bytes_written: *mut u32,
-        overlapped: *mut c_void,
-    ) -> i32;
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct KeyEventRecord {
-    key_down: i32,
-    repeat_count: u16,
-    virtual_key_code: u16,
-    virtual_scan_code: u16,
-    unicode_char: u16,
-    control_key_state: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-union InputRecordEvent {
-    key: KeyEventRecord,
-}
-
-#[repr(C)]
-struct InputRecord {
-    event_type: u16,
-    event: InputRecordEvent,
-}
-
-const KEY_EVENT: u16 = 0x0001;
-
-fn write_all(handle: Handle, mut bytes: &[u8]) {
-    while !bytes.is_empty() {
-        let mut written = 0;
-        let ok = unsafe {
-            WriteFile(
-                handle,
-                bytes.as_ptr().cast(),
-                bytes.len() as u32,
-                &mut written,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 || written == 0 {
-            std::process::exit(3);
-        }
-        bytes = &bytes[written as usize..];
-    }
-}
-
-fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "legacy".to_string());
-    let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-    let mut console_mode = 0;
-    if unsafe { GetConsoleMode(input, &mut console_mode) } == 0 {
-        write_all(output, b"PROBE_ERROR_GET_MODE\r\n");
-        std::process::exit(1);
-    }
-    if mode != "native" {
-        let raw_vt_mode = (console_mode | ENABLE_VIRTUAL_TERMINAL_INPUT)
-            & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
-        if unsafe { SetConsoleMode(input, raw_vt_mode) } == 0 {
-            write_all(output, b"PROBE_ERROR_SET_MODE\r\n");
-            std::process::exit(2);
-        }
-    }
-
-    if mode == "native" {
-        write_all(output, b"PROBE_READY_NATIVE\r\n");
-    } else if mode == "kitty" {
-        write_all(output, b"\x1b[>7u\x1b[?u\x1b[cPROBE_READY_KITTY\r\n");
+    New-Item -ItemType Directory -Path $script:WorkDir | Out-Null
+    if ([string]::IsNullOrWhiteSpace($SocketPath)) {
+        $script:SocketPath = Join-Path $script:WorkDir "herdr.sock"
+    } elseif (-not [System.IO.Path]::IsPathFullyQualified($SocketPath)) {
+        throw "-SocketPath must be an absolute exact target"
     } else {
-        write_all(output, b"PROBE_READY_LEGACY\r\n");
+        $script:SocketPath = [System.IO.Path]::GetFullPath($SocketPath)
     }
 
-    if mode == "native" {
-        let mut records: [InputRecord; 16] = std::array::from_fn(|_| InputRecord {
-            event_type: 0,
-            event: InputRecordEvent {
-                key: KeyEventRecord {
-                    key_down: 0,
-                    repeat_count: 0,
-                    virtual_key_code: 0,
-                    virtual_scan_code: 0,
-                    unicode_char: 0,
-                    control_key_state: 0,
-                },
-            },
-        });
-        loop {
-            let mut read = 0;
-            let ok = unsafe {
-                ReadConsoleInputW(input, records.as_mut_ptr(), records.len() as u32, &mut read)
-            };
-            if ok == 0 || read == 0 {
-                break;
-            }
-            for record in &records[..read as usize] {
-                if record.event_type != KEY_EVENT {
-                    continue;
+    $configRoot = Join-Path $script:WorkDir "config"
+    $stateRoot = Join-Path $script:WorkDir "state"
+    $configPath = Join-Path $script:WorkDir "config.toml"
+    New-Item -ItemType Directory -Path $configRoot, $stateRoot | Out-Null
+    [System.Environment]::SetEnvironmentVariable("HERDR_SESSION", $Session, "Process")
+    [System.Environment]::SetEnvironmentVariable(
+        "HERDR_SOCKET_PATH", $script:SocketPath, "Process"
+    )
+    [System.Environment]::SetEnvironmentVariable("HERDR_CLIENT_SOCKET_PATH", $null, "Process")
+    [System.Environment]::SetEnvironmentVariable("HERDR_CONFIG_PATH", $configPath, "Process")
+    [System.Environment]::SetEnvironmentVariable("XDG_CONFIG_HOME", $configRoot, "Process")
+    [System.Environment]::SetEnvironmentVariable("XDG_STATE_HOME", $stateRoot, "Process")
+    [System.Environment]::SetEnvironmentVariable("HERDR_LOG", "herdr=info", "Process")
+
+    $version = Invoke-Checked -Command $script:Exe -Arguments @("--version")
+    $defaultConfig = Invoke-Checked -Command $script:Exe -Arguments @("--default-config")
+    [System.IO.File]::WriteAllText(
+        $configPath,
+        $defaultConfig.stdout,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $null = Invoke-Checked -Command "rustc" -Arguments @(
+        "--edition", "2021", $probeSource, "-o", $script:ProbeExe
+    )
+
+    $serverStdout = Join-Path $script:WorkDir "server.stdout.log"
+    $serverStderr = Join-Path $script:WorkDir "server.stderr.log"
+    $server = Start-Process -FilePath $script:Exe -ArgumentList @("server") `
+        -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverStdout `
+        -RedirectStandardError $serverStderr
+    $serverStatus = Wait-ServerState -Running $true
+
+    $terminalExe = if ([string]::IsNullOrWhiteSpace($TerminalPath)) {
+        (Get-Command wt.exe -ErrorAction Stop).Source
+    } else {
+        (Resolve-Path -LiteralPath $TerminalPath).Path
+    }
+    $terminalWindow = "herdr-input-$([guid]::NewGuid().ToString('N'))"
+    $terminalClientExitPath = Join-Path $script:WorkDir "terminal-client.exit"
+    $terminalClientStderrPath = Join-Path $script:WorkDir "terminal-client.stderr.log"
+    $terminalClientWrapper = Join-Path $script:WorkDir "terminal-client.cmd"
+    $wrapperLines = @(
+        "@echo off",
+        'set "HERDR_ENV="',
+        'set "HERDR_LOG=herdr::client=trace"',
+        "`"$script:Exe`" 2> `"$terminalClientStderrPath`"",
+        "> `"$terminalClientExitPath`" echo %ERRORLEVEL%",
+        "exit /b 0"
+    )
+    [System.IO.File]::WriteAllLines(
+        $terminalClientWrapper,
+        $wrapperLines,
+        [System.Text.Encoding]::ASCII
+    )
+    $null = Start-Process -FilePath $terminalExe -ArgumentList @(
+        "-w", $terminalWindow,
+        "new-tab", "--title", $terminalWindow, "--suppressApplicationTitle",
+        "cmd.exe", "/d", "/c", $terminalClientWrapper
+    ) -PassThru
+    $terminalClientPid = Wait-TerminalClientProcess -ServerProcessId $server.Id `
+        -ExitPath $terminalClientExitPath -StderrPath $terminalClientStderrPath
+    $terminalConsoleHosts = @(
+        Get-Process -Name OpenConsole -ErrorAction SilentlyContinue |
+            Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
+            ForEach-Object {
+                $path = ""
+                try { $path = $_.Path } catch {}
+                [ordered]@{
+                    id = $_.Id
+                    path = $path
                 }
-                let key = unsafe { &record.event.key };
-                let line = format!(
-                    "PROBE_RECORD:{};{};{};{};{};{}\r\n",
-                    if key.key_down != 0 { 1 } else { 0 },
-                    key.repeat_count,
-                    key.virtual_key_code,
-                    key.virtual_scan_code,
-                    key.unicode_char,
-                    key.control_key_state,
-                );
-                write_all(output, line.as_bytes());
             }
-        }
-    } else {
-        let mut all = Vec::new();
-        let mut buffer = [0u8; 256];
-        loop {
-            let mut read = 0;
-            let ok = unsafe {
-                ReadFile(
-                    input,
-                    buffer.as_mut_ptr().cast(),
-                    buffer.len() as u32,
-                    &mut read,
-                    std::ptr::null_mut(),
-                )
-            };
-            if ok == 0 || read == 0 {
-                break;
-            }
-            all.extend_from_slice(&buffer[..read as usize]);
-            let mut line = String::from("PROBE_ALL:");
-            for byte in &all {
-                use std::fmt::Write as _;
-                let _ = write!(&mut line, "{byte:02x}");
-            }
-            line.push_str("\r\n");
-            write_all(output, line.as_bytes());
-        }
+    )
+    if ($terminalConsoleHosts.Count -ne 1) {
+        throw "Windows Terminal must own exactly one new OpenConsole process"
     }
-}
-'@ | Set-Content -NoNewline -Encoding utf8 $probeSource
-
-    Invoke-Checked rustc @("--edition", "2021", $probeSource, "-o", $script:ProbeExe)
-
-    $env:HERDR_SESSION = $Session
-    Remove-Item Env:HERDR_SOCKET_PATH -ErrorAction SilentlyContinue
-    Remove-Item Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
+    $terminalConsoleHostIds = @($terminalConsoleHosts | ForEach-Object { $_.id })
 
     $os = Get-CimInstance Win32_OperatingSystem
+    $report.identity = [ordered]@{
+        binary = $script:Exe
+        version = $version.stdout.Trim()
+        session = $Session
+        socket = $script:SocketPath
+        server_binary = $serverStatus.binary
+        protocol = $serverStatus.protocol
+        terminal = $terminalExe
+        terminal_window = $terminalWindow
+        terminal_client_pid = $terminalClientPid
+        terminal_console_host = $terminalConsoleHosts[0].path
+        terminal_client_trace_filter = "herdr::client=trace"
+    }
+    $report.isolation = [ordered]@{
+        config_path = $configPath
+        config_root = $configRoot
+        state_root = $stateRoot
+    }
     $report.os = [ordered]@{
         caption = $os.Caption
         version = $os.Version
         build = $os.BuildNumber
     }
-
-    Invoke-Checked $script:Exe @("--version")
-    & $script:Exe --default-config | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "command failed with exit code $LASTEXITCODE`: $script:Exe --default-config"
-    }
-
-    $server = Start-Process -FilePath $script:Exe -ArgumentList "server" -PassThru -WindowStyle Hidden
-    $deadline = (Get-Date).AddSeconds(10)
-    $serverReady = $false
-    do {
-        Start-Sleep -Milliseconds 250
-        $status = & $script:Exe status server 2>&1
-        if ($LASTEXITCODE -eq 0 -and (($status -join "`n") -match "status: running")) {
-            $serverReady = $true
-            break
-        }
-    } while ((Get-Date) -lt $deadline)
-    if (-not $serverReady) {
-        throw "server did not become ready: $($status -join "`n")"
-    }
-
     $legacyPane = New-ProbePane -Mode "legacy"
-    $report.legacy_alt_v = Send-KeyAndObserve -PaneId $legacyPane -Key "alt+v" -ExpectedHex "1b76"
+    $report.legacy_alt_v = Send-KeyAndObserve -Pane $legacyPane `
+        -Key "alt+v" -ExpectedHex "1b76"
 
     $kittyPane = New-ProbePane -Mode "kitty"
-    $report.kitty_initial = Wait-PaneText -PaneId $kittyPane -Needle "1b5b3f3775"
-    $kittyInitialHex = Get-LatestProbeHex -PaneText $report.kitty_initial
+    $script:Phase = "kitty: waiting for protocol responses"
+    $kittyInitialHex = Wait-ReportHex -Path $kittyPane.report_path -Accept {
+        param($hex)
+        $hex -match "1b5b3f(?:3[0-9]|3b)+63" -and $hex.Contains("1b5b3f3775")
+    }
     $report.device_attributes_response = $kittyInitialHex -match "1b5b3f(?:3[0-9]|3b)+63"
     $report.kitty_query_response = $kittyInitialHex.Contains("1b5b3f3775")
-    $report.kitty_alt_v = Send-KeyAndObserve -PaneId $kittyPane -Key "alt+v" -ExpectedHex "1b5b3131383b333a3175"
-    $report.kitty_ctrl_u = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+u" -ExpectedHex "1b5b3131373b353a3175"
-    $report.kitty_ctrl_v = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+v" -ExpectedHex "1b5b3131383b353a3175"
-    $report.kitty_shift_enter = Send-KeyAndObserve -PaneId $kittyPane -Key "shift+enter" -ExpectedHex "1b5b31333b3275"
-    $report.kitty_ctrl_backspace = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+backspace" -ExpectedHex "1b5b3132373b3575"
-    $report.kitty_up = Send-KeyAndObserve -PaneId $kittyPane -Key "up" -ExpectedHex "1b5b313b313a3141"
-    $report.kitty_escape = Send-KeyAndObserve -PaneId $kittyPane -Key "esc" -ExpectedHex "1b5b323775"
-    $report.raw_kitty_alt_v = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[118;3:1u") -ExpectedHex "1b5b3131383b333a3175"
-    $report.raw_kitty_ctrl_u = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[117;5:1u") -ExpectedHex "1b5b3131373b353a3175"
-    $report.raw_kitty_ctrl_v = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[118;5:1u") -ExpectedHex "1b5b3131383b353a3175"
-    $report.raw_kitty_shift_enter = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[13;2u") -ExpectedHex "1b5b31333b3275"
-    $report.raw_kitty_ctrl_backspace = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[127;5u") -ExpectedHex "1b5b3132373b3575"
-    $report.raw_kitty_ctrl_delete = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[57426;5u") -ExpectedHex "1b5b35373432363b3575"
-    $report.raw_alt_v = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "v") -ExpectedHex "1b76"
-    $report.raw_ctrl_u = Send-RawAndObserve -PaneId $kittyPane -Text ([string][char]0x15) -ExpectedHex "15"
+    $report.kitty_alt_v = Send-KeyAndObserve -Pane $kittyPane -Key "alt+v" -ExpectedHex "1b5b3131383b333a3175"
+    $report.kitty_ctrl_u = Send-KeyAndObserve -Pane $kittyPane -Key "ctrl+u" -ExpectedHex "1b5b3131373b353a3175"
+    $report.kitty_ctrl_v = Send-KeyAndObserve -Pane $kittyPane -Key "ctrl+v" -ExpectedHex "1b5b3131383b353a3175"
+    $report.kitty_shift_enter = Send-KeyAndObserve -Pane $kittyPane -Key "shift+enter" -ExpectedHex "1b5b31333b3275"
+    $report.kitty_ctrl_backspace = Send-KeyAndObserve -Pane $kittyPane -Key "ctrl+backspace" -ExpectedHex "1b5b3132373b3575"
+    $report.kitty_up = Send-KeyAndObserve -Pane $kittyPane -Key "up" -ExpectedHex "1b5b313b313a3141"
+    $report.kitty_escape = Send-KeyAndObserve -Pane $kittyPane -Key "esc" -ExpectedHex "1b5b323775"
+    $report.raw_kitty_alt_v = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[118;3:1u") -ExpectedHex "1b5b3131383b333a3175"
+    $report.raw_kitty_ctrl_u = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[117;5:1u") -ExpectedHex "1b5b3131373b353a3175"
+    $report.raw_kitty_ctrl_v = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[118;5:1u") -ExpectedHex "1b5b3131383b353a3175"
+    $report.raw_kitty_shift_enter = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[13;2u") -ExpectedHex "1b5b31333b3275"
+    $report.raw_kitty_ctrl_backspace = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[127;5u") -ExpectedHex "1b5b3132373b3575"
+    $report.raw_kitty_ctrl_delete = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "[57426;5u") -ExpectedHex "1b5b35373432363b3575"
+    $report.raw_alt_v = Send-RawAndObserve -Pane $kittyPane -Text ([char]27 + "v") -ExpectedHex "1b76"
+    $report.raw_ctrl_u = Send-RawAndObserve -Pane $kittyPane -Text ([string][char]0x15) -ExpectedHex "15"
 
     $nativePane = New-ProbePane -Mode "native"
-    # Win32 input mode records use CSI Vk;Scan;Unicode;Down;Control;Repeat _.
     $nativeEscapeDown = [char]27 + "[27;1;27;1;0;3_"
     $nativeEscapeRelease = [char]27 + "[27;1;27;0;0;1_"
-    $report.native_escape_down = Send-NativeRecordAndObserve -PaneId $nativePane -Text $nativeEscapeDown -ExpectedRecord "1;3;27;1;27;0"
-    $report.native_escape_release = Send-NativeRecordAndObserve -PaneId $nativePane -Text $nativeEscapeRelease -ExpectedRecord "0;1;27;1;27;0"
+    $report.native_escape_down = Send-NativeRecordAndObserve -Pane $nativePane `
+        -Text $nativeEscapeDown -ExpectedRecord "1;3;27;1;27;0"
+    $report.native_escape_release = Send-NativeRecordAndObserve -Pane $nativePane `
+        -Text $nativeEscapeRelease -ExpectedRecord "0;1;27;1;27;0"
 
-    $consoleHosts = @(Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue |
-        Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
-        ForEach-Object {
-            $path = ""
-            $version = ""
-            try { $path = $_.Path } catch {}
-            try { $version = $_.MainModule.FileVersionInfo.FileVersion } catch {}
-            [ordered]@{
-                id = $_.Id
-                name = $_.ProcessName
-                path = $path
-                version = $version
+    $consoleHosts = @(
+        Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue |
+            Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
+            ForEach-Object {
+                $path = ""
+                $fileVersion = ""
+                try { $path = $_.Path } catch {}
+                try { $fileVersion = $_.MainModule.FileVersionInfo.FileVersion } catch {}
+                [ordered]@{
+                    id = $_.Id
+                    name = $_.ProcessName
+                    path = $path
+                    version = $fileVersion
+                }
             }
-        })
+    )
     $report.new_console_hosts = $consoleHosts
-    $appLocalHostRequired = $null -ne $expectedConsoleHost
-    if ($appLocalHostRequired) {
+    if ($null -ne $expectedConsoleHost) {
         $report.expected_console_host = $expectedConsoleHost
-        $report.app_local_console_host = @($consoleHosts | Where-Object {
-            $_.name -ieq "OpenConsole" -and $_.path -ieq $expectedConsoleHost
-        }).Count -gt 0
+        $report.app_local_console_host = @(
+            $consoleHosts | Where-Object {
+                $_.name -ieq "OpenConsole" -and $_.path -ieq $expectedConsoleHost
+            }
+        ).Count -gt 0
     } else {
         $report.app_local_console_host = $null
     }
 
-    $failed = -not $report.legacy_alt_v.delivered `
-        -or -not $report.device_attributes_response `
-        -or -not $report.kitty_query_response `
-        -or -not $report.kitty_alt_v.delivered `
-        -or -not $report.kitty_ctrl_u.delivered `
-        -or -not $report.kitty_ctrl_v.delivered `
-        -or -not $report.kitty_shift_enter.delivered `
-        -or -not $report.kitty_ctrl_backspace.delivered `
-        -or -not $report.kitty_up.delivered `
-        -or -not $report.kitty_escape.delivered `
-        -or -not $report.raw_kitty_alt_v.delivered `
-        -or -not $report.raw_kitty_ctrl_u.delivered `
-        -or -not $report.raw_kitty_ctrl_v.delivered `
-        -or -not $report.raw_kitty_shift_enter.delivered `
-        -or -not $report.raw_kitty_ctrl_backspace.delivered `
-        -or -not $report.raw_kitty_ctrl_delete.delivered `
-        -or -not $report.raw_alt_v.delivered `
-        -or -not $report.raw_ctrl_u.delivered `
-        -or -not $report.native_escape_down.delivered `
-        -or -not $report.native_escape_release.delivered `
-        -or ($appLocalHostRequired -and -not $report.app_local_console_host)
+    $failed = @(
+        $report.legacy_alt_v.delivered,
+        $report.device_attributes_response,
+        $report.kitty_query_response,
+        $report.kitty_alt_v.delivered,
+        $report.kitty_ctrl_u.delivered,
+        $report.kitty_ctrl_v.delivered,
+        $report.kitty_shift_enter.delivered,
+        $report.kitty_ctrl_backspace.delivered,
+        $report.kitty_up.delivered,
+        $report.kitty_escape.delivered,
+        $report.raw_kitty_alt_v.delivered,
+        $report.raw_kitty_ctrl_u.delivered,
+        $report.raw_kitty_ctrl_v.delivered,
+        $report.raw_kitty_shift_enter.delivered,
+        $report.raw_kitty_ctrl_backspace.delivered,
+        $report.raw_kitty_ctrl_delete.delivered,
+        $report.raw_alt_v.delivered,
+        $report.raw_ctrl_u.delivered,
+        $report.native_escape_down.delivered,
+        $report.native_escape_release.delivered
+    ) -contains $false
+    if ($null -ne $expectedConsoleHost -and -not $report.app_local_console_host) {
+        $failed = $true
+    }
+} catch {
+    $primaryFailure = $_.Exception.Message
+    $report.failure_phase = $script:Phase
+    $script:Deadline = [DateTime]::UtcNow.AddSeconds(5)
+    try {
+        $paneDiagnostics = [System.Collections.Generic.List[object]]::new()
+        $panes = Invoke-HerdrJson @("pane", "list")
+        foreach ($pane in @($panes.result.panes)) {
+            try {
+                $read = Invoke-Checked -Command $script:Exe -Arguments @(
+                    "pane", "read", [string]$pane.pane_id, "--lines", "40"
+                )
+                $paneDiagnostics.Add([ordered]@{
+                    pane_id = $pane.pane_id
+                    text = $read.stdout
+                })
+            } catch {
+                $paneDiagnostics.Add([ordered]@{
+                    pane_id = $pane.pane_id
+                    error = $_.Exception.Message
+                })
+            }
+        }
+        $report.pane_diagnostics = @($paneDiagnostics)
+        $report.probe_processes = @(
+            Get-CimInstance Win32_Process -Filter "Name = 'probe.exe'" |
+                Where-Object { $_.ExecutablePath -ieq $script:ProbeExe } |
+                ForEach-Object {
+                    [ordered]@{
+                        process_id = $_.ProcessId
+                        parent_process_id = $_.ParentProcessId
+                        command_line = $_.CommandLine
+                    }
+                }
+        )
+        $report.report_files = @(
+            [System.IO.Directory]::GetFiles($script:WorkDir, "*.report") |
+                ForEach-Object {
+                    [ordered]@{
+                        path = $_
+                        content = (Read-ReportLines -Path $_) -join "`n"
+                    }
+                }
+        )
+    } catch {
+        $report.pane_diagnostics_error = $_.Exception.Message
+    }
+    throw
 } finally {
+    $script:Deadline = [DateTime]::UtcNow.AddSeconds(20)
+    foreach ($workspaceId in $script:WorkspaceIds) {
+        try {
+            $null = Invoke-Checked -Command $script:Exe -Arguments @(
+                "workspace", "close", $workspaceId
+            )
+        } catch {
+            $cleanupErrors.Add("workspace $workspaceId`: $($_.Exception.Message)")
+        }
+    }
+
     if ($null -ne $server) {
         try {
-            $stopOutput = & $script:Exe server stop 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "server stop during cleanup failed: $($stopOutput -join "`n")"
+            $status = Invoke-HerdrJson @("status", "server", "--json")
+            if ([bool]$status.running) {
+                $null = Invoke-Checked -Command $script:Exe -Arguments @("server", "stop")
+                $null = Wait-ServerState -Running $false
             }
         } catch {
-            Write-Host "server stop during cleanup failed: $($_.Exception.Message)"
-        }
-        Wait-Process -Id $server.Id -Timeout 10 -ErrorAction SilentlyContinue
-        $server.Refresh()
-        if (-not $server.HasExited) {
-            & taskkill.exe /PID $server.Id /T /F 2>&1 | Out-Null
+            $cleanupErrors.Add("server stop: $($_.Exception.Message)")
+            try {
+                $server.Refresh()
+                if (-not $server.HasExited) {
+                    $server.Kill($true)
+                    $server.WaitForExit(5000) | Out-Null
+                }
+            } catch {
+                $cleanupErrors.Add("server process tree: $($_.Exception.Message)")
+            }
         }
     }
-    if ($null -ne $expectedConsoleHost) {
-        $hostExitDeadline = (Get-Date).AddSeconds(5)
+
+    if ($null -ne $terminalClientPid) {
+        $clientExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        $clientProcess = $null
         do {
-            $remainingHosts = @(Get-Process -Name OpenConsole -ErrorAction SilentlyContinue |
-                Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
-                Where-Object {
-                    $path = ""
-                    try { $path = $_.Path } catch {}
-                    $path -ieq $expectedConsoleHost
-                })
-            if ($remainingHosts.Count -eq 0) {
-                break
-            }
+            $clientProcess = Get-Process -Id $terminalClientPid -ErrorAction SilentlyContinue
+            if ($null -eq $clientProcess) { break }
             Start-Sleep -Milliseconds 100
-        } while ((Get-Date) -lt $hostExitDeadline)
+        } while ([DateTime]::UtcNow -lt $clientExitDeadline)
+        $report.terminal_client_exited = $null -eq $clientProcess
+        if (-not $report.terminal_client_exited) {
+            try {
+                $clientProcess.Kill($true)
+                $clientProcess.WaitForExit(5000) | Out-Null
+            } catch {}
+            $cleanupErrors.Add("Windows Terminal client did not exit after server shutdown")
+        }
+
+        $wrapperExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (
+            -not (Test-Path -LiteralPath $terminalClientExitPath -PathType Leaf) -and
+            [DateTime]::UtcNow -lt $wrapperExitDeadline
+        ) {
+            Start-Sleep -Milliseconds 100
+        }
+        if (Test-Path -LiteralPath $terminalClientExitPath -PathType Leaf) {
+            $report.terminal_client_exit_code = [int](
+                [System.IO.File]::ReadAllText($terminalClientExitPath).Trim()
+            )
+        } else {
+            $cleanupErrors.Add("Windows Terminal client wrapper did not report exit")
+        }
+    }
+
+    if ($terminalConsoleHostIds.Count -gt 0) {
+        $terminalHostExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        $remainingTerminalHosts = @()
+        do {
+            $remainingTerminalHosts = @(
+                $terminalConsoleHostIds | ForEach-Object {
+                    Get-Process -Id $_ -ErrorAction SilentlyContinue
+                }
+            )
+            if ($remainingTerminalHosts.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $terminalHostExitDeadline)
+        $report.terminal_console_host_exited = $remainingTerminalHosts.Count -eq 0
+        if (-not $report.terminal_console_host_exited) {
+            foreach ($hostProcess in $remainingTerminalHosts) {
+                try {
+                    $hostProcess.Kill($true)
+                    $hostProcess.WaitForExit(5000) | Out-Null
+                } catch {}
+            }
+            $cleanupErrors.Add("Windows Terminal OpenConsole process did not exit")
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($primaryFailure)) {
+        $report.failure = $primaryFailure
+        if (
+            $null -ne $terminalClientStderrPath -and
+            (Test-Path -LiteralPath $terminalClientStderrPath -PathType Leaf)
+        ) {
+            $report.terminal_client_stderr = [System.IO.File]::ReadAllText(
+                $terminalClientStderrPath
+            ).Trim()
+        }
+        if (
+            $null -ne $serverStderr -and
+            (Test-Path -LiteralPath $serverStderr -PathType Leaf)
+        ) {
+            $report.server_stderr = [System.IO.File]::ReadAllText($serverStderr).Trim()
+        }
+    }
+
+    if ($null -ne $expectedConsoleHost) {
+        $hostExitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        $remainingHosts = @()
+        do {
+            $remainingHosts = @(
+                Get-Process -Name OpenConsole -ErrorAction SilentlyContinue |
+                    Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
+                    Where-Object {
+                        $path = ""
+                        try { $path = $_.Path } catch {}
+                        $path -ieq $expectedConsoleHost
+                    }
+            )
+            if ($remainingHosts.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $hostExitDeadline)
         $report.app_local_console_host_exited = $remainingHosts.Count -eq 0
         if (-not $report.app_local_console_host_exited) {
-            $failed = $true
+            $cleanupErrors.Add("app-local OpenConsole process did not exit")
         }
     }
-    $global:LASTEXITCODE = 0
-    if ($null -eq $oldSession) {
-        Remove-Item Env:HERDR_SESSION -ErrorAction SilentlyContinue
-    } else {
-        $env:HERDR_SESSION = $oldSession
-    }
-    if ($null -eq $oldSocket) {
-        Remove-Item Env:HERDR_SOCKET_PATH -ErrorAction SilentlyContinue
-    } else {
-        $env:HERDR_SOCKET_PATH = $oldSocket
-    }
-    if ($null -eq $oldClientSocket) {
-        Remove-Item Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
-    } else {
-        $env:HERDR_CLIENT_SOCKET_PATH = $oldClientSocket
+
+    foreach ($name in $environmentNames) {
+        [System.Environment]::SetEnvironmentVariable(
+            $name,
+            $oldEnvironment[$name],
+            [System.EnvironmentVariableTarget]::Process
+        )
     }
 
-    $json = $report | ConvertTo-Json -Depth 8
-    Write-Host $json
-    Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
+    $removeDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        Remove-Item -LiteralPath $script:WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $script:WorkDir)) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $removeDeadline)
+    if (Test-Path -LiteralPath $script:WorkDir) {
+        $cleanupErrors.Add("temporary probe root remained locked: $script:WorkDir")
+    }
+
+    $report.cleanup_errors = @($cleanupErrors)
+    $report.cleanup_complete = $cleanupErrors.Count -eq 0
+    $report | ConvertTo-Json -Depth 8
 }
 
-if ($failed) {
+if ($failed -or $cleanupErrors.Count -ne 0) {
     throw "enhanced Windows ConPTY input probe failed; see the JSON report above"
 }

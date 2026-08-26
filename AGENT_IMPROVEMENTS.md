@@ -181,3 +181,13 @@ configuration repository.
   `just test-one interactive_server` returned status 0; invoking the same Cargo
   Nextest path directly returned the failure correctly. This prevents false-green
   focused gates. Owner: `justfile`.
+
+- **Status: proposed. Gate changed integration assets on one migration-version
+  advance.** Extend the existing delta or Candidate source check to compare each
+  changed managed integration asset with the accepted queue baseline, then require
+  a higher embedded marker and matching Rust constant before packaging. Evidence:
+  three OpenCode layout commits changed the managed plugin while both old and new
+  bytes still claimed version 12, so the installed stale plugin was reported as
+  current. Version 13 immediately made the real installed copy detectable and
+  replaceable. Owner: the existing delta inventory or Candidate source validator,
+  without adding a second integration-version registry.

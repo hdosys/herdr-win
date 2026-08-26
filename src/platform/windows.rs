@@ -62,8 +62,8 @@ use windows_sys::{
                 OpenProcessToken, OpenThread, QueryFullProcessImageNameW, ResumeThread,
                 TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
                 DETACHED_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-                PROCESS_VM_READ, THREAD_SUSPEND_RESUME,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
+                THREAD_SUSPEND_RESUME,
             },
         },
         UI::{
@@ -1424,10 +1424,7 @@ fn process_session_id(pid: u32) -> std::io::Result<u32> {
 }
 
 fn open_interactive_server_process(pid: u32) -> Option<ProcessHandle> {
-    ProcessHandle::open(
-        pid,
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
-    )
+    ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE)
 }
 
 fn parse_interactive_server_pid(output: &str) -> std::io::Result<u32> {
@@ -1536,16 +1533,26 @@ fn process_user_matches_current_user(process: &ProcessHandle) -> std::io::Result
 }
 
 fn terminate_process_and_wait(process: &ProcessHandle, timeout: Duration) -> std::io::Result<()> {
-    if unsafe { TerminateProcess(process.0, 1) } == 0 && process_handle_is_running(process)? {
-        return Err(std::io::Error::last_os_error());
+    if unsafe { TerminateProcess(process.0, 1) } == 0 {
+        let err = std::io::Error::last_os_error();
+        if process_handle_is_running(process)? {
+            return Err(err);
+        }
     }
-    match wait_for_handle(process.0, timeout)? {
-        true => Ok(()),
-        false => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out waiting for the rejected interactive server to exit",
-        )),
+
+    // A Task Scheduler process can deny SYNCHRONIZE to the same user's SSH
+    // logon token. The query handle can still observe the terminated state.
+    let deadline = Instant::now() + timeout;
+    while process_handle_is_running(process)? {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out waiting for the rejected interactive server to exit",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
+    Ok(())
 }
 
 fn wait_for_process_handle(
@@ -3554,7 +3561,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_interactive_server_handle_can_terminate_and_wait() {
+    fn rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait() {
         if std::env::var_os(INTERACTIVE_REJECTION_TEST_CHILD_ENV).is_some() {
             thread::sleep(Duration::from_secs(30));
             return;
@@ -3562,17 +3569,21 @@ mod tests {
 
         let test_exe = std::env::current_exe().expect("resolve test executable");
         let mut child = Command::new(test_exe)
-            .arg("rejected_interactive_server_handle_can_terminate_and_wait")
+            .arg("rejected_interactive_server_handle_without_synchronize_can_terminate_and_wait")
             .env(INTERACTIVE_REJECTION_TEST_CHILD_ENV, "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn rejected interactive server test child");
-        let process = super::open_interactive_server_process(child.id()).unwrap_or_else(|| {
+        let process = super::ProcessHandle::open(
+            child.id(),
+            super::PROCESS_QUERY_LIMITED_INFORMATION | super::PROCESS_TERMINATE,
+        )
+        .unwrap_or_else(|| {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("open rejected interactive server test child");
+            panic!("open rejected interactive server test child without synchronize access");
         });
 
         super::terminate_process_and_wait(&process, Duration::from_secs(5))

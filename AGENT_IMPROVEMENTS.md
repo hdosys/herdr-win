@@ -165,15 +165,15 @@ configuration repository.
   the Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: proposed. Add one native Windows interactive-server launch probe.**
-  Exercise the built product through the existing Task Scheduler launch owner with
-  deliberately different SSH-like and desktop environment values, then assert
-  bootstrap consumption, exact session and user ownership, process cleanup, and
-  zero task residue. Evidence: diagnosing the remote update failure required a
-  temporary full-path test plus repeated product and test builds totaling 385.069
-  seconds, while the native launch itself completed in about 3 seconds. A reusable
-  gate would expose the cross-session failure before installer handoff without
-  reconstructing one-off test code. Owner: the Windows interactive-server test
-  boundary and Candidate procedure in `CONTRIBUTING.md`.
+  Exercise the built product from an actual `cmd.exe` parent through the existing
+  Task Scheduler launch owner so Windows hidden `=X:` drive state is present, then
+  assert bootstrap consumption, exact session and user ownership, process cleanup,
+  and zero task residue. Evidence: two installers passed probes whose parent lacked
+  the real `cmd.exe` environment and then failed the configured SSH path. The exact
+  `cmd.exe` to Task Scheduler launch passed in 3.253 seconds after the root fix. A
+  reusable gate would expose the cross-session failure before installer handoff
+  without reconstructing one-off test code. Owner: the Windows interactive-server
+  test boundary and Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: proposed. Propagate Windows `test-one` failures.** Make the Windows
   PowerShell recipe return Cargo Nextest's exit status to Just. Evidence: an

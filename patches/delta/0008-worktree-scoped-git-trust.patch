@@ -1,4 +1,4 @@
-From d357f4786bddca0d0730e6b46aeb08bc4d715d31 Mon Sep 17 00:00:00 2001
+From 7066aba244219fd6a026f44dad20da572cb1e050 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 17:49:01 +0200
 Subject: [PATCH 7/10] fix(worktree): scope Git trust to selected paths
@@ -7,6 +7,7 @@ refs #3044
 ---
  CHANGELOG.md                      |   3 +
  docs/next/CHANGELOG.md            |   3 +
+ src/app/api/worktrees.rs          |  63 ++++++++++++++++++
  src/app/api/worktrees/deferred.rs |  17 ++++-
  src/app/runtime.rs                |   9 ++-
  src/app/worktrees.rs              |  28 ++++++--
@@ -14,7 +15,7 @@ refs #3044
  src/pty/actor.rs                  |  33 +++++++--
  src/terminal/runtime.rs           |   4 +-
  src/worktree.rs                   | 107 ++++++++++++++++++++++--------
- 9 files changed, 182 insertions(+), 44 deletions(-)
+ 10 files changed, 245 insertions(+), 44 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index 576a7abcdf532aad296c5bb7a0092393d92808c1..07da9d2b86c17639a06bf8c981010a292fa00933 100644
@@ -44,6 +45,80 @@ index 4399782d932362f79a99f8aa596aa7728b84d860..4048b9fef48bda76a7063882fb053f84
  ## [0.8.2] - 2026-08-19
  
  ### Added
+diff --git a/src/app/api/worktrees.rs b/src/app/api/worktrees.rs
+index 7aa8c00f36f8bc4aa8a2c0bd423bb96519aeeccb..774b981a9fe1fb07ef828f7e517af9a2ccfad9a9 100644
+--- a/src/app/api/worktrees.rs
++++ b/src/app/api/worktrees.rs
+@@ -2180,6 +2180,69 @@ mod tests {
+         let _ = std::fs::remove_dir_all(repo);
+     }
+ 
++    #[test]
++    fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
++        let mut app = test_app();
++        let checkout = PathBuf::from("/repo/herdr-issue");
++        let membership = crate::workspace::WorktreeSpaceMembership {
++            key: "repo-key".into(),
++            label: "herdr".into(),
++            repo_root: "/repo/herdr".into(),
++            checkout_path: checkout.clone(),
++            is_linked_worktree: true,
++        };
++        let mut parent = Workspace::test_new("parent");
++        parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
++            is_linked_worktree: false,
++            checkout_path: "/repo/herdr".into(),
++            ..membership.clone()
++        });
++        let mut child = Workspace::test_new("child");
++        child.worktree_space = Some(membership.clone());
++        let foreground = Workspace::test_new("foreground");
++        let child_id = child.id.clone();
++        let foreground_id = foreground.id.clone();
++        app.state.workspaces = vec![parent, child, foreground];
++        app.state.active = Some(2);
++        app.state.selected = 2;
++        let workspace_snapshot = app.workspace_info(1);
++        let worktree_snapshot = app.worktree_info_for_membership(&membership, None);
++        app.pending_api_worktree_removes.insert(child_id.clone(), 7);
++        app.pending_api_worktree_remove_paths
++            .insert(crate::worktree::canonical_or_original(&checkout), 7);
++        let (respond_to, response_rx) = response_channel();
++
++        app.handle_api_worktree_remove_finished(WorktreeRemoveResult {
++            workspace_id: child_id,
++            path: checkout.clone(),
++            workspace: Some(Box::new(workspace_snapshot)),
++            worktree: Some(Box::new(worktree_snapshot)),
++            forced: false,
++            api_request: Some(ApiWorktreeRemoveRequest {
++                id: "req".into(),
++                operation_id: 7,
++                checkout_key: crate::worktree::canonical_or_original(&checkout),
++                respond_to,
++            }),
++            result: Ok(()),
++        });
++
++        let response = response_rx
++            .recv_timeout(std::time::Duration::from_secs(2))
++            .expect("background worktree remove completion should respond");
++        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
++        assert!(matches!(
++            success.result,
++            ResponseResult::WorktreeRemoved { .. }
++        ));
++        assert_eq!(app.state.workspaces.len(), 2);
++        assert_eq!(
++            app.state.active.map(|idx| &app.state.workspaces[idx].id),
++            Some(&foreground_id)
++        );
++        assert_eq!(app.state.workspaces[app.state.selected].id, foreground_id);
++    }
++
+     #[test]
+     fn deferred_api_worktree_remove_emits_removed_after_workspace_changes() {
+         let event_hub = crate::api::EventHub::default();
 diff --git a/src/app/api/worktrees/deferred.rs b/src/app/api/worktrees/deferred.rs
 index 3cd5e9f1f502b9ee487eb5c35099bbe0e0214337..6afe4319e7b07b747b0f61c992c94531b17eae89 100644
 --- a/src/app/api/worktrees/deferred.rs

@@ -1,11 +1,10 @@
-From 0c4cd71dfa53b745bb859750a42e7f9f35077e93 Mon Sep 17 00:00:00 2001
+From 3ca666a8250e81bc1ac88bf6119e81712e38bd62 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/10] feat(windows): manage fork distribution
 
 ---
  .cargo/config.toml                            |    2 +
- .github/workflows/ci.yml                      |   54 +-
  Cargo.toml                                    |   12 +
  README.zh-CN.md                               |    2 +-
  build.rs                                      |   60 +-
@@ -81,7 +80,7 @@ Subject: [PATCH 3/10] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 77 files changed, 13911 insertions(+), 2443 deletions(-)
+ 76 files changed, 13858 insertions(+), 2442 deletions(-)
  create mode 100644 .cargo/config.toml
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
@@ -118,78 +117,6 @@ index 0000000000000000000000000000000000000000..ac2b23f81468463fa64b8d33becb5903
 @@ -0,0 +1,2 @@
 +[target.x86_64-pc-windows-msvc]
 +rustflags = ["-C", "target-feature=+crt-static"]
-diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 912ff332f7896e90ed5ba536a3c403bb3b5838ec..3027a10ca2a8580cc28bdbdfff0a25531d1cc1e8 100644
---- a/.github/workflows/ci.yml
-+++ b/.github/workflows/ci.yml
-@@ -232,6 +232,57 @@ jobs:
-             -OutputPath artifacts\herdr-windows-x86_64.zip
-           "HERDR_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
- 
-+      - name: Provision verified stable Windows Terminal
-+        shell: pwsh
-+        env:
-+          GH_TOKEN: ${{ github.token }}
-+        run: |
-+          $ErrorActionPreference = "Stop"
-+          $headers = @{
-+            Accept = "application/vnd.github+json"
-+            Authorization = "Bearer $env:GH_TOKEN"
-+            "X-GitHub-Api-Version" = "2022-11-28"
-+          }
-+          $release = Invoke-RestMethod `
-+            -Uri "https://api.github.com/repos/microsoft/terminal/releases/latest" `
-+            -Headers $headers
-+          if ($release.draft -or $release.prerelease) {
-+            throw "latest Windows Terminal release is not stable"
-+          }
-+          $assets = @($release.assets | Where-Object {
-+            $_.name -match '^Microsoft\.WindowsTerminal_[^_]+_x64\.zip$'
-+          })
-+          if ($assets.Count -ne 1) {
-+            throw "latest Windows Terminal release must contain one x64 archive"
-+          }
-+          $asset = $assets[0]
-+          if ($asset.digest -notmatch '^sha256:[0-9a-fA-F]{64}$') {
-+            throw "Windows Terminal release asset is missing its SHA-256 digest"
-+          }
-+          $download = [uri]$asset.browser_download_url
-+          if ($download.Scheme -ne "https" -or $download.Host -ne "github.com") {
-+            throw "Windows Terminal release asset has an unexpected source"
-+          }
-+
-+          $archive = Join-Path $env:RUNNER_TEMP $asset.name
-+          $root = Join-Path $env:RUNNER_TEMP "windows-terminal"
-+          Invoke-WebRequest -Uri $download -OutFile $archive
-+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-+          $expected = $asset.digest.Substring(7)
-+          if ($actual -ine $expected) {
-+            throw "Windows Terminal release asset digest mismatch"
-+          }
-+          Expand-Archive -LiteralPath $archive -DestinationPath $root
-+          $terminals = @(Get-ChildItem -LiteralPath $root -Filter wt.exe -File -Recurse)
-+          if ($terminals.Count -ne 1) {
-+            throw "Windows Terminal archive must contain one wt.exe"
-+          }
-+          $terminal = $terminals[0]
-+          New-Item -ItemType File -Force `
-+            -Path (Join-Path $terminal.Directory.FullName ".portable") | Out-Null
-+          "HERDR_WINDOWS_TERMINAL=$($terminal.FullName)" |
-+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-+
-       - name: Probe enhanced pane input with bundled ConPTY
-         shell: pwsh
-         run: |
-@@ -241,7 +292,8 @@ jobs:
-           .\scripts\windows_conpty_enhanced_input_probe.ps1 `
-             -ExePath $exe `
-             -Session "ci-conpty-bundled-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
--            -ExpectedConsoleHostPath $consoleHost
-+            -ExpectedConsoleHostPath $consoleHost `
-+            -TerminalPath $env:HERDR_WINDOWS_TERMINAL
- 
-       - name: Test packaged installer and repair with Windows PowerShell 5.1
-         shell: pwsh
 diff --git a/Cargo.toml b/Cargo.toml
 index 8c13a0b19bf03cbb8691fcc016f89958f46c667b..564969077aa9a20b573b5c022c4c981639704b80 100644
 --- a/Cargo.toml

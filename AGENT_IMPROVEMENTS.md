@@ -174,3 +174,10 @@ configuration repository.
   gate would expose the cross-session failure before installer handoff without
   reconstructing one-off test code. Owner: the Windows interactive-server test
   boundary and Candidate procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Propagate Windows `test-one` failures.** Make the Windows
+  PowerShell recipe return Cargo Nextest's exit status to Just. Evidence: an
+  intentionally failing focused test printed Nextest's failure summary, but
+  `just test-one interactive_server` returned status 0; invoking the same Cargo
+  Nextest path directly returned the failure correctly. This prevents false-green
+  focused gates. Owner: `justfile`.

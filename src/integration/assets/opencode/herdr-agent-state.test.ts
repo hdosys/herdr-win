@@ -499,7 +499,7 @@ test("chat.message establishes new root ownership", async () => {
   expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
 });
 
-test("opens direct child sessions in adaptive same-tab splits", async () => {
+test("opens concurrent direct child sessions in adaptive same-tab splits", async () => {
   const plugin = await loadPlugin({
     directory: "C:\\repo",
     serverUrl: new URL("http://127.0.0.1:4096"),
@@ -508,7 +508,7 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
   requests.length = 0;
 
   let nextPaneNumber = 2;
-  async function openChild(sessionID: string, panes: unknown[], directory?: string) {
+  function openChild(sessionID: string, panes: unknown[], directory?: string) {
     const paneID = `test:p${nextPaneNumber}`;
     nextPaneNumber += 1;
     enqueueResult("pane.layout", { type: "pane_layout", layout: { panes } });
@@ -518,7 +518,7 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
       agent: { pane_id: paneID },
       argv: [],
     });
-    await plugin.event({
+    return plugin.event({
       event: {
         type: "session.created",
         properties: {
@@ -533,25 +533,27 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
     });
   }
 
-  await openChild(
-    "child-one",
-    [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
-    "C:\\repo\\one",
-  );
-  await openChild("child-two", [
-    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-    { pane_id: "test:p2", rect: { width: 100, height: 50 } },
-  ]);
-  await openChild("child-three", [
-    { pane_id: "test:p1", rect: { width: 200, height: 50 } },
-    { pane_id: "test:p2", rect: { width: 200, height: 25 } },
-    { pane_id: "test:p3", rect: { width: 200, height: 25 } },
-  ]);
-  await openChild("child-four", [
-    { pane_id: "test:p1", rect: { width: 200, height: 50 } },
-    { pane_id: "test:p2", rect: { width: 100, height: 25 } },
-    { pane_id: "test:p4", rect: { width: 100, height: 25 } },
-    { pane_id: "test:p3", rect: { width: 200, height: 25 } },
+  await Promise.all([
+    openChild(
+      "child-one",
+      [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
+      "C:\\repo\\one",
+    ),
+    openChild("child-two", [
+      { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+      { pane_id: "test:p2", rect: { width: 100, height: 50 } },
+    ]),
+    openChild("child-three", [
+      { pane_id: "test:p1", rect: { width: 200, height: 50 } },
+      { pane_id: "test:p2", rect: { width: 200, height: 25 } },
+      { pane_id: "test:p3", rect: { width: 200, height: 25 } },
+    ]),
+    openChild("child-four", [
+      { pane_id: "test:p1", rect: { width: 200, height: 50 } },
+      { pane_id: "test:p2", rect: { width: 100, height: 25 } },
+      { pane_id: "test:p4", rect: { width: 100, height: 25 } },
+      { pane_id: "test:p3", rect: { width: 200, height: 25 } },
+    ]),
   ]);
 
   const splits = requests.filter((request) => requestMethod(request) === "pane.split");

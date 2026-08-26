@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=13
+// HERDR_INTEGRATION_VERSION=14
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -88,6 +88,7 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
   }
 
   let requestChain = Promise.resolve();
+  let panePlacementChain = Promise.resolve();
   let currentRootSessionID;
   let unscopedErrorBlocked = false;
   let disposing = false;
@@ -372,37 +373,61 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
       if (!(await serverAcceptsAttach()) || disposing || retiredChildren.has(sessionID)) {
         return;
       }
-      const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
-      const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-      const target = splitTarget(layout);
-      if (
-        disposing ||
-        !target ||
-        !child.working ||
-        retiredChildren.has(sessionID)
-      ) {
-        return;
-      }
 
-      const directory = childDirectory(info);
-      const splitResponse = await request("pane.split", {
-        target_pane_id: target.paneID,
-        direction: target.direction,
-        ratio: 0.5,
-        ...(directory ? { cwd: directory } : {}),
-        focus: false,
-        env: { [SUBAGENT_SESSION_ENV]: sessionID },
+      const previousPanePlacement = panePlacementChain;
+      let releasePanePlacement = () => {};
+      panePlacementChain = new Promise((resolve) => {
+        releasePanePlacement = resolve;
       });
-      const paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
-      if (typeof paneID !== "string" || !paneID) {
-        return;
-      }
-      if (disposing || !child.working || retiredChildren.has(sessionID)) {
-        await request("pane.close", { pane_id: paneID }, disposing);
-        return;
+      await previousPanePlacement;
+
+      let directory;
+      let paneID;
+      try {
+        if (
+          disposed ||
+          disposing ||
+          !child.working ||
+          child.paneID ||
+          retiredChildren.has(sessionID) ||
+          info.parentID !== currentRootSessionID
+        ) {
+          return;
+        }
+        const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
+        const layout = responseResult(layoutResponse, "pane_layout")?.layout;
+        const target = splitTarget(layout);
+        if (
+          disposing ||
+          !target ||
+          !child.working ||
+          retiredChildren.has(sessionID)
+        ) {
+          return;
+        }
+
+        directory = childDirectory(info);
+        const splitResponse = await request("pane.split", {
+          target_pane_id: target.paneID,
+          direction: target.direction,
+          ratio: 0.5,
+          ...(directory ? { cwd: directory } : {}),
+          focus: false,
+          env: { [SUBAGENT_SESSION_ENV]: sessionID },
+        });
+        paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
+        if (typeof paneID !== "string" || !paneID) {
+          return;
+        }
+        if (disposing || !child.working || retiredChildren.has(sessionID)) {
+          await request("pane.close", { pane_id: paneID }, disposing);
+          return;
+        }
+        child.paneID = paneID;
+      } finally {
+        releasePanePlacement();
       }
 
-      child.paneID = paneID;
       const startResponse = await request("agent.start", {
         name: subagentName(sessionID),
         kind: AGENT,

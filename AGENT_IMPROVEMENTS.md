@@ -44,24 +44,14 @@ configuration repository.
   the existing README mirror check when Mermaid source changes. Expected benefit:
   prevent visually unusable diagram iterations without adding a broad visual gate.
 
-- **Status: proposed. Add a repository-owned local Windows input acceptance probe.**
-  Evidence: a task-local probe hardcoded the development state directory and used
-  a PATH-dependent sentinel that detached servers did not inherit, producing false
-  negatives before direct pane readback isolated the native ConPTY encoding fault.
-  A later probe spent 93 seconds rebuilding a trace client, then initially targeted
-  the independent debug state directory and incurred two 10-second rendered-text
-  waits before an exact socket override and client/server logs isolated the input
-  path. An auto-start probe isolated state but not config, restored the shared
-  session, then left its corrected task server alive through a 122-minute session
-  interruption and blocked installer preflight until bounded cleanup. Proposed
-  change: add one bounded real-Windows-Terminal probe that derives isolated config
-  and state ownership from the tested binary, accepts an exact socket/session
-  target, scopes tracing to one client role, waits on protocol state instead of
-  rendered text, verifies injected input through the shared path, and always
-  cleans its named process tree and session. Expected benefit: faster
-  local-versus-remote attribution, reliable terminal regression evidence, and no
-  leaked task server blocking packaging. Owner: a focused script and tests under
-  `scripts/`, documented in `CONTRIBUTING.md`.
+- **Status: done. Use one repository-owned local Windows input acceptance probe.**
+  The focused script isolates socket, config, state, client trace, Windows Terminal,
+  app-local ConPTY, and cleanup ownership under one deadline, and now waits for the
+  server's client-listener ready message before launching the client. Evidence: the
+  real installed Windows Terminal path passed every legacy, Kitty, raw, and native
+  input assertion in 17.061 seconds with complete process and temporary-state
+  cleanup. Owner: `scripts/windows_conpty_enhanced_input_probe.ps1`, its native
+  probe source, and the Windows CI package gate.
 
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle

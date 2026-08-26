@@ -295,15 +295,18 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     if (!rootPaneID) {
       return undefined;
     }
-    const activePanes = new Set(
-      [rootPaneID, ...[...children.values()].map((child) => child.paneID)].filter(Boolean),
+    const panes = Array.isArray(layout?.panes) ? layout.panes : [];
+    const childPaneIDs = new Set(
+      [...children.values()].map((child) => child.paneID).filter(Boolean),
     );
-    const candidates = Array.isArray(layout?.panes)
-      ? layout.panes.filter((pane) => activePanes.has(pane?.pane_id))
-      : [];
+    let candidates = panes.filter((pane) => childPaneIDs.has(pane?.pane_id));
+    // The first child splits the root to establish a permanent left Main column.
+    // Later children divide only the largest area in the right child subtree.
+    if (candidates.length === 0) {
+      candidates = panes.filter((pane) => pane?.pane_id === rootPaneID);
+    }
     let targetPaneID;
     let rect;
-    // Divide the largest active area so the complete tab stays evenly tiled.
     for (const candidate of candidates) {
       const candidateRect = candidate?.rect;
       if (

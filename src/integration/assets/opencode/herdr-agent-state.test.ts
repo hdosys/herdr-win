@@ -507,65 +507,55 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
   await plugin["chat.message"]({ sessionID: "root-session" });
   requests.length = 0;
 
-  enqueueResult("pane.layout", {
-    type: "pane_layout",
-    layout: {
-      panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
-    },
-  });
-  enqueueResult("pane.split", {
-    type: "pane_info",
-    pane: { pane_id: "test:p2" },
-  });
-  enqueueResult("agent.start", {
-    type: "agent_started",
-    agent: { pane_id: "test:p2" },
-    argv: [],
-  });
-  await plugin.event({
-    event: {
-      type: "session.created",
-      properties: {
-        sessionID: "child-one",
-        info: {
-          id: "child-one",
-          parentID: "root-session",
-          directory: "C:\\repo\\one",
+  let nextPaneNumber = 2;
+  async function openChild(sessionID: string, panes: unknown[], directory?: string) {
+    const paneID = `test:p${nextPaneNumber}`;
+    nextPaneNumber += 1;
+    enqueueResult("pane.layout", { type: "pane_layout", layout: { panes } });
+    enqueueResult("pane.split", { type: "pane_info", pane: { pane_id: paneID } });
+    enqueueResult("agent.start", {
+      type: "agent_started",
+      agent: { pane_id: paneID },
+      argv: [],
+    });
+    await plugin.event({
+      event: {
+        type: "session.created",
+        properties: {
+          sessionID,
+          info: {
+            id: sessionID,
+            parentID: "root-session",
+            ...(directory ? { directory } : {}),
+          },
         },
       },
-    },
-  });
+    });
+  }
 
-  enqueueResult("pane.layout", {
-    type: "pane_layout",
-    layout: {
-      panes: [
-        { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-        { pane_id: "test:p2", rect: { width: 90, height: 50 } },
-      ],
-    },
-  });
-  enqueueResult("pane.split", {
-    type: "pane_info",
-    pane: { pane_id: "test:p3" },
-  });
-  enqueueResult("agent.start", {
-    type: "agent_started",
-    agent: { pane_id: "test:p3" },
-    argv: [],
-  });
-  await plugin.event({
-    event: {
-      type: "session.created",
-      properties: {
-        sessionID: "child-two",
-        info: { id: "child-two", parentID: "root-session" },
-      },
-    },
-  });
+  await openChild(
+    "child-one",
+    [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
+    "C:\\repo\\one",
+  );
+  await openChild("child-two", [
+    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+    { pane_id: "test:p2", rect: { width: 100, height: 50 } },
+  ]);
+  await openChild("child-three", [
+    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+    { pane_id: "test:p2", rect: { width: 100, height: 25 } },
+    { pane_id: "test:p3", rect: { width: 100, height: 25 } },
+  ]);
+  await openChild("child-four", [
+    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+    { pane_id: "test:p2", rect: { width: 50, height: 25 } },
+    { pane_id: "test:p4", rect: { width: 50, height: 25 } },
+    { pane_id: "test:p3", rect: { width: 100, height: 25 } },
+  ]);
 
   const splits = requests.filter((request) => requestMethod(request) === "pane.split");
-  expect(splits).toHaveLength(2);
+  expect(splits).toHaveLength(4);
   expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
   expect(requestParam(splits[0], "direction")).toBe("right");
   expect(requestParam(splits[0], "ratio")).toBe(0.5);
@@ -574,12 +564,16 @@ test("opens direct child sessions in adaptive same-tab splits", async () => {
   expect(requestParam(splits[0], "env")).toEqual({
     HERDR_OPENCODE_SUBAGENT_SESSION_ID: "child-one",
   });
-  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p1");
+  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p2");
   expect(requestParam(splits[1], "direction")).toBe("down");
   expect(requestParam(splits[1], "ratio")).toBe(0.5);
+  expect(requestParam(splits[2], "target_pane_id")).toBe("test:p2");
+  expect(requestParam(splits[2], "direction")).toBe("right");
+  expect(requestParam(splits[3], "target_pane_id")).toBe("test:p3");
+  expect(requestParam(splits[3], "direction")).toBe("right");
 
   const starts = requests.filter((request) => requestMethod(request) === "agent.start");
-  expect(starts).toHaveLength(2);
+  expect(starts).toHaveLength(4);
   expect(requestParam(starts[0], "name")).toMatch(/^opencode-[0-9a-f]{12}$/);
   expect(requestParam(starts[0], "kind")).toBe("opencode");
   expect(requestParam(starts[0], "pane_id")).toBe("test:p2");

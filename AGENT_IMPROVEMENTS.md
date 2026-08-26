@@ -70,6 +70,18 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Reuse validated binaries for package-excluded candidate
+  changes.** Evidence: a commit changing only the Windows acceptance script still
+  changed the cumulative source identity and spent 140.782 seconds recompiling
+  unchanged packaged Rust paths before 27.350 seconds of packaging, so the build
+  alone exceeded the two-minute soft artifact goal. Content-address the packaged
+  runtime and build inputs separately from cumulative source provenance, and reuse
+  a validated bundle only when every changed path is proven package-excluded.
+  Expected benefit: preserve exact provenance and fail-closed runtime rebuilds
+  while removing unnecessary compilation from test-only candidate updates. Owner:
+  `scripts/local_windows_installer.py`, its focused tests, and the build-identity
+  contracts in `ARCHITECTURE.md` and `CONTRIBUTING.md`.
+
 - **Status: done. Make one development stack the only local user installer
   owner.** Product sessions default to the shared `candidate/development`
   worktree. Topic worktrees exist only for concrete internal isolation, default to

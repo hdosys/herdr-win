@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
+
 ### Fixed
 - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
 

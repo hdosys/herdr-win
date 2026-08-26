@@ -3710,6 +3710,28 @@ mod tests {
     }
 
     #[test]
+    fn settings_save_completion_notifications_persists_then_applies_live_config() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("settings-save-completion-notifications");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "onboarding = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert!(app.state.notify_on_agent_completion);
+
+        app.save_completion_notifications(false);
+
+        assert!(!app.state.notify_on_agent_completion);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("notify_on_agent_completion = false"));
+        assert!(app.state.config_diagnostic.is_none());
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn save_status_indicators_persists_then_applies_live_config() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("save-status-indicators");

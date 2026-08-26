@@ -883,7 +883,7 @@ pub struct UiConfig {
     /// Accent color for highlights, borders, and navigation UI.
     /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).
     pub accent: String,
-    /// Notify when a background agent finishes. Default: false.
+    /// Notify when a background agent finishes. Default: true.
     /// Attention-required notifications are unaffected.
     pub notify_on_agent_completion: bool,
     /// Optional visual toast notifications for background workspace events.
@@ -1107,7 +1107,7 @@ impl Default for UiConfig {
             status_indicators: StatusIndicatorStyle::Dots,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
-            notify_on_agent_completion: false,
+            notify_on_agent_completion: true,
             toast: ToastConfig::default(),
             sound: SoundConfig::default(),
         }
@@ -1732,9 +1732,9 @@ position = "top-center"
     }
 
     #[test]
-    fn toast_config_defaults_preserve_existing_behavior_with_delay() {
+    fn notification_defaults_enable_completion_with_delay() {
         let config = Config::default();
-        assert!(!config.ui.notify_on_agent_completion);
+        assert!(config.ui.notify_on_agent_completion);
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Off);
         assert_eq!(config.ui.toast.delay_seconds, 1);
         assert_eq!(

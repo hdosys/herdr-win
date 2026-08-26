@@ -324,6 +324,9 @@ pub(crate) fn interactive_unix_shell_command(
     shell_name: &str,
     quote_posix_arg: fn(&str) -> String,
 ) -> Option<String> {
+    if normalized_process_name(shell_name) == "nu" {
+        return interactive_nushell_command(argv);
+    }
     let quote = if is_powershell_process_name(shell_name) {
         quote_powershell_arg
     } else {
@@ -336,6 +339,35 @@ pub(crate) fn interactive_unix_shell_command(
         command.push_str(&quote(part));
     }
     Some(command)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn interactive_nushell_command(argv: &[String]) -> Option<String> {
+    let mut parts = argv.iter();
+    let mut command = format!("^{}", quote_nushell_arg(parts.next()?));
+    for part in parts {
+        command.push(' ');
+        command.push_str(&quote_nushell_arg(part));
+    }
+    Some(command)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn quote_nushell_arg(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            ch => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 pub(crate) fn quote_powershell_arg(value: &str) -> String {
@@ -436,6 +468,19 @@ impl PrefixInputSource for RealPrefixInputSource {
     }
 }
 
+#[cfg(test)]
+mod nushell_command_tests {
+    #[test]
+    fn preserves_windows_paths_and_quotes() {
+        let argv = vec![r"C:\Program Files\agent.exe".into(), r#"a\b\"c"#.into()];
+
+        assert_eq!(
+            super::interactive_nushell_command(&argv).as_deref(),
+            Some(r#"^"C:\\Program Files\\agent.exe" "a\\b\\\"c""#)
+        );
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -525,6 +570,10 @@ mod tests {
         assert_eq!(
             interactive_shell_command(&argv, "pwsh").as_deref(),
             Some("pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'")
+        );
+        assert_eq!(
+            interactive_shell_command(&argv, "nu").as_deref(),
+            Some("^\"pi\" \"\" \"two words\" \"a'b\" \"$HOME\" \"semi;colon\" \"@options\"")
         );
     }
 

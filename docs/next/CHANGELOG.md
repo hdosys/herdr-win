@@ -8,7 +8,7 @@
 ### Changed
 - Pane and workspace metadata reports can atomically update and retain up to 64 custom tokens while preserving the existing key, value, source, and TTL bounds.
 - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
-- Agent completion popups and done sounds are now opt-in through `ui.notify_on_agent_completion`; attention-required notifications remain enabled by their existing toast and sound settings.
+- Agent completion alerts follow the upstream enabled default again and can be disabled from Settings > completion or with `ui.notify_on_agent_completion = false`; attention-required notifications remain enabled.
 
 ### Fixed
 - Cancelling an OpenCode response no longer reports an error that asks for attention.

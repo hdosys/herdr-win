@@ -3498,7 +3498,11 @@ mod tests {
             "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
         )
         .unwrap();
-        fs::write(base.join("pi"), "#!/bin/sh\nexit 1\n").unwrap();
+        fs::write(
+            base.join("pi"),
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" > \"$HERDR_ARGV_CAPTURE\"\n",
+        )
+        .unwrap();
         fs::write(
             base.join("pi.ps1"),
             "& \"$PSScriptRoot\\pi.cmd\" @args\nexit $LASTEXITCODE\n",
@@ -3516,14 +3520,28 @@ mod tests {
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
         let run_command = |shell: &str, command: &str, capture: &std::path::Path| {
-            let mut process = if shell == "cmd.exe" {
-                let mut process = Command::new("cmd.exe");
-                process.args(["/d", "/c", command]);
-                process
-            } else {
-                let mut process = Command::new("powershell.exe");
-                process.args(["-NoLogo", "-NoProfile", "-Command", command]);
-                process
+            let mut process = match shell {
+                "cmd.exe" => {
+                    let mut process = Command::new("cmd.exe");
+                    process.args(["/d", "/c", command]);
+                    process
+                }
+                "powershell.exe" => {
+                    let mut process = Command::new("powershell.exe");
+                    process.args(["-NoLogo", "-NoProfile", "-Command", command]);
+                    process
+                }
+                "nu.exe" => {
+                    let mut process = Command::new("nu.exe");
+                    process.args(["--no-config-file", "--commands", command]);
+                    process
+                }
+                "bash.exe" | "sh.exe" => {
+                    let mut process = Command::new(shell);
+                    process.args(["--noprofile", "--norc", "-c", command]);
+                    process
+                }
+                _ => unreachable!("unsupported test shell"),
             };
             process
                 .env("PATH", &path)
@@ -3532,7 +3550,19 @@ mod tests {
                 .unwrap()
         };
 
-        for shell in ["powershell.exe", "cmd.exe"] {
+        let mut shells = vec!["powershell.exe", "cmd.exe"];
+        for shell in ["nu.exe", "bash.exe", "sh.exe"] {
+            if Command::new(shell)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                shells.push(shell);
+            }
+        }
+        for shell in shells {
             let no_args_capture = base.join(format!("{shell}-no-args.txt"));
             let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
             let status = run_command(shell, &no_args_command, &no_args_capture);

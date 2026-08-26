@@ -429,11 +429,11 @@ Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mob
 
 ## Notifications
 
-Herdr notifies you when a background agent needs input. Completion notifications are disabled by default. Enable them when you also want a popup and done sound after background work finishes:
+Herdr notifies you when a background agent needs input or finishes. Completion alerts are enabled by default. Disable them from **Settings > completion** or in configuration when frequent idle transitions are not useful:
 
 ```toml
 [ui]
-notify_on_agent_completion = true
+notify_on_agent_completion = false
 
 [ui.toast]
 delivery = "herdr"

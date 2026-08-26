@@ -15,7 +15,7 @@ use crate::{
     config::{StatusIndicatorStyle, ToastDelivery},
 };
 
-pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 76;
+pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 90;
 pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 22;
 
 pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
@@ -120,6 +120,17 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 app.settings.list.selected,
                 p,
                 1,
+            );
+        }
+        SettingsSection::Completion => {
+            render_settings_toggle(
+                frame,
+                content_area,
+                p,
+                "agent completion alerts",
+                "notify when background agents finish; questions and errors stay enabled",
+                app.notify_on_agent_completion,
+                app.settings.list.selected,
             );
         }
         SettingsSection::Sound => {

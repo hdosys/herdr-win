@@ -1023,6 +1023,7 @@ pub enum AgentPanelSort {
 pub enum SettingsSection {
     Theme,
     Indicators,
+    Completion,
     Sound,
     Toast,
     PaneLabels,
@@ -1033,6 +1034,7 @@ impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
         Self::Indicators,
+        Self::Completion,
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
@@ -1043,6 +1045,7 @@ impl SettingsSection {
         match self {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
+            Self::Completion => "completion",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
@@ -1907,7 +1910,7 @@ impl AppState {
                 ..SoundConfig::default()
             },
             local_sound_playback: false,
-            notify_on_agent_completion: false,
+            notify_on_agent_completion: true,
             toast_config: ToastConfig::default(),
             keybinds: Keybinds::default(),
             palette: Palette::catppuccin(),

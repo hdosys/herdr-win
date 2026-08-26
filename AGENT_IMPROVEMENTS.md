@@ -152,3 +152,14 @@ configuration repository.
   instead of repeating 331.237 seconds of test and release compilation. Owner:
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Retier non-Rust focused checks before candidate
+  packaging.** Let the Candidate procedure run an exact repository-owned Bun or
+  Python behavior check in the same stop-on-failure command chain, then invoke
+  `candidate` without a Rust `--test-filter`; reserve that option for Rust-owned
+  behavior. Evidence: the OpenCode asset suite passed 32 tests in 0.352 seconds,
+  while the nearest Rust embedding filter spent 38.361 seconds before failing on
+  an unrelated existing Copilot assertion; the unchanged pushed source then built
+  and packaged successfully in 157.585 seconds. This removes a false blocker and
+  one unnecessary test compile without adding a generic command runner. Owner:
+  the Candidate procedure in `CONTRIBUTING.md`.

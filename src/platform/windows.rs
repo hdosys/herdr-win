@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    ffi::{c_void, OsStr},
+    ffi::{c_void, OsStr, OsString},
     mem::{size_of, MaybeUninit},
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
@@ -848,6 +848,30 @@ struct PendingInteractiveServerBootstrap {
     cleanup: bool,
 }
 
+fn interactive_server_inherited_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> std::io::Result<Vec<InteractiveServerEnvironmentValue>> {
+    environment
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = match unicode_windows_value(&name, "inherited environment variable name") {
+                Ok(name) => name,
+                Err(err) => return Some(Err(err)),
+            };
+            // cmd.exe carries per-drive current directories as hidden `=C:`
+            // entries. They cannot be restored with set_var, and the launch
+            // state already carries the exact current directory separately.
+            if name.starts_with('=') {
+                return None;
+            }
+            Some(
+                unicode_windows_value(&value, "inherited environment variable value")
+                    .map(|value| InteractiveServerEnvironmentValue { name, value }),
+            )
+        })
+        .collect()
+}
+
 impl PendingInteractiveServerBootstrap {
     fn create(command: &std::process::Command) -> std::io::Result<Self> {
         let arguments = command
@@ -878,14 +902,7 @@ impl PendingInteractiveServerBootstrap {
         let working_directory =
             unicode_windows_value(current_directory.as_os_str(), "server working directory")?;
 
-        let inherited_environment = std::env::vars_os()
-            .map(|(name, value)| {
-                Ok(InteractiveServerEnvironmentValue {
-                    name: unicode_windows_value(&name, "inherited environment variable name")?,
-                    value: unicode_windows_value(&value, "inherited environment variable value")?,
-                })
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
+        let inherited_environment = interactive_server_inherited_environment(std::env::vars_os())?;
         let environment_changes = command
             .get_envs()
             .map(|(name, value)| {
@@ -3592,6 +3609,25 @@ mod tests {
             .wait()
             .expect("reap rejected interactive server test child");
         assert!(!status.success(), "rejected test child was not terminated");
+    }
+
+    #[test]
+    fn interactive_server_bootstrap_omits_cmd_drive_environment() {
+        let inherited = super::interactive_server_inherited_environment([
+            (
+                std::ffi::OsString::from("=C:"),
+                std::ffi::OsString::from(r"C:\work"),
+            ),
+            (
+                std::ffi::OsString::from("HERDR_TEST_VALUE"),
+                std::ffi::OsString::from("kept"),
+            ),
+        ])
+        .expect("collect inherited environment");
+
+        assert_eq!(inherited.len(), 1);
+        assert_eq!(inherited[0].name, "HERDR_TEST_VALUE");
+        assert_eq!(inherited[0].value, "kept");
     }
 
     #[test]

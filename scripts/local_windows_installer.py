@@ -757,19 +757,38 @@ def candidate(options: argparse.Namespace) -> None:
     _require_pushed_development_source(
         source, source_branch, isolated=options.isolated
     )
-    cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
     build_id, base_commit = _source_build_identity(source)
     paths = _candidate_paths(source_branch, build_id, isolated=options.isolated)
     isolated = paths != DEFAULT_PATHS
-    jobs = _available_cpu_count()
     print(f"build_id={build_id}")
     print(f"source_branch={source_branch}")
-    print(f"cargo_jobs={jobs}")
-    print(f"cargo_target={cargo_target}")
     if isolated:
         print(f"isolation_root={paths.target_root}")
     else:
         print("acceptance_output=canonical")
+
+    existing_bundle = paths.input_root / build_id
+    if (
+        options.test_filter is None
+        and options.release_test_filter is None
+        and existing_bundle.exists()
+    ):
+        print(f"bundle={existing_bundle}")
+        build(
+            argparse.Namespace(
+                source_worktree=source,
+                input_bundle=existing_bundle,
+            ),
+            paths=paths,
+        )
+        print("reused=yes")
+        print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
+        return
+
+    cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
+    jobs = _available_cpu_count()
+    print(f"cargo_jobs={jobs}")
+    print(f"cargo_target={cargo_target}")
 
     build_environment = {
         "HERDR_BUILD_ID": build_id,

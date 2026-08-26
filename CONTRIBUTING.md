@@ -179,7 +179,8 @@ plus every completed change integrated into the development branch. Topic branch
 automatically use build-ID-isolated outputs and those paths stay internal.
 
 Before each user handoff, collect every completed topic handoff, commit the coherent
-development tree, and push `origin/candidate/development`. Then run:
+development tree, and push `origin/candidate/development`. After a source change,
+run one exact focused behavior check while building the candidate:
 
 ```powershell
 $testFilter = "<one exact test filter>"
@@ -196,6 +197,18 @@ test's signal depends on optimization or another release-profile boundary. It re
 the fixed setup only after the selected test, source identity, bundle, and package
 checks pass. Never report an isolated topic artifact or ask the user which topic
 belongs in the installer.
+
+For a build-only repeat of the exact unchanged pushed source, omit the test filter:
+
+```powershell
+python scripts/local_windows_installer.py candidate `
+  --source-worktree <development-worktree>
+```
+
+The command derives the exact current build identity first. When its validated input
+bundle already exists, it delegates directly to the existing `build` path before
+creating a Cargo target or compiling. A missing bundle follows the ordinary candidate
+compile path. Do not omit the focused test after a source behavior change.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:

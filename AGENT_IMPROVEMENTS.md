@@ -143,13 +143,12 @@ configuration repository.
   registration; cumulative installer build `9eb521456ac0.1f6cc92d2972` validated
   and packaged. Owner: the Windows `herdr worktree remove` lifecycle.
 
-- **Status: proposed. Reuse an exact current installer bundle before compiling a
-  build-only candidate.** An unchanged pushed source identity already had a
-  validated bundle, but `candidate` spent 198.874 seconds on the focused normal
-  test and 132.363 seconds on release compilation before reporting `reused=yes`;
-  the installer build itself took 23.616 seconds. Add one exact source-identity
-  preflight that routes no-source-change build-only requests to the existing
-  `build` path, while source changes continue through `candidate`. Expected
-  benefit: remove more than five minutes of duplicate work without weakening
-  payload provenance. Owner: `scripts/local_windows_installer.py`, its focused
-  tests, and the Candidate procedure in `CONTRIBUTING.md`.
+- **Status: done. Reuse an exact current installer bundle before compiling a
+  build-only candidate.** `candidate` now derives source identity first and, when
+  no focused test is requested, validates and packages an existing exact bundle
+  through the shared `build` path before creating a Cargo target. Evidence: the
+  real cumulative candidate reused build `9eb521456ac0.6747139eceac` and produced
+  the validated setup in 29.415 seconds, including 27.094 seconds of packaging,
+  instead of repeating 331.237 seconds of test and release compilation. Owner:
+  `scripts/local_windows_installer.py`, its focused tests, and the Candidate
+  procedure in `CONTRIBUTING.md`.

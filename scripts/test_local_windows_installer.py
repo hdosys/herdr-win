@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import tempfile
@@ -11,6 +12,7 @@ from scripts.delta_workflow import DEVELOPMENT_BRANCH, DEVELOPMENT_REMOTE_REF
 from scripts.local_windows_installer import (
     DEFAULT_PATHS,
     InstallerIdentity,
+    InstallerPaths,
     LocalInstallerError,
     OUTPUT_PATH,
     TARGET_ROOT,
@@ -28,6 +30,7 @@ from scripts.local_windows_installer import (
     _require_one_focused_test,
     _require_one_nextest_test,
     _source_branch,
+    candidate,
     parse_identity,
 )
 
@@ -185,6 +188,55 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             clean,
             _candidate_build_id(base, source, "", [("src/new.rs", b"content")]),
         )
+
+    def test_build_only_candidate_reuses_exact_bundle_before_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            paths = InstallerPaths(
+                target_root=root / "target",
+                input_root=root / "inputs",
+                output_path=root / "release" / OUTPUT_PATH.name,
+                nsis_cache=root / "tools" / "nsis",
+            )
+            bundle = paths.input_root / BUILD_ID
+            bundle.mkdir(parents=True)
+            options = argparse.Namespace(
+                source_worktree=source,
+                cargo_target_dir=root / "cargo-target",
+                test_filter=None,
+                release_test_filter=None,
+                isolated=False,
+            )
+
+            with (
+                patch(
+                    "scripts.local_windows_installer._source_root",
+                    return_value=source,
+                ),
+                patch(
+                    "scripts.local_windows_installer._source_branch",
+                    return_value=DEVELOPMENT_BRANCH,
+                ),
+                patch("scripts.local_windows_installer._require_pushed_development_source"),
+                patch(
+                    "scripts.local_windows_installer._source_build_identity",
+                    return_value=(BUILD_ID, "a" * 40),
+                ),
+                patch(
+                    "scripts.local_windows_installer._candidate_paths",
+                    return_value=paths,
+                ),
+                patch("scripts.local_windows_installer._directory") as directory,
+                patch("scripts.local_windows_installer.build") as package,
+            ):
+                candidate(options)
+
+            directory.assert_not_called()
+            package.assert_called_once()
+            self.assertEqual(package.call_args.args[0].input_bundle, bundle)
+            self.assertEqual(package.call_args.kwargs["paths"], paths)
 
     def test_candidate_build_uses_all_selected_jobs_and_only_required_bins(self) -> None:
         arguments = _cargo_build_arguments(Path("C:/cargo-target"), 16)

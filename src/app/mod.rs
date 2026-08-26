@@ -712,6 +712,7 @@ impl App {
             accent: crate::config::parse_color(&config.ui.accent),
             sound: config.ui.sound.clone(),
             local_sound_playback: true,
+            notify_on_agent_completion: config.ui.notify_on_agent_completion,
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
             palette: theme_palette,
@@ -1570,6 +1571,7 @@ impl App {
                     self.state.request_client_config_reload = true;
                 }
                 self.state.sound = config.ui.sound.clone();
+                self.state.notify_on_agent_completion = config.ui.notify_on_agent_completion;
                 self.state.toast_config = config.ui.toast.clone();
             }
         }
@@ -3701,6 +3703,28 @@ mod tests {
         );
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("delivery = \"terminal\""));
+        assert!(app.state.config_diagnostic.is_none());
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn settings_save_completion_notifications_persists_then_applies_live_config() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("settings-save-completion-notifications");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "onboarding = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert!(app.state.notify_on_agent_completion);
+
+        app.save_completion_notifications(false);
+
+        assert!(!app.state.notify_on_agent_completion);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("notify_on_agent_completion = false"));
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

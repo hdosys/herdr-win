@@ -81,6 +81,7 @@ pub enum AppEvent {
         message: Option<String>,
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        suppress_completion: bool,
     },
     /// Agent session identity was reported without state authority.
     AgentSessionReported {

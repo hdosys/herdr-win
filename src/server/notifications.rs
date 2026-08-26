@@ -39,6 +39,7 @@ pub(crate) fn toast_message_from_state_change(
                     .get(&pane.attached_terminal_id)
                     .and_then(|terminal| terminal.effective_agent_label())?;
                 let kind = app::actions::notification_toast_for_state_change_with_agent_labels(
+                    state.notify_on_agent_completion,
                     suppress_active_tab_notifications,
                     prev_state,
                     new_state,
@@ -87,6 +88,7 @@ mod tests {
     #[tokio::test]
     async fn toast_message_uses_live_root_runtime_cwd_label() {
         let mut state = AppState::test_new();
+        state.notify_on_agent_completion = true;
         state
             .workspaces
             .push(crate::workspace::Workspace::test_new("stale"));

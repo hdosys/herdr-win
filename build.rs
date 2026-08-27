@@ -119,9 +119,14 @@ fn main() {
         .to_string();
 
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
+    let zig_cache = vendored_dir.join(".zig-cache");
     let mut command = Command::new(zig);
     command
         .arg("build")
+        .arg("--cache-dir")
+        .arg(zig_cache.join("local"))
+        .arg("--global-cache-dir")
+        .arg(zig_cache.join("global"))
         .arg("-Demit-lib-vt")
         .arg(format!("-Doptimize={optimize}"))
         .arg(format!("-Dsimd={simd}"))

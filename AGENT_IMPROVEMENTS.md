@@ -46,6 +46,15 @@ configuration repository.
   the focused parser, mirror, renderer, and staged-change tests passed. Owner:
   `.githooks/pre-commit`, `scripts/readme_mermaid_check.py`, and its focused tests.
 
+- **Status: proposed. Provision the Mermaid renderer in the maintained Sandbox
+  tool stack.** A one-label README diagram change spent 64.401 seconds acquiring
+  Mermaid CLI through `npx`, then 10.352 seconds removing its task-owned cache.
+  Reusing installed Edge with the browser download disabled rendered successfully
+  at 686.328 by 542 pixels. Provision or cache the supported CLI and configure
+  `MERMAID_CLI` to reuse installed Edge. Expected benefit: keep the required staged
+  visual gate to seconds without repeated package acquisition or disk pressure.
+  Owner: the herdr-win maintainer Sandbox provisioner and `CONTRIBUTING.md`.
+
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle
   hashes and executable identity below ignored `target/`, then delegates repeated

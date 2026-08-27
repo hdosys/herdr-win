@@ -1,4 +1,4 @@
-From 9c57b71818d22982c8ec6c28a05ec16b323f5f04 Mon Sep 17 00:00:00 2001
+From b44e350ca1ce0ececdf090ad23bf4c192674cef1 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
@@ -39,10 +39,10 @@ Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
  src/remote/windows_package_local_payload.ps1  |   37 +
  src/remote/windows_payload_layout.ps1         |  114 +
  src/server/autodetect.rs                      |  161 +-
- src/server/headless.rs                        |  268 ++-
+ src/server/headless.rs                        |  307 ++-
  src/ui.rs                                     |   67 +-
  src/update.rs                                 |    3 +
- 38 files changed, 5110 insertions(+), 579 deletions(-)
+ 38 files changed, 5149 insertions(+), 579 deletions(-)
  create mode 100644 src/platform/windows_interactive_launch.ps1
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
@@ -6853,7 +6853,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9
              return Ok(());
          }
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3ef28b2dd1 100644
+index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..65b073817bd540baf16bcff7e43dfbb9622dcd3d 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
 @@ -327,6 +327,12 @@ pub struct HeadlessServer {
@@ -6905,16 +6905,17 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
                  self.nudge_handoff_panes_on_first_client_attach();
                  true
              }
-@@ -3748,6 +3772,8 @@ impl HeadlessServer {
+@@ -3748,6 +3772,9 @@ impl HeadlessServer {
                  .handle_deferred_worktree_api_request(msg.request, msg.respond_to);
              return changed | deferred_changed;
          }
 +        let defer_startup_workspace_shell = self.awaiting_first_app_client_geometry
++            && self.startup_cwd.is_some()
 +            && matches!(&msg.request.method, api::schema::Method::WorkspaceCreate(_));
          let mut response = if matches!(
              &msg.request.method,
              api::schema::Method::ServerReloadConfig(_)
-@@ -3770,6 +3796,27 @@ impl HeadlessServer {
+@@ -3770,6 +3797,27 @@ impl HeadlessServer {
                  })
                  .unwrap_or_else(|_| "{}".to_string())
              })
@@ -6942,7 +6943,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
          } else {
              self.app
                  .handle_api_request_after_internal_events_drained(msg.request)
-@@ -3961,6 +4008,38 @@ impl HeadlessServer {
+@@ -3961,6 +4009,38 @@ impl HeadlessServer {
          changed
      }
  
@@ -6981,7 +6982,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
      fn focused_pane_graphics_demand(&self) -> bool {
          self.app
              .state
-@@ -5059,6 +5138,7 @@ pub fn run_server() -> io::Result<()> {
+@@ -5059,6 +5139,7 @@ pub fn run_server() -> io::Result<()> {
      }
  
      let loaded_config = config::Config::load();
@@ -6989,7 +6990,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
      let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
      let event_hub = api::EventHub::default();
      let should_quit = Arc::new(AtomicBool::new(false));
-@@ -5094,8 +5174,6 @@ pub fn run_server() -> io::Result<()> {
+@@ -5094,8 +5175,6 @@ pub fn run_server() -> io::Result<()> {
              api_rx,
              event_hub,
          );
@@ -6998,7 +6999,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
          // The server runs headless — disable local notification side effects.
          // Sound and terminal notifications are forwarded to connected clients
          // as ServerMessage::Notify instead of emitted by the server process.
-@@ -5121,6 +5199,7 @@ pub fn run_server() -> io::Result<()> {
+@@ -5121,6 +5200,7 @@ pub fn run_server() -> io::Result<()> {
              }
              Err(err) => return Err(err),
          };
@@ -7006,7 +7007,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
  
          info!(
              api_socket = %api::socket_path().display(),
-@@ -5138,8 +5217,12 @@ pub fn run_server() -> io::Result<()> {
+@@ -5138,8 +5218,12 @@ pub fn run_server() -> io::Result<()> {
      result
  }
  
@@ -7021,7 +7022,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
          return;
      };
  
-@@ -5151,6 +5234,9 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
+@@ -5151,6 +5235,9 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
          return;
      }
  
@@ -7031,7 +7032,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
      match app.create_workspace_with_options(cwd.clone(), true) {
          Ok(_) => {
              info!(cwd = %cwd.display(), "created startup workspace");
-@@ -5347,6 +5433,43 @@ mod tests {
+@@ -5347,6 +5434,43 @@ mod tests {
          test_headless_server_with_event_hub(api::EventHub::default())
      }
  
@@ -7075,7 +7076,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
      fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
          let config = crate::config::Config::default();
          let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-@@ -5404,6 +5527,9 @@ mod tests {
+@@ -5404,6 +5528,9 @@ mod tests {
              next_activity_stamp: 1,
              headless_size,
              effective_size: headless_size,
@@ -7085,7 +7086,7 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
              shutting_down: false,
              handoff_in_progress: false,
              #[cfg(unix)]
-@@ -5678,6 +5804,136 @@ mod tests {
+@@ -5678,6 +5805,174 @@ mod tests {
          shutdown_test_runtimes(&mut server);
      }
  
@@ -7094,6 +7095,44 @@ index 75dc52320d8a321bcd4fd685d6eea43ec77f0afc..108080f4be9e083904af5b2899e0fd3e
 +        let startup_size = (120, 40);
 +        let expected_terminal_area = Rect::new(26, 1, 94, 39);
 +        let expected_pane_size = (39, 93);
++
++        let mut headless_server = test_headless_server();
++        headless_server.app.state.default_shell = exiting_test_command().into();
++        let (workspace_respond_to, workspace_response_rx) = std::sync::mpsc::channel();
++        assert!(
++            headless_server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++                request: api::schema::Request {
++                    id: "headless-workspace".into(),
++                    method: api::schema::Method::WorkspaceCreate(
++                        api::schema::WorkspaceCreateParams {
++                            cwd: Some(std::env::temp_dir().display().to_string()),
++                            focus: true,
++                            label: None,
++                            env: Default::default(),
++                        },
++                    ),
++                },
++                respond_to: workspace_respond_to,
++                response_write_complete: None,
++                stream_active: None,
++            })
++        );
++        let _: api::schema::SuccessResponse = serde_json::from_str(
++            &workspace_response_rx
++                .recv_timeout(Duration::from_millis(100))
++                .expect("headless workspace response"),
++        )
++        .expect("successful headless workspace response");
++        assert!(headless_server
++            .pending_startup_workspace_launches
++            .is_empty());
++        let headless_pane_id = headless_server.app.state.workspaces[0].tabs[0].root_pane;
++        assert!(headless_server
++            .app
++            .state
++            .runtime_for_pane(&headless_server.app.terminal_runtimes, headless_pane_id,)
++            .is_some());
++        shutdown_test_runtimes(&mut headless_server);
 +
 +        let mut startup_server = test_headless_server();
 +        startup_server.startup_cwd = Some(std::env::temp_dir());

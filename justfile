@@ -13,6 +13,7 @@ test:
 [windows]
 test-one filter:
     cargo nextest run --locked --bin herdr "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
+    exit $LASTEXITCODE
 
 [unix]
 test-one filter:

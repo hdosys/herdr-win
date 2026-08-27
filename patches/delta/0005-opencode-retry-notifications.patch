@@ -1,17 +1,17 @@
-From ae6b6ebe827276d006e717240a0c7ea96c382e0f Mon Sep 17 00:00:00 2001
+From cdf429e1de4542f0a4dfe887648e20dbbf4a6303 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
 Subject: [PATCH 4/11] fix(opencode): preserve truthful lifecycle state
 
 Defer root-session errors until idle or a bounded fallback, cancel them when explicit continuing status follows, and prevent terminal blocked state from being overwritten by legacy idle events. Keep outstanding root and child prompts blocked until their exact replies arrive so unrelated busy or idle events cannot erase user-waiting state.
 ---
- CHANGELOG.md                                  |   3 +
- .../assets/opencode/herdr-agent-state.js      | 816 ++++++++++++++++--
- .../assets/opencode/herdr-agent-state.test.ts | 787 ++++++++++++++++-
- .../assets/opencode/herdr-tui-session.js      |   9 +-
- .../assets/opencode/herdr-tui-session.test.ts |  15 +
- src/integration/mod.rs                        |   2 +-
- 6 files changed, 1517 insertions(+), 115 deletions(-)
+ CHANGELOG.md                                  |    3 +
+ .../assets/opencode/herdr-agent-state.js      |  958 +++++++++++++--
+ .../assets/opencode/herdr-agent-state.test.ts | 1063 ++++++++++++++++-
+ .../assets/opencode/herdr-tui-session.js      |    9 +-
+ .../assets/opencode/herdr-tui-session.test.ts |   15 +
+ src/integration/mod.rs                        |    2 +-
+ 6 files changed, 1935 insertions(+), 115 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index 05f368084241fc56b7f437bd1232edce40f12b0b..576a7abcdf532aad296c5bb7a0092393d92808c1 100644
@@ -28,7 +28,7 @@ index 05f368084241fc56b7f437bd1232edce40f12b0b..576a7abcdf532aad296c5bb7a0092393
  
  ### Added
 diff --git a/src/integration/assets/opencode/herdr-agent-state.js b/src/integration/assets/opencode/herdr-agent-state.js
-index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a980ee009e 100644
+index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37dbc39f64a 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.js
 +++ b/src/integration/assets/opencode/herdr-agent-state.js
 @@ -2,19 +2,24 @@
@@ -36,7 +36,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
  // add custom hooks/plugins beside this file instead of editing it.
  // HERDR_INTEGRATION_ID=opencode
 -// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=14
++// HERDR_INTEGRATION_VERSION=15
  
 +import { createHash } from "node:crypto";
  import net from "node:net";
@@ -80,7 +80,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
  function nextReportSeq() {
    reportSeq += 1;
    return reportSeq;
-@@ -34,138 +50,739 @@ function sessionIDFromProperties(properties) {
+@@ -34,138 +50,881 @@ function sessionIDFromProperties(properties) {
      : undefined;
  }
  
@@ -113,8 +113,11 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 -  return pending;
 +function isSessionAbort(error) {
 +  return error?.name === "MessageAbortedError";
-+}
-+
+ }
+ 
+-function requestOnce(method, params) {
+-  const paneId = process.env.HERDR_PANE_ID;
+-  const socketPath = process.env.HERDR_SOCKET_PATH;
 +function promptEventKey(type, properties) {
 +  const kind = type?.split(".", 1)[0];
 +  if (kind !== "permission" && kind !== "question") {
@@ -126,20 +129,21 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +  return typeof requestID === "string" && requestID
 +    ? `${kind}:${requestID}`
 +    : undefined;
- }
++}
  
--function requestOnce(method, params) {
--  const paneId = process.env.HERDR_PANE_ID;
--  const socketPath = process.env.HERDR_SOCKET_PATH;
-+export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
+-  if (!paneId || !socketPath) {
+-    return Promise.resolve();
++export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {}) => {
 +  if (
 +    process.env.HERDR_ENV !== "1" ||
 +    !process.env.HERDR_SOCKET_PATH ||
 +    !process.env.HERDR_PANE_ID
 +  ) {
 +    return {};
-+  }
-+
+   }
+ 
+-  const socketEndpoint =
+-    process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 +  let requestChain = Promise.resolve();
 +  let panePlacementChain = Promise.resolve();
 +  let currentRootSessionID;
@@ -238,8 +242,13 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +        }
 +      };
  
--  if (!paneId || !socketPath) {
--    return Promise.resolve();
+-  const requestId = `${SOURCE}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)
+-    .toString()
+-    .padStart(6, "0")}`;
+-  const request = {
+-    id: requestId,
+-    method,
+-    params: {
 +      client = net.createConnection(socketEndpoint, () => {
 +        if (disposed || (disposing && !allowWhileDisposing)) {
 +          finish();
@@ -258,10 +267,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +      client.on("end", finishFromBuffer);
 +      client.on("close", finishFromBuffer);
 +    });
-   }
- 
--  const socketEndpoint =
--    process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
++  }
++
 +  function request(method, params, allowWhileDisposing = false) {
 +    const pending = requestChain.then(() => {
 +      if (disposed || (disposing && !allowWhileDisposing)) {
@@ -272,14 +279,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +    requestChain = pending.catch(() => {});
 +    return pending;
 +  }
- 
--  const requestId = `${SOURCE}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)
--    .toString()
--    .padStart(6, "0")}`;
--  const request = {
--    id: requestId,
--    method,
--    params: {
++
 +  function reportRequest(method, params) {
 +    const paneId = process.env.HERDR_PANE_ID;
 +    if (!paneId) {
@@ -330,6 +330,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +    return result?.type === expectedType ? result : undefined;
 +  }
 +
++  function responseErrorCode(response) {
++    return typeof response?.error?.code === "string" ? response.error.code : undefined;
++  }
++
 +  async function serverAcceptsAttach() {
 +    if (!attachServerUrl) {
 +      return false;
@@ -349,7 +353,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +      clearTimeout(timeout);
 +    }
 +  }
-+
+ 
+-    const finish = () => {
+-      client.destroy();
+-      resolve();
 +  function subagentName(sessionID) {
 +    const suffix = createHash("sha256").update(sessionID).digest("hex").slice(0, 12);
 +    return `opencode-${suffix}`;
@@ -360,10 +367,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +      ? info.directory
 +      : defaultDirectory;
 +  }
- 
--    const finish = () => {
--      client.destroy();
--      resolve();
++
 +  function splitTarget(layout) {
 +    const rootPaneID = process.env.HERDR_PANE_ID;
 +    if (!rootPaneID) {
@@ -414,21 +418,107 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 -    client.on("close", resolve);
 -  });
 -}
-+  function closeChildPane(sessionID, allowWhileDisposing = false) {
-+    const child = children.get(sessionID);
-+    const paneID = child?.paneID;
-+    if (child) {
-+      child.paneID = undefined;
-+    }
-+    if (!paneID) {
-+      return Promise.resolve();
-+    }
-+    return request("pane.close", { pane_id: paneID }, allowWhileDisposing);
++  function layoutPaneIDs(layout) {
++    return new Set(
++      (Array.isArray(layout?.panes) ? layout.panes : [])
++        .map((pane) => pane?.pane_id)
++        .filter((paneID) => typeof paneID === "string" && paneID),
++    );
 +  }
  
 -function reportSession(sessionID) {
 -  if (!sessionID) {
 -    return Promise.resolve();
++  async function acquirePanePlacement() {
++    const previousPanePlacement = panePlacementChain;
++    let releasePanePlacement = () => {};
++    panePlacementChain = new Promise((resolve) => {
++      releasePanePlacement = resolve;
++    });
++    await previousPanePlacement;
++    return releasePanePlacement;
+   }
+-  return request("pane.report_agent_session", { agent_session_id: sessionID });
+-}
+ 
+-function reportState(state, sessionID) {
+-  const params = { state };
+-  if (sessionID) {
+-    reportedRootSessionID = sessionID;
+-    params.agent_session_id = sessionID;
++  async function recoverPendingSplit(sessionID, allowWhileDisposing = false) {
++    const child = children.get(sessionID);
++    const previousPaneIDs = child?.pendingSplitPaneIDs;
++    const rootPaneID = process.env.HERDR_PANE_ID;
++    if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
++      return undefined;
++    }
++    const layoutResponse = await request(
++      "pane.layout",
++      { pane_id: rootPaneID },
++      allowWhileDisposing,
++    );
++    const layout = responseResult(layoutResponse, "pane_layout")?.layout;
++    const newPaneIDs = [...layoutPaneIDs(layout)].filter(
++      (paneID) => !previousPaneIDs.has(paneID),
++    );
++    if (newPaneIDs.length !== 1) {
++      return undefined;
++    }
++    const paneID = newPaneIDs[0];
++    child.paneID = paneID;
++    child.pendingSplitPaneIDs = undefined;
++    return paneID;
+   }
+-  return request("pane.report_agent", params);
+-}
+ 
+-export const HerdrAgentStatePlugin = async () => {
+-  if (
+-    process.env.HERDR_ENV !== "1" ||
+-    !process.env.HERDR_SOCKET_PATH ||
+-    !process.env.HERDR_PANE_ID
+-  ) {
+-    return {};
++  async function childSessionState(sessionID) {
++    if (typeof client?.session?.status !== "function") {
++      return "idle";
++    }
++    try {
++      const response = await client.session.status();
++      const statuses = response?.data;
++      if (!statuses || typeof statuses !== "object") {
++        return undefined;
++      }
++      const status = statuses[sessionID];
++      return status === undefined ? "idle" : stateFromSessionStatus(status);
++    } catch {
++      return undefined;
++    }
++  }
++
++  async function closeChildPane(sessionID, allowWhileDisposing = false) {
++    const child = children.get(sessionID);
++    const paneID = child?.paneID;
++    if (!paneID) {
++      return true;
++    }
++    const response = await request("pane.close", { pane_id: paneID }, allowWhileDisposing);
++    let closed = Boolean(responseResult(response, "ok")) || responseErrorCode(response) === "pane_not_found";
++    if (!closed) {
++      const layoutResponse = await request(
++        "pane.layout",
++        { pane_id: paneID },
++        allowWhileDisposing,
++      );
++      closed = responseErrorCode(layoutResponse) === "pane_not_found";
++    }
++    if (closed && child.paneID === paneID) {
++      child.paneID = undefined;
++    }
++    return closed;
++  }
++
 +  async function openChildPane(sessionID) {
 +    const child = children.get(sessionID);
 +    const info = child?.info;
@@ -457,12 +547,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +        return;
 +      }
 +
-+      const previousPanePlacement = panePlacementChain;
-+      let releasePanePlacement = () => {};
-+      panePlacementChain = new Promise((resolve) => {
-+        releasePanePlacement = resolve;
-+      });
-+      await previousPanePlacement;
++      const releasePanePlacement = await acquirePanePlacement();
 +
 +      let directory;
 +      let paneID;
@@ -477,36 +562,48 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +        ) {
 +          return;
 +        }
-+        const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
-+        const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-+        const target = splitTarget(layout);
-+        if (
-+          disposing ||
-+          !target ||
-+          !child.working ||
-+          retiredChildren.has(sessionID)
-+        ) {
-+          return;
-+        }
-+
 +        directory = childDirectory(info);
-+        const splitResponse = await request("pane.split", {
-+          target_pane_id: target.paneID,
-+          direction: target.direction,
-+          ratio: 0.5,
-+          ...(directory ? { cwd: directory } : {}),
-+          focus: false,
-+          env: { [SUBAGENT_SESSION_ENV]: sessionID },
-+        });
-+        paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
++        if (child.pendingSplitPaneIDs) {
++          paneID = await recoverPendingSplit(sessionID);
++        } else {
++          const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
++          const layout = responseResult(layoutResponse, "pane_layout")?.layout;
++          const target = splitTarget(layout);
++          if (
++            disposing ||
++            !target ||
++            !child.working ||
++            retiredChildren.has(sessionID)
++          ) {
++            return;
++          }
++
++          child.pendingSplitPaneIDs = layoutPaneIDs(layout);
++          const splitResponse = await request("pane.split", {
++            target_pane_id: target.paneID,
++            direction: target.direction,
++            ratio: 0.5,
++            ...(directory ? { cwd: directory } : {}),
++            focus: false,
++            env: { [SUBAGENT_SESSION_ENV]: sessionID },
++          });
++          paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
++          if (typeof paneID === "string" && paneID) {
++            child.pendingSplitPaneIDs = undefined;
++          } else if (responseErrorCode(splitResponse)) {
++            child.pendingSplitPaneIDs = undefined;
++          } else {
++            paneID = await recoverPendingSplit(sessionID, disposing);
++          }
++        }
 +        if (typeof paneID !== "string" || !paneID) {
 +          return;
 +        }
++        child.paneID = paneID;
 +        if (disposing || !child.working || retiredChildren.has(sessionID)) {
-+          await request("pane.close", { pane_id: paneID }, disposing);
++          await closeChildPane(sessionID, disposing);
 +          return;
 +        }
-+        child.paneID = paneID;
 +      } finally {
 +        releasePanePlacement();
 +      }
@@ -530,15 +627,54 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +    } finally {
 +      child.spawning = false;
 +    }
-   }
--  return request("pane.report_agent_session", { agent_session_id: sessionID });
--}
- 
--function reportState(state, sessionID) {
--  const params = { state };
--  if (sessionID) {
--    reportedRootSessionID = sessionID;
--    params.agent_session_id = sessionID;
++  }
++
++  function reconcileChildPane(sessionID, allowWhileDisposing = false) {
++    const child = children.get(sessionID);
++    if (!child) {
++      return Promise.resolve();
++    }
++    const previous = child.reconcileChain ?? Promise.resolve();
++    const pending = previous.then(async () => {
++      if (children.get(sessionID) !== child) {
++        return;
++      }
++      if (child.working && !disposing && !retiredChildren.has(sessionID)) {
++        if (!child.paneID) {
++          await openChildPane(sessionID);
++        }
++        return;
++      }
++      if (!child.paneID && child.pendingSplitPaneIDs) {
++        const releasePanePlacement = await acquirePanePlacement();
++        try {
++          await recoverPendingSplit(sessionID, allowWhileDisposing || disposing);
++        } finally {
++          releasePanePlacement();
++        }
++      }
++      if (!child.paneID) {
++        return;
++      }
++      if (!disposing && !retiredChildren.has(sessionID)) {
++        const liveState = await childSessionState(sessionID);
++        if (child.working) {
++          return;
++        }
++        if (liveState === "working") {
++          child.working = true;
++          return;
++        }
++        if (liveState !== "idle") {
++          return;
++        }
++      }
++      await closeChildPane(sessionID, allowWhileDisposing || disposing);
++    });
++    child.reconcileChain = pending.catch(() => {});
++    return pending;
++  }
++
 +  function lifecycleFor(sessionID) {
 +    let lifecycle = sessionLifecycle.get(sessionID);
 +    if (!lifecycle) {
@@ -551,17 +687,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +      sessionLifecycle.set(sessionID, lifecycle);
 +    }
 +    return lifecycle;
-   }
--  return request("pane.report_agent", params);
--}
- 
--export const HerdrAgentStatePlugin = async () => {
--  if (
--    process.env.HERDR_ENV !== "1" ||
--    !process.env.HERDR_SOCKET_PATH ||
--    !process.env.HERDR_PANE_ID
--  ) {
--    return {};
++  }
++
 +  function clearPendingError(lifecycle) {
 +    if (lifecycle.timer !== undefined) {
 +      clearTimeout(lifecycle.timer);
@@ -605,15 +732,25 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +    return activePrompts.size > 0 ? "blocked" : "working";
 +  }
 +
-+  function retireChild(sessionID) {
++  async function retireChild(sessionID) {
 +    if (!sessionID) {
-+      return Promise.resolve();
++      return;
 +    }
 +    clearPromptsForSession(sessionID);
-+    const closing = closeChildPane(sessionID);
-+    children.delete(sessionID);
 +    retiredChildren.add(sessionID);
-+    return closing;
++    const child = children.get(sessionID);
++    if (!child) {
++      return;
++    }
++    child.working = false;
++    await reconcileChildPane(sessionID);
++    if (
++      !child.paneID &&
++      !child.pendingSplitPaneIDs &&
++      children.get(sessionID) === child
++    ) {
++      children.delete(sessionID);
++    }
 +  }
 +
 +  function retireChildrenOutsideRoot(rootSessionID) {
@@ -747,13 +884,16 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +      return;
 +    }
 +    disposing = true;
++    for (const child of children.values()) {
++      child.working = false;
++    }
++    await Promise.all(
++      [...children.keys()].map((sessionID) => reconcileChildPane(sessionID, true)),
++    );
 +    for (const finish of [...activeClients.values()]) {
 +      finish();
 +    }
 +    activeClients.clear();
-+    await Promise.all(
-+      [...children.keys()].map((sessionID) => closeChildPane(sessionID, true)),
-+    );
 +    disposed = true;
 +    for (const lifecycle of sessionLifecycle.values()) {
 +      clearPendingError(lifecycle);
@@ -814,12 +954,14 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +            working: false,
 +            spawning: false,
 +            paneID: undefined,
++            pendingSplitPaneIDs: undefined,
++            reconcileChain: Promise.resolve(),
 +          };
 +          child.info = info;
 +          children.set(info.id, child);
 +          if (type === "session.created" && info.parentID === currentRootSessionID) {
 +            child.working = true;
-+            await openChildPane(info.id);
++            await reconcileChildPane(info.id);
 +          }
 +        } else {
 +          await retireChild(info.id);
@@ -842,10 +984,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
 +        const child = children.get(sessionID);
 +        if (childStatus === "working") {
 +          child.working = true;
-+          await openChildPane(sessionID);
++          await reconcileChildPane(sessionID);
 +        } else if (childStatus === "idle" || type === "session.idle") {
 +          child.working = false;
-+          await closeChildPane(sessionID);
++          await reconcileChildPane(sessionID);
          }
 +        const state = updatePromptState(type, properties, sessionID)
 +          ?? CHILD_EVENT_STATES.get(type);
@@ -899,7 +1041,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
            } else {
              await reportSession(sessionID);
            }
-@@ -177,21 +794,44 @@ export const HerdrAgentStatePlugin = async () => {
+@@ -177,21 +936,44 @@ export const HerdrAgentStatePlugin = async () => {
          case "question.replied":
          case "question.rejected":
          case "session.compacted":
@@ -948,7 +1090,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..e1452a6c759d4acc865f491e6e2d83a9
    };
  };
 diff --git a/src/integration/assets/opencode/herdr-agent-state.test.ts b/src/integration/assets/opencode/herdr-agent-state.test.ts
-index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724be3ce8131 100644
+index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5ca933139 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.test.ts
 +++ b/src/integration/assets/opencode/herdr-agent-state.test.ts
 @@ -1,34 +1,45 @@
@@ -1006,7 +1148,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
          },
        };
        clients.push(client);
-@@ -42,22 +53,93 @@ beforeEach(() => {
+@@ -42,22 +53,122 @@ beforeEach(() => {
    requests.length = 0;
    clients.length = 0;
    requestWaiters.length = 0;
@@ -1031,7 +1173,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
 +  return HerdrAgentStatePlugin;
 +}
 +
-+async function loadPlugin(context?: { directory?: string; serverUrl?: URL }) {
++async function loadPlugin(context?: { client?: unknown; directory?: string; serverUrl?: URL }) {
 +  return (await loadPluginFactory())(context);
  }
  
@@ -1045,14 +1187,18 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
 +  methodResults.set(method, results);
 +}
 +
-+function acknowledgeRequest(clientIndex: number, requestIndex: number) {
++function acknowledgeRequest(
++  clientIndex: number,
++  requestIndex: number,
++  response: Record<string, unknown> = { result: { type: "ok" } },
++) {
 +  const request = requests[requestIndex];
 +  if (!isRecord(request) || typeof request.id !== "string") {
 +    throw new Error("missing request id");
 +  }
 +  clients[clientIndex]?.emit(
 +    "data",
-+    `${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`,
++    `${JSON.stringify({ id: request.id, ...response })}\n`,
 +  );
 +}
 +
@@ -1063,6 +1209,31 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
 +      properties: { sessionID, status },
 +    },
 +  };
++}
++
++async function openDirectChild(
++  plugin: Awaited<ReturnType<typeof loadPlugin>>,
++  sessionID = "child-session",
++) {
++  enqueueResult("pane.layout", {
++    type: "pane_layout",
++    layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++  });
++  enqueueResult("pane.split", { type: "pane_info", pane: { pane_id: "test:p2" } });
++  enqueueResult("agent.start", {
++    type: "agent_started",
++    agent: { pane_id: "test:p2" },
++    argv: [],
++  });
++  await plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID,
++        info: { id: sessionID, parentID: "root-session" },
++      },
++    },
++  });
 +}
 +
 +function apiErrorEvent(sessionID?: string) {
@@ -1102,7 +1273,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
  test("serializes lifecycle reports", async () => {
    autoAcknowledge = false;
    const plugin = await loadPlugin();
-@@ -79,10 +161,10 @@ test("serializes lifecycle reports", async () => {
+@@ -79,10 +190,10 @@ test("serializes lifecycle reports", async () => {
    });
    expect(clients).toHaveLength(1);
  
@@ -1115,7 +1286,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
    await Promise.all([working, idle]);
  
    expect(requests.map(requestState)).toEqual(["working", "idle"]);
-@@ -91,7 +173,7 @@ test("serializes lifecycle reports", async () => {
+@@ -91,7 +202,7 @@ test("serializes lifecycle reports", async () => {
    expect(sequences[1]).toBe((sequences[0] as number) + 1);
  });
  
@@ -1124,7 +1295,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
    const plugin = await loadPlugin();
  
    await plugin.event({
-@@ -107,11 +189,8 @@ test("suppresses redundant same-session updates", async () => {
+@@ -107,11 +218,8 @@ test("suppresses redundant same-session updates", async () => {
      event: { type: "session.updated", properties: { sessionID: "replacement-session" } },
    });
  
@@ -1138,7 +1309,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
  });
  
  test("does not classify server activity in another root session as a selection", async () => {
-@@ -160,8 +239,591 @@ test("reports retry status as working", async () => {
+@@ -160,8 +268,838 @@ test("reports retry status as working", async () => {
    expect(requests.map(requestSessionID)).toEqual(["root-session"]);
  });
  
@@ -1499,6 +1670,253 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
 +  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
 +});
 +
++test("keeps the child pane when delayed idle disagrees with live status", async () => {
++  let liveStatus = { type: "busy" };
++  const plugin = await loadPlugin({
++    client: {
++      session: {
++        status: async () => ({ data: { "child-session": liveStatus } }),
++      },
++    },
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++  await openDirectChild(plugin);
++
++  requests.length = 0;
++  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  expect(requests).toHaveLength(0);
++
++  liveStatus = { type: "idle" };
++  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  expect(requests.map(requestMethod)).toEqual(["pane.close"]);
++  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
++});
++
++test("reconciles child status changes while attach is starting", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++  clients.length = 0;
++  autoAcknowledge = false;
++
++  const layoutDispatched = waitForNextRequest();
++  const created = plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
++  });
++  await layoutDispatched;
++
++  const splitDispatched = waitForNextRequest();
++  acknowledgeRequest(0, 0, {
++    result: {
++      type: "pane_layout",
++      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++    },
++  });
++  await splitDispatched;
++
++  const startDispatched = waitForNextRequest();
++  acknowledgeRequest(1, 1, {
++    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
++  });
++  await startDispatched;
++
++  const idle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  const working = plugin.event(sessionStatusEvent("child-session", { type: "busy" }));
++  acknowledgeRequest(2, 2, {
++    result: {
++      type: "agent_started",
++      agent: { pane_id: "test:p2" },
++      argv: [],
++    },
++  });
++  await Promise.all([created, idle, working]);
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.layout",
++    "pane.split",
++    "agent.start",
++  ]);
++});
++
++test("dispose lets an in-flight child split report its pane before cleanup", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++  clients.length = 0;
++  autoAcknowledge = false;
++
++  const layoutDispatched = waitForNextRequest();
++  const created = plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
++  });
++  await layoutDispatched;
++  const splitDispatched = waitForNextRequest();
++  acknowledgeRequest(0, 0, {
++    result: {
++      type: "pane_layout",
++      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++    },
++  });
++  await splitDispatched;
++
++  const disposing = plugin.dispose();
++  expect(clients[1]?.destroyed).toBe(false);
++  const closeDispatched = waitForNextRequest();
++  acknowledgeRequest(1, 1, {
++    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
++  });
++  await closeDispatched;
++  acknowledgeRequest(2, 2);
++  await Promise.all([created, disposing]);
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.layout",
++    "pane.split",
++    "pane.close",
++  ]);
++});
++
++test("recovers pane ownership when a successful split response is lost", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++  clients.length = 0;
++  autoAcknowledge = false;
++
++  const layoutDispatched = waitForNextRequest();
++  const created = plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
++  });
++  await layoutDispatched;
++  const splitDispatched = waitForNextRequest();
++  acknowledgeRequest(0, 0, {
++    result: {
++      type: "pane_layout",
++      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++    },
++  });
++  await splitDispatched;
++
++  const recoveryLayoutDispatched = waitForNextRequest();
++  clients[1]?.emit("close");
++  await recoveryLayoutDispatched;
++  const startDispatched = waitForNextRequest();
++  acknowledgeRequest(2, 2, {
++    result: {
++      type: "pane_layout",
++      layout: {
++        panes: [
++          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
++          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
++        ],
++      },
++    },
++  });
++  await startDispatched;
++  acknowledgeRequest(3, 3, {
++    result: {
++      type: "agent_started",
++      agent: { pane_id: "test:p2" },
++      argv: [],
++    },
++  });
++  await created;
++
++  const closeDispatched = waitForNextRequest();
++  const retired = plugin.event({
++    event: {
++      type: "session.deleted",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
++  });
++  await closeDispatched;
++  acknowledgeRequest(4, 4);
++  await retired;
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.layout",
++    "pane.split",
++    "pane.layout",
++    "agent.start",
++    "pane.close",
++  ]);
++  expect(requestParam(requests[3], "pane_id")).toBe("test:p2");
++  expect(requestParam(requests[4], "pane_id")).toBe("test:p2");
++});
++
++test("retains pane ownership when close is not acknowledged", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  await openDirectChild(plugin);
++
++  requests.length = 0;
++  clients.length = 0;
++  autoAcknowledge = false;
++  const firstCloseDispatched = waitForNextRequest();
++  const firstIdle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  await firstCloseDispatched;
++  const presenceDispatched = waitForNextRequest();
++  acknowledgeRequest(0, 0, {
++    error: { code: "server_unavailable", message: "busy" },
++  });
++  await presenceDispatched;
++  acknowledgeRequest(1, 1, {
++    result: {
++      type: "pane_layout",
++      layout: { panes: [{ pane_id: "test:p2", rect: { width: 100, height: 50 } }] },
++    },
++  });
++  await firstIdle;
++
++  const secondCloseDispatched = waitForNextRequest();
++  const secondIdle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  await secondCloseDispatched;
++  acknowledgeRequest(2, 2);
++  await secondIdle;
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.close",
++    "pane.layout",
++    "pane.close",
++  ]);
++});
++
 +test("does not split when the root OpenCode server is not externally reachable", async () => {
 +  globalThis.fetch = async () => {
 +    throw new Error("connection refused");
@@ -1730,7 +2148,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
  
    await plugin.event({
      event: {
-@@ -188,14 +850,91 @@ test("reports child prompts without replacing the root session", async () => {
+@@ -188,14 +1126,91 @@ test("reports child prompts without replacing the root session", async () => {
      "working",
    ]);
    expect(requests.map(requestSessionID)).toEqual([
@@ -1828,7 +2246,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..8b2f954e6ff01fb6a4ce8273c2b2724b
    return isRecord(request) ? request.method : undefined;
  }
 diff --git a/src/integration/assets/opencode/herdr-tui-session.js b/src/integration/assets/opencode/herdr-tui-session.js
-index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..35683e633c02cafe137707021be49e796fa4ca02 100644
+index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..a7779b8a02696a92357835b4188481418fbe970b 100644
 --- a/src/integration/assets/opencode/herdr-tui-session.js
 +++ b/src/integration/assets/opencode/herdr-tui-session.js
 @@ -1,7 +1,7 @@
@@ -1836,7 +2254,7 @@ index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..35683e633c02cafe137707021be49e79
  // managed by herdr; reinstalling or updating the integration overwrites this file.
  // HERDR_INTEGRATION_ID=opencode-tui
 -// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=14
++// HERDR_INTEGRATION_VERSION=15
  
  import net from "node:net";
  
@@ -1895,7 +2313,7 @@ index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..98aff058fed93921a86f90b6b23c6a30
    const plugin = await loadPlugin();
    const tui = fakeApi();
 diff --git a/src/integration/mod.rs b/src/integration/mod.rs
-index c87ccac6ccd3a0a268f09067a72523fe6750f016..91a5e9a45dc12ae9acd08a2f65044163c1e355bb 100644
+index c87ccac6ccd3a0a268f09067a72523fe6750f016..1fdb7ec2eee3a3d9917681602e0ba2b5b01c5981 100644
 --- a/src/integration/mod.rs
 +++ b/src/integration/mod.rs
 @@ -170,7 +170,7 @@ const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-st
@@ -1903,7 +2321,7 @@ index c87ccac6ccd3a0a268f09067a72523fe6750f016..91a5e9a45dc12ae9acd08a2f65044163
  const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
  const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
 -const OPENCODE_INTEGRATION_VERSION: u32 = 10;
-+const OPENCODE_INTEGRATION_VERSION: u32 = 14;
++const OPENCODE_INTEGRATION_VERSION: u32 = 15;
  const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
  const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
  const KILO_INTEGRATION_VERSION: u32 = 4;

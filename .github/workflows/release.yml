@@ -359,8 +359,60 @@ jobs:
             -ExePath $exe `
             -Session "release-system-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
+      - name: Provision Windows Terminal probe host
+        id: windows_terminal
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseJson = & gh api repos/microsoft/terminal/releases/latest
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not resolve the latest official Windows Terminal release"
+          }
+          $release = $releaseJson | ConvertFrom-Json
+          if ($release.draft -or $release.prerelease) {
+            throw "the latest official Windows Terminal release is not stable"
+          }
+          $assets = @($release.assets | Where-Object {
+            $_.name -match '^Microsoft\.WindowsTerminal_[0-9.]+_x64\.zip$'
+          })
+          if ($assets.Count -ne 1) {
+            throw "the latest official Windows Terminal release must have one x64 portable ZIP"
+          }
+          $asset = $assets[0]
+          $digest = [string] $asset.digest
+          if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "the Windows Terminal portable ZIP has no published SHA-256 digest"
+          }
+          $root = Join-Path $env:RUNNER_TEMP "windows-terminal-probe"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          & gh release download ([string] $release.tag_name) `
+            --repo microsoft/terminal `
+            --pattern ([string] $asset.name) `
+            --dir $root
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not download the Windows Terminal portable ZIP"
+          }
+          $archive = Join-Path $root ([string] $asset.name)
+          $actualDigest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedDigest = $digest.Substring('sha256:'.Length)
+          if ($actualDigest -cne $expectedDigest) {
+            throw "the Windows Terminal portable ZIP digest does not match its release metadata"
+          }
+          $extract = Join-Path $root "extracted"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract
+          $terminals = @(Get-ChildItem -LiteralPath $extract -Filter wt.exe -File -Recurse)
+          if ($terminals.Count -ne 1) {
+            throw "the Windows Terminal portable ZIP must contain one wt.exe"
+          }
+          "Windows Terminal $($release.tag_name), SHA-256 $actualDigest"
+          "terminal_path=$($terminals[0].FullName)" >> $env:GITHUB_OUTPUT
+
       - name: Package and validate release
         shell: pwsh
+        env:
+          WINDOWS_TERMINAL_PATH: ${{ steps.windows_terminal.outputs.terminal_path }}
         run: |
           $ErrorActionPreference = "Stop"
           $artifactRoot = Join-Path $PWD "artifact"
@@ -512,7 +564,8 @@ jobs:
           .\source\scripts\windows_conpty_enhanced_input_probe.ps1 `
             -ExePath (Join-Path $stage "herdr.exe") `
             -Session "release-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
-            -ExpectedConsoleHostPath (Join-Path $stage "conpty\x64\OpenConsole.exe")
+            -ExpectedConsoleHostPath (Join-Path $stage "conpty\x64\OpenConsole.exe") `
+            -TerminalPath $env:WINDOWS_TERMINAL_PATH
           Invoke-BoundedProcess -FilePath "powershell.exe" -TimeoutMilliseconds 180000 -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             (Join-Path $PWD "source\scripts\windows_install_conpty_package_test.ps1"),

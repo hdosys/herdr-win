@@ -18,6 +18,7 @@ from scripts.delta_workflow import (
     materialize_delta_worktree,
     publish_development_worktree,
     start_delta_worktree,
+    validate_integration_asset_version_changes,
     verify_replay_tree,
 )
 
@@ -117,6 +118,90 @@ class DeltaFixture:
 
 
 class DeltaWorkflowTests(unittest.TestCase):
+    @staticmethod
+    def integration_module(integration: str, version: int, *files: str) -> str:
+        constant = integration.upper().replace("-", "_")
+        includes = "\n".join(
+            f'const ASSET_{index}: &str = include_str!("assets/{integration}/{name}");'
+            for index, name in enumerate(files)
+        )
+        return (
+            f"const {constant}_INTEGRATION_VERSION: u32 = {version};\n{includes}\n"
+        )
+
+    @staticmethod
+    def integration_assets(
+        integration: str, version: int, *files: str
+    ) -> dict[str, str | None]:
+        return {
+            f"src/integration/assets/{integration}/{name}": (
+                f"# HERDR_INTEGRATION_VERSION={version}\n{name}\n"
+            )
+            for name in files
+        }
+
+    def test_changed_integration_asset_requires_one_version_advance(self) -> None:
+        module = self.integration_module("sample", 1, "hook.ps1")
+        baseline = self.integration_assets("sample", 1, "hook.ps1")
+        current = dict(baseline)
+        path = "src/integration/assets/sample/hook.ps1"
+        source = current[path]
+        self.assertIsNotNone(source)
+        current[path] = f"{source}changed\n"
+
+        with self.assertRaisesRegex(DeltaWorkflowError, "advance exactly once"):
+            validate_integration_asset_version_changes(
+                module, current, module, baseline
+            )
+
+    def test_changed_integration_asset_requires_matching_rust_constant(self) -> None:
+        baseline_module = self.integration_module("sample", 1, "hook.ps1")
+        current_module = self.integration_module("sample", 1, "hook.ps1")
+        baseline = self.integration_assets("sample", 1, "hook.ps1")
+        current = self.integration_assets("sample", 2, "hook.ps1")
+
+        with self.assertRaisesRegex(DeltaWorkflowError, "does not match Rust constant"):
+            validate_integration_asset_version_changes(
+                current_module, current, baseline_module, baseline
+            )
+
+    def test_multiple_changed_assets_share_one_version_advance(self) -> None:
+        baseline_module = self.integration_module("sample", 1, "one.js", "two.js")
+        current_module = self.integration_module("sample", 2, "one.js", "two.js")
+        baseline = self.integration_assets("sample", 1, "one.js", "two.js")
+        current = self.integration_assets("sample", 2, "one.js", "two.js")
+
+        self.assertEqual(
+            validate_integration_asset_version_changes(
+                current_module, current, baseline_module, baseline
+            ),
+            ("sample",),
+        )
+
+    def test_non_embedded_integration_test_change_needs_no_version_advance(self) -> None:
+        module = self.integration_module("sample", 1, "hook.ps1")
+        baseline = self.integration_assets("sample", 1, "hook.ps1")
+        current = dict(baseline)
+        current["src/integration/assets/sample/hook.test.ps1"] = "changed\n"
+
+        self.assertEqual(
+            validate_integration_asset_version_changes(
+                module, current, module, baseline
+            ),
+            (),
+        )
+
+    def test_new_integration_starts_at_version_one(self) -> None:
+        current_module = self.integration_module("sample", 1, "hook.ps1")
+        current = self.integration_assets("sample", 1, "hook.ps1")
+
+        self.assertEqual(
+            validate_integration_asset_version_changes(
+                current_module, current, "", {}
+            ),
+            ("sample",),
+        )
+
     def test_git_commands_trust_only_control_and_selected_worktree(self) -> None:
         control = Path("C:/repo/control")
         worktree = Path("C:/repo/development")

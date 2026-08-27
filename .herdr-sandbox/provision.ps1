@@ -23,4 +23,7 @@ $env:LIBGHOSTTY_VT_ZIG_OUT_DIR = $libghosttyOutput
 Install-CargoNextest
 Install-Just
 
+$mermaidProvisioner = Join-Path $ProjectDirectory 'scripts\provision_mermaid_renderer.ps1'
+& $mermaidProvisioner
+
 Write-Output 'Herdr development toolchain ready.'

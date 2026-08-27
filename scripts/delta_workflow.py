@@ -22,6 +22,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 PATCH_RE = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 TASK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+INTEGRATION_ASSET_RE = re.compile(
+    r'include_str!\("(?P<path>assets/(?P<integration>[^"/]+)/[^"\)]+)"\)'
+)
+INTEGRATION_VERSION_RE = re.compile(r"HERDR_INTEGRATION_VERSION=(?P<version>[0-9]+)")
 GIT_TIMEOUT_SECONDS = 120
 PREFIX_COMPILE_TIMEOUT_SECONDS = 1200
 DEVELOPMENT_BRANCH = "candidate/development"
@@ -276,6 +280,160 @@ def replay_delta_tree(project_root: Path = PROJECT_ROOT) -> ReplayResult:
     )
     _run_git(project_root, ["diff", "--check", base, tree])
     return ReplayResult(base=base, mailboxes=mailboxes, tree=tree)
+
+
+def _included_integration_assets(module_source: str) -> dict[str, set[str]]:
+    assets: dict[str, set[str]] = {}
+    for match in INTEGRATION_ASSET_RE.finditer(module_source):
+        path = f"src/integration/{match.group('path')}"
+        assets.setdefault(match.group("integration"), set()).add(path)
+    return assets
+
+
+def _integration_marker_versions(
+    integration: str,
+    paths: set[str],
+    assets: dict[str, str | None],
+) -> set[int]:
+    versions: set[int] = set()
+    for path in paths:
+        source = assets.get(path)
+        if source is None:
+            continue
+        versions.update(
+            int(match.group("version"))
+            for match in INTEGRATION_VERSION_RE.finditer(source)
+        )
+    if len(versions) > 1:
+        raise DeltaWorkflowError(
+            f"managed integration {integration} has conflicting version markers: "
+            f"{sorted(versions)}"
+        )
+    return versions
+
+
+def validate_integration_asset_version_changes(
+    current_module: str,
+    current_assets: dict[str, str | None],
+    baseline_module: str,
+    baseline_assets: dict[str, str | None],
+) -> tuple[str, ...]:
+    """Require one migration-version advance for each changed embedded integration."""
+
+    current_groups = _included_integration_assets(current_module)
+    baseline_groups = _included_integration_assets(baseline_module)
+    changed: list[str] = []
+    for integration in sorted(current_groups.keys() | baseline_groups.keys()):
+        current_paths = current_groups.get(integration, set())
+        baseline_paths = baseline_groups.get(integration, set())
+        compared_paths = current_paths | baseline_paths
+        if current_paths == baseline_paths and all(
+            current_assets.get(path) == baseline_assets.get(path)
+            for path in compared_paths
+        ):
+            continue
+        if not current_paths:
+            raise DeltaWorkflowError(
+                f"managed integration {integration} was removed without a current "
+                "migration-version owner"
+            )
+
+        current_versions = _integration_marker_versions(
+            integration, current_paths, current_assets
+        )
+        if len(current_versions) != 1:
+            raise DeltaWorkflowError(
+                f"changed managed integration {integration} must have one embedded "
+                "HERDR_INTEGRATION_VERSION marker"
+            )
+        current_version = next(iter(current_versions))
+
+        baseline_versions = _integration_marker_versions(
+            integration, baseline_paths, baseline_assets
+        )
+        if baseline_paths and len(baseline_versions) != 1:
+            raise DeltaWorkflowError(
+                f"baseline managed integration {integration} must have one embedded "
+                "HERDR_INTEGRATION_VERSION marker"
+            )
+        baseline_version = next(iter(baseline_versions), 0)
+        if current_version != baseline_version + 1:
+            raise DeltaWorkflowError(
+                f"changed managed integration {integration} must advance exactly once: "
+                f"baseline {baseline_version}, current {current_version}"
+            )
+
+        constant_name = re.sub(r"[^A-Za-z0-9]+", "_", integration).upper()
+        constant_match = re.search(
+            rf"\bconst\s+{re.escape(constant_name)}_INTEGRATION_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;",
+            current_module,
+        )
+        if constant_match is None:
+            raise DeltaWorkflowError(
+                f"changed managed integration {integration} has no matching "
+                f"{constant_name}_INTEGRATION_VERSION constant"
+            )
+        constant_version = int(constant_match.group(1))
+        if constant_version != current_version:
+            raise DeltaWorkflowError(
+                f"changed managed integration {integration} marker {current_version} "
+                f"does not match Rust constant {constant_version}"
+            )
+        changed.append(integration)
+    return tuple(changed)
+
+
+def _tree_text(project_root: Path, tree: str, path: str) -> str | None:
+    result = _run_git(project_root, ["show", f"{tree}:{path}"], check=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+def validate_changed_integration_asset_versions(
+    source_worktree: Path,
+    project_root: Path = PROJECT_ROOT,
+) -> tuple[str, ...]:
+    """Compare embedded integration assets with the accepted checked-in queue."""
+
+    project_root = project_root.resolve()
+    source_worktree = source_worktree.resolve()
+    replay = replay_delta_tree(project_root)
+    module_path = "src/integration/mod.rs"
+    try:
+        current_module = (source_worktree / module_path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise DeltaWorkflowError(
+            f"could not read managed integration registry {source_worktree / module_path}: {error}"
+        ) from error
+    baseline_module = _tree_text(project_root, replay.tree, module_path)
+    if baseline_module is None:
+        raise DeltaWorkflowError(
+            f"accepted delta tree {replay.tree} has no {module_path}"
+        )
+
+    current_groups = _included_integration_assets(current_module)
+    baseline_groups = _included_integration_assets(baseline_module)
+    paths = set().union(*current_groups.values(), *baseline_groups.values())
+    current_assets: dict[str, str | None] = {}
+    baseline_assets: dict[str, str | None] = {}
+    for path in paths:
+        current_path = source_worktree / path
+        try:
+            current_assets[path] = (
+                current_path.read_text(encoding="utf-8")
+                if current_path.is_file()
+                else None
+            )
+        except OSError as error:
+            raise DeltaWorkflowError(
+                f"could not read managed integration asset {current_path}: {error}"
+            ) from error
+        baseline_assets[path] = _tree_text(project_root, replay.tree, path)
+    return validate_integration_asset_version_changes(
+        current_module,
+        current_assets,
+        baseline_module,
+        baseline_assets,
+    )
 
 
 def compile_delta_prefixes(

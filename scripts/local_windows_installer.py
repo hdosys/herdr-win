@@ -25,6 +25,7 @@ try:
         DEVELOPMENT_REMOTE_REF,
         DeltaWorkflowError,
         unintegrated_topic_worktrees,
+        validate_changed_integration_asset_versions,
     )
 except ModuleNotFoundError:
     from delta_workflow import (  # type: ignore[no-redef]
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
         DEVELOPMENT_REMOTE_REF,
         DeltaWorkflowError,
         unintegrated_topic_worktrees,
+        validate_changed_integration_asset_versions,
     )
 
 
@@ -459,6 +461,35 @@ def _windows_powershell() -> Path:
     )
 
 
+def _run_interactive_server_launch_probe(source: Path, runtime: Path) -> None:
+    script = _safe_path(
+        source / "scripts" / "windows_interactive_server_launch_probe.ps1",
+        "interactive server launch probe",
+        directory=False,
+    )
+    runtime = _safe_path(runtime, "interactive server probe runtime", directory=False)
+    started = time.monotonic()
+    result = _run(
+        _windows_powershell(),
+        [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-ExePath",
+            str(runtime),
+        ],
+        cwd=source,
+        timeout=60,
+        clean_runtime_environment=True,
+    )
+    _print_process_output(result)
+    print(f"interactive_server_probe_elapsed_seconds={time.monotonic() - started:.3f}")
+
+
 def _conpty_package_path(source: Path) -> Path:
     metadata = _safe_path(
         source / "packaging" / "windows" / "conpty.json",
@@ -652,7 +683,10 @@ def prepare(
 
 
 def build(
-    options: argparse.Namespace, *, paths: InstallerPaths | None = None
+    options: argparse.Namespace,
+    *,
+    paths: InstallerPaths | None = None,
+    run_interactive_probe: bool = False,
 ) -> None:
     source = _source_root(options.source_worktree)
     bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
@@ -664,6 +698,8 @@ def build(
             isolated=options.isolated,
         )
     identity = validate_bundle(source, bundle, input_root=paths.input_root)
+    if run_interactive_probe:
+        _run_interactive_server_launch_probe(source, bundle / "stage" / "herdr.exe")
     paths.output_path.parent.mkdir(parents=True, exist_ok=True)
     powershell = _windows_powershell()
     started = time.monotonic()
@@ -757,6 +793,16 @@ def candidate(options: argparse.Namespace) -> None:
     _require_pushed_development_source(
         source, source_branch, isolated=options.isolated
     )
+    try:
+        changed_integrations = validate_changed_integration_asset_versions(source)
+    except DeltaWorkflowError as error:
+        raise LocalInstallerError(
+            f"managed integration migration validation failed: {error}"
+        ) from error
+    print(
+        "integration_version_gate="
+        + (",".join(changed_integrations) if changed_integrations else "unchanged")
+    )
     build_id, base_commit = _source_build_identity(source)
     paths = _candidate_paths(source_branch, build_id, isolated=options.isolated)
     isolated = paths != DEFAULT_PATHS
@@ -780,6 +826,7 @@ def candidate(options: argparse.Namespace) -> None:
                 input_bundle=existing_bundle,
             ),
             paths=paths,
+            run_interactive_probe=True,
         )
         print("reused=yes")
         print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
@@ -889,6 +936,7 @@ def candidate(options: argparse.Namespace) -> None:
             input_bundle=paths.input_root / build_id,
         ),
         paths=paths,
+        run_interactive_probe=True,
     )
     print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
 

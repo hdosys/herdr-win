@@ -179,8 +179,11 @@ plus every completed change integrated into the development branch. Topic branch
 automatically use build-ID-isolated outputs and those paths stay internal.
 
 Before each user handoff, collect every completed topic handoff, commit the coherent
-development tree, and push `origin/candidate/development`. After a source change,
-run one exact focused behavior check while building the candidate:
+development tree, and push `origin/candidate/development`. Candidate packaging first
+compares every changed embedded integration with the accepted queue, requires one
+migration-version advance, and requires its Rust constant to match. After a
+Rust-owned source change, run one exact focused behavior check while building the
+candidate:
 
 ```powershell
 $testFilter = "<one exact test filter>"
@@ -193,10 +196,31 @@ The command keeps one Sandbox-local Cargo target and passes the detected logical
 processor count through the build. `--test-filter` runs the ordinary behavior check
 through the existing `just test-one` iteration gate before compiling only the three
 packaged release binaries. Use `--release-test-filter` instead only when the selected
-test's signal depends on optimization or another release-profile boundary. It replaces
-the fixed setup only after the selected test, source identity, bundle, and package
-checks pass. Never report an isolated topic artifact or ask the user which topic
-belongs in the installer.
+test's signal depends on optimization or another release-profile boundary. After
+validating the exact input bundle and before packaging, Candidate exercises its built
+runtime from `cmd.exe` through the Windows interactive Task Scheduler server-launch
+path. The probe places only that command shell in a bounded kill-on-close job, then
+verifies bootstrap consumption, user and session ownership, terminal process cleanup,
+and zero scheduled-task residue. It replaces the fixed setup only after the selected
+test, source identity, native probe, bundle, and package checks pass. Never report an
+isolated topic artifact or ask the user which topic belongs in the installer.
+
+For a Bun- or Python-owned behavior change, run the exact repository command first
+and invoke Candidate packaging without a Rust filter in the same stop-on-failure
+sequence. Do not add a generic command runner to the installer entrypoint:
+
+```powershell
+Push-Location -LiteralPath <development-worktree>
+try {
+    bun test src/integration/assets/opencode/herdr-agent-state.test.ts
+    if ($LASTEXITCODE -ne 0) { throw "OpenCode integration asset check failed" }
+} finally {
+    Pop-Location
+}
+python scripts/local_windows_installer.py candidate `
+  --source-worktree <development-worktree>
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
 
 For a build-only repeat of the exact unchanged pushed source, omit the test filter:
 
@@ -208,7 +232,9 @@ python scripts/local_windows_installer.py candidate `
 The command derives the exact current build identity first. When its validated input
 bundle already exists, it delegates directly to the existing `build` path before
 creating a Cargo target or compiling. A missing bundle follows the ordinary candidate
-compile path. Do not omit the focused test after a source behavior change.
+compile path. Do not omit focused verification after a source behavior change; omit
+the Rust filter only when an exact non-Rust owner already passed immediately before
+Candidate packaging.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
@@ -463,8 +489,10 @@ or broad docs unless changed behavior requires it, and never edit generated
 preview/version documentation directories. The repository pre-commit hook renders
 a changed staged Mermaid block through `mmdc`, requires the mirrored block to
 match, and rejects extreme aspect ratios before generated output can enter the
-worktree. Set `MERMAID_CLI` only when the renderer uses a nonstandard executable
-path.
+worktree. Maintained Sandboxes install the latest stable Mermaid CLI into their
+external tool root, suppress its Chromium download, reuse installed Microsoft Edge,
+and set `MERMAID_CLI` automatically. Set `MERMAID_CLI` manually only in a
+nonstandard environment.
 
 ## Pull requests and commits
 

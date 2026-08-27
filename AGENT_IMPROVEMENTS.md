@@ -16,7 +16,7 @@ configuration repository.
 - Merge duplicates instead of appending repeats.
 - Do not include secrets, credentials, private data, transient process IDs, logs,
   transcripts, generated evidence, or product feature requests.
-- Status values: proposed, accepted, declined, done.
+- Status values: proposed, accepted, blocked, declined, done.
 
 ## Proposals
 
@@ -46,14 +46,16 @@ configuration repository.
   the focused parser, mirror, renderer, and staged-change tests passed. Owner:
   `.githooks/pre-commit`, `scripts/readme_mermaid_check.py`, and its focused tests.
 
-- **Status: proposed. Provision the Mermaid renderer in the maintained Sandbox
+- **Status: done. Provision the Mermaid renderer in the maintained Sandbox
   tool stack.** A one-label README diagram change spent 64.401 seconds acquiring
   Mermaid CLI through `npx`, then 10.352 seconds removing its task-owned cache.
   Reusing installed Edge with the browser download disabled rendered successfully
   at 686.328 by 542 pixels. Provision or cache the supported CLI and configure
-  `MERMAID_CLI` to reuse installed Edge. Expected benefit: keep the required staged
-  visual gate to seconds without repeated package acquisition or disk pressure.
-  Owner: the herdr-win maintainer Sandbox provisioner and `CONTRIBUTING.md`.
+  `MERMAID_CLI` to reuse installed Edge. The maintained provisioner now resolves the
+  latest stable CLI, suppresses its browser download, and writes one Edge-backed
+  command into the Sandbox environment. The idempotent path rendered the README at
+  686.328 by 542 pixels in 3.935 seconds. Owner: `.herdr-sandbox/provision.ps1`,
+  `scripts/provision_mermaid_renderer.ps1`, and `CONTRIBUTING.md`.
 
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle
@@ -146,7 +148,7 @@ configuration repository.
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Retier non-Rust focused checks before candidate
+- **Status: done. Retier non-Rust focused checks before candidate
   packaging.** Let the Candidate procedure run an exact repository-owned Bun or
   Python behavior check in the same stop-on-failure command chain, then invoke
   `candidate` without a Rust `--test-filter`; reserve that option for Rust-owned
@@ -155,10 +157,12 @@ configuration repository.
   134.220-second release compile, making the validated candidate take 281.669
   seconds. Earlier, the nearest Rust embedding filter spent 38.361 seconds before
   failing on an unrelated existing Copilot assertion. This removes false blockers
-  and one unnecessary test compile without adding a generic command runner. Owner:
-  the Candidate procedure in `CONTRIBUTING.md`.
+  and one unnecessary test compile without adding a generic command runner. The
+  procedure now runs the exact Bun or Python owner first and invokes Candidate
+  without a Rust filter in the same stop-on-failure sequence. Owner: the Candidate
+  procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Add one native Windows interactive-server launch probe.**
+- **Status: done. Add one native Windows interactive-server launch probe.**
   Exercise the built product from an actual `cmd.exe` parent through the existing
   Task Scheduler launch owner so Windows hidden `=X:` drive state is present, then
   assert bootstrap consumption, exact session and user ownership, process cleanup,
@@ -166,32 +170,46 @@ configuration repository.
   the real `cmd.exe` environment and then failed the configured SSH path. The exact
   `cmd.exe` to Task Scheduler launch passed in 3.253 seconds after the root fix. A
   reusable gate would expose the cross-session failure before installer handoff
-  without reconstructing one-off test code. Owner: the Windows interactive-server
-  test boundary and Candidate procedure in `CONTRIBUTING.md`.
+  without reconstructing one-off test code. Candidate now validates the built bundle,
+  places one real `cmd.exe` parent in a kill-on-close job, and requires bootstrap
+  consumption, exact user and session ownership, process shutdown, and zero task
+  residue before packaging. The Windows PowerShell 5.1 path passed in 3.883 seconds.
+  Owner: `scripts/windows_interactive_server_launch_probe.ps1`, its native job helper,
+  and the Candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Propagate Windows `test-one` failures.** Make the Windows
+- **Status: done. Propagate Windows `test-one` failures.** Make the Windows
   PowerShell recipe return Cargo Nextest's exit status to Just. Evidence: an
   intentionally failing focused test printed Nextest's failure summary, but
   `just test-one interactive_server` returned status 0; invoking the same Cargo
-  Nextest path directly returned the failure correctly. This prevents false-green
-  focused gates. Owner: `justfile`.
+  Nextest path directly returned the failure correctly. The recipe now returns
+  `$LASTEXITCODE`; direct and wrapped no-match runs both returned status 4. This
+  prevents false-green focused gates. Owner: `justfile`.
 
-- **Status: proposed. Gate changed integration assets on one migration-version
+- **Status: done. Gate changed integration assets on one migration-version
   advance.** Extend the existing delta or Candidate source check to compare each
   changed managed integration asset with the accepted queue baseline, then require
   a higher embedded marker and matching Rust constant before packaging. Evidence:
   three OpenCode layout commits changed the managed plugin while both old and new
   bytes still claimed version 12, so the installed stale plugin was reported as
   current. Version 13 immediately made the real installed copy detectable and
-  replaceable. Owner: the existing delta inventory or Candidate source validator,
-  without adding a second integration-version registry.
+  replaceable. Candidate now compares embedded assets with the accepted replay tree,
+  requires exactly one marker advance, and checks the matching Rust constant before
+  bundle reuse or compilation. The focused control suite passed 36 tests and the
+  live candidate comparison reported `changed=opencode`. Owner:
+  `scripts/delta_workflow.py`, `scripts/local_windows_installer.py`, and their focused
+  tests, without a second integration-version registry.
 
-- **Status: proposed. Exercise restored OpenCode roots in the native split
+- **Status: blocked. Exercise restored OpenCode roots in the native split
   probe.** Start the existing adaptive-split acceptance from a persisted OpenCode
   session after a Herdr restart, then create several direct children concurrently
   and assert the native panes. Evidence: the fresh managed-launch contract and all
   32 sequential asset tests first passed while a restored process exposed no
   attachable endpoint. After that fix, seven simultaneous child events all read the
   pre-split layout and repeatedly divided the Main pane because no prior child pane
-  ID had been recorded. Owner: the OpenCode native Candidate acceptance boundary,
-  reusing its current split probe rather than a second harness.
+  ID had been recorded. The exact check requires stopping and reattaching a live
+  Herdr/OpenCode session plus provider-authenticated concurrent direct-child creation.
+  The repository has no credential-free native child trigger, and a synthetic event
+  driver would duplicate the Bun harness without proving restore or native pane
+  placement. Resume only in a user-authorized provider session; the existing Bun suite
+  remains the deterministic split-logic owner. Owner: the OpenCode native Candidate
+  acceptance boundary, reusing its current split probe rather than a second harness.

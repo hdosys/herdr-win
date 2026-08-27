@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.delta_workflow import DEVELOPMENT_BRANCH, DEVELOPMENT_REMOTE_REF
+from scripts.delta_workflow import (
+    DEVELOPMENT_BRANCH,
+    DEVELOPMENT_REMOTE_REF,
+    DeltaWorkflowError,
+)
 from scripts.local_windows_installer import (
     DEFAULT_PATHS,
     InstallerIdentity,
@@ -221,6 +225,10 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 ),
                 patch("scripts.local_windows_installer._require_pushed_development_source"),
                 patch(
+                    "scripts.local_windows_installer.validate_changed_integration_asset_versions",
+                    return_value=(),
+                ) as version_gate,
+                patch(
                     "scripts.local_windows_installer._source_build_identity",
                     return_value=(BUILD_ID, "a" * 40),
                 ),
@@ -234,9 +242,45 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 candidate(options)
 
             directory.assert_not_called()
+            version_gate.assert_called_once_with(source)
             package.assert_called_once()
             self.assertEqual(package.call_args.args[0].input_bundle, bundle)
             self.assertEqual(package.call_args.kwargs["paths"], paths)
+            self.assertTrue(package.call_args.kwargs["run_interactive_probe"])
+
+    def test_candidate_validates_integrations_before_bundle_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            options = argparse.Namespace(
+                source_worktree=source,
+                cargo_target_dir=root / "cargo-target",
+                test_filter=None,
+                release_test_filter=None,
+                isolated=False,
+            )
+            with (
+                patch(
+                    "scripts.local_windows_installer._source_root",
+                    return_value=source,
+                ),
+                patch(
+                    "scripts.local_windows_installer._source_branch",
+                    return_value=DEVELOPMENT_BRANCH,
+                ),
+                patch("scripts.local_windows_installer._require_pushed_development_source"),
+                patch(
+                    "scripts.local_windows_installer.validate_changed_integration_asset_versions",
+                    side_effect=DeltaWorkflowError("stale marker"),
+                ),
+                patch("scripts.local_windows_installer.build") as package,
+                self.assertRaisesRegex(
+                    LocalInstallerError, "migration validation failed"
+                ),
+            ):
+                candidate(options)
+            package.assert_not_called()
 
     def test_candidate_build_uses_all_selected_jobs_and_only_required_bins(self) -> None:
         arguments = _cargo_build_arguments(Path("C:/cargo-target"), 16)

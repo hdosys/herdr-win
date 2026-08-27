@@ -129,17 +129,10 @@ active memory owner.
 
 ## Fork verification policy
 
-- Leave tests that are unchanged from recorded `BASE` alone. A test or gate added
-  or strengthened by this fork must name a stable product or release contract, a
-  realistic regression unique to that check, and why a cheaper existing check is
-  insufficient before it is created or retained.
-- Fork-owned checks must be deterministic, bounded, and proportionate to their
-  signal. Do not test constants, source text, private implementation details,
-  pass-through behavior, external-tool semantics, hypothetical failures, or the
-  same contract at multiple layers.
+- Leave tests that are unchanged from recorded `BASE` alone. Checks added or
+  changed by this fork follow the global Lean test policy.
 - A release or CI workflow must not install or download software used only by a
   test. External programs are allowed only when they are current product or build
   dependencies and the workflow validates the product-owned integration boundary.
-- Delete or retier an existing fork-owned check when it no longer meets this gate.
-  Broad native and installer matrices remain release or explicitly assigned
+- Broad native and installer matrices remain release or explicitly assigned
   unattended work, never ordinary iteration gates.

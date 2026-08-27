@@ -1,4 +1,4 @@
-From 5146ead7a7d9d36357b64cf3c345a9fbd916e049 Mon Sep 17 00:00:00 2001
+From 7dfdda53bcf02c709ee511f146296f775a79d744 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/11] feat(windows): preserve terminal appearance
@@ -14,7 +14,7 @@ Transport bounded host color and appearance events, keep software and native cur
  src/app/theme_sync.rs                         |   4 +-
  src/client/input.rs                           |  93 ++++-
  src/client/input/windows_vti.rs               |  88 ++++-
- src/client/mod.rs                             | 215 +++++++++---
+ src/client/mod.rs                             | 221 +++++++++---
  src/config/theme.rs                           |   6 +-
  src/main.rs                                   |   2 +-
  src/pane.rs                                   |   1 +
@@ -37,7 +37,7 @@ Transport bounded host color and appearance events, keep software and native cur
  tests/client_mode.rs                          |  10 +
  tests/cross_area.rs                           |  10 +
  tests/multi_client.rs                         |  10 +
- 32 files changed, 1276 insertions(+), 181 deletions(-)
+ 32 files changed, 1274 insertions(+), 189 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 05f368084241fc56b7f437bd1232edce40f12b0b..4399782d932362f79a99f8aa596aa7728b84d860 100644
@@ -528,7 +528,7 @@ index dcf804c1b984dfb607316f965ca0813a77ee45b1..84debf973b43f62eccebd8dd87c0e9b9
      fn vti_win32_input_mode_bracketed_paste_key_records_emit_single_paste() {
          let records = win32_input_mode_encoded_key_bytes(
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009b8419613 100644
+index c33157fb0d9b7c1632562fced6bd9e439de80856..26456c718cb2c348646c5e9bbc0fec0d92157d1a 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
 @@ -50,6 +50,7 @@ use crate::protocol::{
@@ -789,7 +789,17 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
      };
      debug!(?negotiated_encoding, "client render encoding active");
      let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
-@@ -1557,6 +1660,14 @@ async fn run_client_loop(
+@@ -1422,8 +1525,7 @@ async fn run_client_loop(
+     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+ 
+     // Spawn the stdin reader thread.
+-    let will_query_host_terminal_theme =
+-        state.attach_escape.is_none() && should_query_host_terminal_theme();
++    let will_query_host_terminal_theme = state.attach_escape.is_none();
+     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
+     // host terminal directly instead of falling back to an assumed cell size.
+     let will_query_host_cell_size = state.attach_escape.is_none()
+@@ -1557,6 +1659,14 @@ async fn run_client_loop(
                      }
                  } else {
                      let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
@@ -804,7 +814,7 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
                      if crate::raw_input::events_require_host_surface_redraw(
                          &events,
                          state.redraw_on_focus_gained,
-@@ -1621,10 +1732,31 @@ async fn run_client_loop(
+@@ -1621,10 +1731,31 @@ async fn run_client_loop(
                  }
              }
              #[cfg(windows)]
@@ -837,7 +847,7 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
                  if should_bridge_clipboard_image_events(
                      &events,
                      is_remote_client,
-@@ -1652,6 +1784,9 @@ async fn run_client_loop(
+@@ -1652,6 +1783,9 @@ async fn run_client_loop(
                  ) {
                      state.request_repaint();
                  }
@@ -847,7 +857,7 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
                  let msg = ClientMessage::InputEvents { events };
                  if let Err(e) = write_to_server(&mut write_stream, &msg) {
                      return Err(ClientError::ConnectionLost(e));
-@@ -1673,32 +1808,7 @@ async fn run_client_loop(
+@@ -1673,32 +1807,7 @@ async fn run_client_loop(
              }
              ClientLoopEvent::ServerMessage(msg) => match msg {
                  ServerMessage::Frame(frame_data) => {
@@ -881,14 +891,14 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
                  }
                  ServerMessage::Terminal(frame) => {
                      if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
-@@ -2567,13 +2677,11 @@ fn query_host_terminal_theme() {
+@@ -2566,14 +2675,8 @@ fn query_host_terminal_theme() {
+     let _ = write_host_terminal_theme_query(io::stdout());
  }
  
- fn should_query_host_terminal_theme() -> bool {
+-fn should_query_host_terminal_theme() -> bool {
 -    !cfg!(windows)
-+    true
- }
- 
+-}
+-
  fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
 -    let query = crate::terminal_theme::host_terminal_theme_query_sequence(
 -        crate::platform::should_query_host_terminal_palette(),
@@ -897,7 +907,7 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
      writer.write_all(query.as_bytes())?;
      writer.flush()
  }
-@@ -3001,10 +3109,7 @@ mod tests {
+@@ -3001,10 +3104,7 @@ mod tests {
          write_host_terminal_theme_query(&mut output).unwrap();
          assert_eq!(
              output,
@@ -909,18 +919,19 @@ index c33157fb0d9b7c1632562fced6bd9e439de80856..e4edf4e5361168a5e8ec515105267009
          );
          assert!(!output
              .windows(crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.len())
-@@ -3038,8 +3143,8 @@ mod tests {
+@@ -3037,11 +3137,6 @@ mod tests {
+         ));
      }
  
-     #[test]
+-    #[test]
 -    fn host_terminal_theme_query_is_disabled_on_windows() {
 -        assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
-+    fn host_terminal_theme_query_is_enabled_on_all_platforms() {
-+        assert!(should_query_host_terminal_theme());
-     }
- 
+-    }
+-
      #[test]
-@@ -3088,20 +3193,36 @@ mod tests {
+     fn write_host_cell_size_query_emits_xtwinops_request() {
+         let mut output = Vec::new();
+@@ -3088,20 +3183,36 @@ mod tests {
      #[test]
      fn terminal_restore_postlude_restores_visible_default_cursor() {
          let mut output = Vec::new();

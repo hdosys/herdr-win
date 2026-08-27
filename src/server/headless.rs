@@ -3777,6 +3777,7 @@ impl HeadlessServer {
             return changed | deferred_changed;
         }
         let defer_startup_workspace_shell = self.awaiting_first_app_client_geometry
+            && self.startup_cwd.is_some()
             && matches!(&msg.request.method, api::schema::Method::WorkspaceCreate(_));
         let mut response = if matches!(
             &msg.request.method,
@@ -5813,10 +5814,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_bootstrap_shells_wait_for_real_client_geometry() {
+    async fn startup_shell_deferral_requires_pending_cwd_and_real_client_geometry() {
         let startup_size = (120, 40);
         let expected_terminal_area = Rect::new(26, 1, 94, 39);
         let expected_pane_size = (39, 93);
+
+        let mut headless_server = test_headless_server();
+        headless_server.app.state.default_shell = exiting_test_command().into();
+        let (workspace_respond_to, workspace_response_rx) = std::sync::mpsc::channel();
+        assert!(
+            headless_server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+                request: api::schema::Request {
+                    id: "headless-workspace".into(),
+                    method: api::schema::Method::WorkspaceCreate(
+                        api::schema::WorkspaceCreateParams {
+                            cwd: Some(std::env::temp_dir().display().to_string()),
+                            focus: true,
+                            label: None,
+                            env: Default::default(),
+                        },
+                    ),
+                },
+                respond_to: workspace_respond_to,
+                response_write_complete: None,
+                stream_active: None,
+            })
+        );
+        let _: api::schema::SuccessResponse = serde_json::from_str(
+            &workspace_response_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("headless workspace response"),
+        )
+        .expect("successful headless workspace response");
+        assert!(headless_server
+            .pending_startup_workspace_launches
+            .is_empty());
+        let headless_pane_id = headless_server.app.state.workspaces[0].tabs[0].root_pane;
+        assert!(headless_server
+            .app
+            .state
+            .runtime_for_pane(&headless_server.app.terminal_runtimes, headless_pane_id,)
+            .is_some());
+        shutdown_test_runtimes(&mut headless_server);
 
         let mut startup_server = test_headless_server();
         startup_server.startup_cwd = Some(std::env::temp_dir());

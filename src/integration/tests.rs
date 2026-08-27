@@ -2826,18 +2826,39 @@ fn bundled_integration_assets_report_session_refs() {
             || KIMI_HOOK_ASSET.contains("--state $Action")
     );
     assert!(!KIMI_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(COPILOT_HOOK_ASSET.contains("agent_session_id"));
-    assert!(COPILOT_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(
+        COPILOT_HOOK_ASSET.contains("agent_session_id")
+            || COPILOT_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        COPILOT_HOOK_ASSET.contains("pane.report_agent_session")
+            || COPILOT_HOOK_ASSET.contains("report-agent-session")
+    );
     assert!(!COPILOT_HOOK_ASSET.contains("\"state\":"));
     assert!(!COPILOT_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(DEVIN_HOOK_ASSET.contains("HERDR_DEVIN_LIST_JSON"));
-    assert!(DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent_session\""));
+    assert!(
+        DEVIN_HOOK_ASSET.contains("HERDR_DEVIN_LIST_JSON")
+            || DEVIN_HOOK_ASSET.contains("devin list --format json")
+    );
+    assert!(
+        DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent_session\"")
+            || DEVIN_HOOK_ASSET.contains("report-agent-session")
+    );
     assert!(!DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent\""));
     assert!(!DEVIN_HOOK_ASSET.contains("\"state\":"));
     assert!(!DEVIN_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(DEVIN_HOOK_ASSET.contains("agent_session_id"));
-    assert!(DROID_HOOK_ASSET.contains("agent_session_id"));
-    assert!(DROID_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(
+        DEVIN_HOOK_ASSET.contains("agent_session_id")
+            || DEVIN_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        DROID_HOOK_ASSET.contains("agent_session_id")
+            || DROID_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        DROID_HOOK_ASSET.contains("pane.report_agent_session")
+            || DROID_HOOK_ASSET.contains("report-agent-session")
+    );
     assert!(!DROID_HOOK_ASSET.contains("\"state\": action"));
     assert!(!DROID_HOOK_ASSET.contains("pane.release_agent"));
     assert!(OPENCODE_PLUGIN_ASSET.contains("properties?.sessionID"));
@@ -2861,8 +2882,14 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(CURSOR_HOOK_ASSET.contains("conversation_id"));
     assert!(CURSOR_HOOK_ASSET.contains("conversationId"));
     assert!(CURSOR_HOOK_ASSET.contains("sessionId"));
-    assert!(CURSOR_HOOK_ASSET.contains("agent_session_id"));
-    assert!(CURSOR_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(
+        CURSOR_HOOK_ASSET.contains("agent_session_id")
+            || CURSOR_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        CURSOR_HOOK_ASSET.contains("pane.report_agent_session")
+            || CURSOR_HOOK_ASSET.contains("report-agent-session")
+    );
     assert!(CURSOR_HOOK_ASSET.contains("hook_event_name"));
     assert!(CURSOR_HOOK_ASSET.contains("sessionStart"));
     assert!(!CURSOR_HOOK_ASSET.contains("\"state\":"));
@@ -2871,15 +2898,33 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(MASTRACODE_HOOK_ASSET.contains("HERDR_INTEGRATION_VERSION=2"));
     assert!(MASTRACODE_HOOK_ASSET.contains("session_id"));
     assert!(!MASTRACODE_HOOK_ASSET.contains("run_id"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("agent_session_id"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("pane.report_agent_session"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("session_start_source"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("pane.report_agent"));
+    assert!(
+        MASTRACODE_HOOK_ASSET.contains("agent_session_id")
+            || MASTRACODE_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        MASTRACODE_HOOK_ASSET.contains("pane.report_agent_session")
+            || MASTRACODE_HOOK_ASSET.contains("report-agent-session")
+    );
+    assert!(
+        MASTRACODE_HOOK_ASSET.contains("session_start_source")
+            || MASTRACODE_HOOK_ASSET.contains("--session-start-source")
+    );
+    assert!(
+        MASTRACODE_HOOK_ASSET.contains("pane.report_agent")
+            || MASTRACODE_HOOK_ASSET.contains("report-agent")
+    );
     assert!(GROK_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=grok"));
     assert!(GROK_HOOK_ASSET.contains("GROK_SESSION_ID"));
     assert!(GROK_HOOK_ASSET.contains("sessionId"));
-    assert!(GROK_HOOK_ASSET.contains("agent_session_id"));
-    assert!(GROK_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(
+        GROK_HOOK_ASSET.contains("agent_session_id")
+            || GROK_HOOK_ASSET.contains("--agent-session-id")
+    );
+    assert!(
+        GROK_HOOK_ASSET.contains("pane.report_agent_session")
+            || GROK_HOOK_ASSET.contains("report-agent-session")
+    );
     assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
     assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
     assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));

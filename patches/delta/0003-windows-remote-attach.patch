@@ -1,4 +1,4 @@
-From b44e350ca1ce0ececdf090ad23bf4c192674cef1 Mon Sep 17 00:00:00 2001
+From 8011fc61e80a75d12bc9471dc856f92ddccbc349 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
@@ -32,17 +32,17 @@ Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
  src/platform/windows.rs                       | 1232 +++++++++--
  src/platform/windows_interactive_launch.ps1   |   76 +
  src/remote.rs                                 |   41 +-
- src/remote/attach.rs                          | 1885 ++++++++++++++++-
+ src/remote/attach.rs                          | 1919 ++++++++++++++++-
  src/remote/windows.rs                         |  843 ++++++++
  src/remote/windows_attach_probe.ps1           |   88 +
  src/remote/windows_bootstrap.ps1              |  195 ++
  src/remote/windows_package_local_payload.ps1  |   37 +
  src/remote/windows_payload_layout.ps1         |  114 +
- src/server/autodetect.rs                      |  161 +-
+ src/server/autodetect.rs                      |  150 +-
  src/server/headless.rs                        |  307 ++-
  src/ui.rs                                     |   67 +-
  src/update.rs                                 |    3 +
- 38 files changed, 5149 insertions(+), 579 deletions(-)
+ 38 files changed, 5160 insertions(+), 591 deletions(-)
  create mode 100644 src/platform/windows_interactive_launch.ps1
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
@@ -2847,7 +2847,7 @@ index 19904ef2de185e6a03412ef92219cb5d176ea17c..9d76f1f71a9fa1254216597a976543e7
 +    }
  }
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc120948eaf 100644
+index 33e191f4d64d939c85de52752a08daeeba0b961c..6da80286c97fe17f0cacf389a5cfdadba4147f1b 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
 @@ -12,7 +12,8 @@ use interprocess::local_socket::traits::Listener as _;
@@ -3194,7 +3194,15 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  #[derive(Deserialize)]
-@@ -386,11 +583,52 @@ fn current_channel() -> &'static str {
+@@ -315,6 +512,7 @@ struct RemoteReleaseMetadata {
+ 
+ #[derive(Deserialize)]
+ struct RemotePreviewManifest {
++    prerelease: bool,
+     build_id: String,
+     protocol: u32,
+     assets: BTreeMap<String, RemoteAssetRef>,
+@@ -386,11 +584,52 @@ fn current_channel() -> &'static str {
  struct InstallSource {
      path: PathBuf,
      temporary_dir: Option<PathBuf>,
@@ -3247,7 +3255,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  struct PreparedRemoteHerdr {
-@@ -399,6 +637,39 @@ struct PreparedRemoteHerdr {
+@@ -399,6 +638,39 @@ struct PreparedRemoteHerdr {
      stop_after_install_approved: bool,
  }
  
@@ -3287,7 +3295,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  #[derive(Clone)]
  struct ManagedSshOptions {
      config_path: PathBuf,
-@@ -420,10 +691,11 @@ impl Drop for ManagedSshConfig {
+@@ -420,10 +692,11 @@ impl Drop for ManagedSshConfig {
  struct RemoteSsh {
      target: String,
      managed_config: Option<ManagedSshConfig>,
@@ -3300,7 +3308,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          let managed_config = if manage_ssh_config {
              write_managed_ssh_config()
                  .inspect_err(|err| {
-@@ -437,6 +709,7 @@ impl RemoteSsh {
+@@ -437,6 +710,7 @@ impl RemoteSsh {
          Self {
              target,
              managed_config,
@@ -3308,7 +3316,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          }
      }
  
-@@ -444,6 +717,12 @@ impl RemoteSsh {
+@@ -444,6 +718,12 @@ impl RemoteSsh {
          &self.target
      }
  
@@ -3321,7 +3329,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      fn options(&self) -> Option<&ManagedSshOptions> {
          self.managed_config.as_ref().map(|config| &config.options)
      }
-@@ -460,6 +739,13 @@ impl RemoteSsh {
+@@ -460,6 +740,13 @@ impl RemoteSsh {
          command
      }
  
@@ -3335,7 +3343,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      fn sh_output(&self, script: &str) -> io::Result<Output> {
          let mut child = self
              .command()
-@@ -486,6 +772,64 @@ impl RemoteSsh {
+@@ -486,6 +773,64 @@ impl RemoteSsh {
          self.command().arg(command).output()
      }
  
@@ -3400,7 +3408,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      fn install_herdr(&self, remote_herdr: &RemoteHerdr, source_path: &Path) -> io::Result<()> {
          let output = self.sh_output(&remote_install_prepare_script(remote_herdr))?;
          if !output.status.success() {
-@@ -529,6 +873,115 @@ impl RemoteSsh {
+@@ -529,6 +874,115 @@ impl RemoteSsh {
              )))
          }
      }
@@ -3516,7 +3524,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  fn remote_install_prepare_script(remote_herdr: &RemoteHerdr) -> String {
-@@ -578,6 +1031,123 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
+@@ -578,6 +1032,123 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
      )
  }
  
@@ -3640,7 +3648,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  impl Drop for RemoteSsh {
      fn drop(&mut self) {
          let Some(_options) = self
-@@ -620,11 +1190,31 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
+@@ -620,11 +1191,31 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
      }
  }
  
@@ -3672,7 +3680,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          }
      }
  
-@@ -632,6 +1222,34 @@ impl InstallSource {
+@@ -632,6 +1223,34 @@ impl InstallSource {
          Self {
              path,
              temporary_dir: Some(temporary_dir),
@@ -3707,7 +3715,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          }
      }
  
-@@ -644,9 +1262,10 @@ impl InstallSource {
+@@ -644,9 +1263,10 @@ impl InstallSource {
  
  fn prepare_remote_herdr(
      ssh: &RemoteSsh,
@@ -3719,7 +3727,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      let remote_herdr = RemoteHerdr::for_platform(platform);
      let override_binary = remote_binary_override_path()?;
      let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
-@@ -676,22 +1295,45 @@ fn prepare_remote_herdr(
+@@ -676,22 +1296,45 @@ fn prepare_remote_herdr(
              .ok()
              .and_then(|exists| exists.then_some(&remote_herdr))
      }) {
@@ -3770,7 +3778,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      if !remote_binary_matches(ssh, &remote_herdr)? {
          return Err(io::Error::other(format!(
              "installed remote herdr at {}, but it did not report version {}",
-@@ -700,6 +1342,11 @@ fn prepare_remote_herdr(
+@@ -700,6 +1343,11 @@ fn prepare_remote_herdr(
          )));
      }
      warn_if_remote_bin_not_on_path(ssh)?;
@@ -3782,7 +3790,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  
      Ok(PreparedRemoteHerdr {
          remote_herdr,
-@@ -708,6 +1355,157 @@ fn prepare_remote_herdr(
+@@ -708,6 +1356,157 @@ fn prepare_remote_herdr(
      })
  }
  
@@ -3940,7 +3948,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
      let output = ssh.sh_output("uname -s\nuname -m\n")?;
      if !output.status.success() {
-@@ -727,6 +1525,144 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
+@@ -727,6 +1526,144 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
      })
  }
  
@@ -4085,7 +4093,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  fn remote_binary_candidates(
      ssh: &RemoteSsh,
      remote_herdr: &RemoteHerdr,
-@@ -865,28 +1801,54 @@ fn is_mise_shim_path(path: &str) -> bool {
+@@ -865,28 +1802,54 @@ fn is_mise_shim_path(path: &str) -> bool {
  }
  
  fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
@@ -4158,16 +4166,33 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
-@@ -952,39 +1914,256 @@ fn install_source_description_for(
+@@ -939,52 +1902,269 @@ fn install_source_description_for(
+     if let Some(path) = override_binary {
+         return format!("{REMOTE_BINARY_ENV_VAR} ({})", path.display());
      }
- }
- 
--fn resolve_install_source(
--    platform: &RemotePlatform,
--    override_binary: Option<PathBuf>,
--) -> io::Result<InstallSource> {
--    if let Some(path) = override_binary {
--        return Ok(InstallSource::persistent(path));
+-
+-    if local_binary_can_seed_remote {
+-        "the current local herdr binary".to_string()
+-    } else {
+-        format!(
+-            "the {} {} asset for {}",
+-            current_version(),
+-            current_channel(),
+-            platform.asset_key()
+-        )
++
++    if local_binary_can_seed_remote {
++        "the current local herdr binary".to_string()
++    } else {
++        format!(
++            "the {} {} asset for {}",
++            current_version(),
++            current_channel(),
++            platform.asset_key()
++        )
++    }
++}
++
 +fn resolve_install_source(
 +    platform: &RemotePlatform,
 +    override_binary: Option<PathBuf>,
@@ -4344,12 +4369,14 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
 +        )));
      }
 +    validate_windows_zip_path(archive)
-+}
+ }
  
--    if *platform == RemotePlatform::local() {
--        let path = std::env::current_exe()?;
--        if !crate::update::is_package_manager_managed_exe_path(&path) {
--            return Ok(InstallSource::persistent(path));
+-fn resolve_install_source(
+-    platform: &RemotePlatform,
+-    override_binary: Option<PathBuf>,
+-) -> io::Result<InstallSource> {
+-    if let Some(path) = override_binary {
+-        return Ok(InstallSource::persistent(path));
 +#[cfg(windows)]
 +fn package_local_windows_runtime(executable: &Path) -> io::Result<InstallSource> {
 +    let source_root = local_windows_runtime_root(executable)?;
@@ -4360,7 +4387,12 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
 +            io::ErrorKind::InvalidData,
 +            "local Windows portable runtime herdr.exe does not match the running executable",
 +        ));
-+    }
+     }
+-
+-    if *platform == RemotePlatform::local() {
+-        let path = std::env::current_exe()?;
+-        if !crate::update::is_package_manager_managed_exe_path(&path) {
+-            return Ok(InstallSource::persistent(path));
 +    let temporary_dir = private_download_dir("windows-local-payload")?;
 +    let stage = temporary_dir.join("stage");
 +    let archive = temporary_dir.join("payload.zip");
@@ -4428,7 +4460,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          live_handoff: bool,
          detached_server_daemon: bool,
      },
-@@ -1012,11 +2191,21 @@ fn ensure_remote_server_ready(
+@@ -1012,11 +2192,21 @@ fn ensure_remote_server_ready(
      remote_binary_changed: bool,
      stop_after_install_approved: bool,
      live_handoff_enabled: bool,
@@ -4451,7 +4483,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          live_handoff,
          detached_server_daemon,
      } = status
-@@ -1034,6 +2223,10 @@ fn ensure_remote_server_ready(
+@@ -1034,6 +2224,10 @@ fn ensure_remote_server_ready(
      };
  
      if live_handoff_enabled && live_handoff {
@@ -4462,7 +4494,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          match live_handoff_remote_server(ssh, remote_herdr) {
              Ok(()) => return Ok(()),
              Err(err) => {
-@@ -1050,6 +2243,11 @@ fn ensure_remote_server_ready(
+@@ -1050,6 +2244,11 @@ fn ensure_remote_server_ready(
  
      if confirm_remote_server_stop(ssh.target(), version.as_deref(), protocol, reason)? {
          stop_remote_server(ssh, remote_herdr)?;
@@ -4474,7 +4506,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      }
      Ok(())
  }
-@@ -1110,6 +2308,7 @@ fn confirm_remote_install_with_running_server(
+@@ -1110,6 +2309,7 @@ fn confirm_remote_install_with_running_server(
      let RemoteServerStatus::Running {
          version,
          protocol,
@@ -4482,7 +4514,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          live_handoff,
          detached_server_daemon,
      } = &status
-@@ -1210,12 +2409,311 @@ fn remote_install_running_server_plan(
+@@ -1210,12 +2410,311 @@ fn remote_install_running_server_plan(
      RemoteInstallRunningServerPlan::StopRequired(reason)
  }
  
@@ -4796,7 +4828,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      if !output.status.success() {
          return Err(command_failed("remote server status failed", &output));
      }
-@@ -1226,7 +2724,27 @@ fn remote_server_status(
+@@ -1226,7 +2725,27 @@ fn remote_server_status(
  
  #[derive(Debug, Deserialize)]
  struct RemoteClientStatusJson {
@@ -4824,7 +4856,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  #[derive(Debug, Deserialize)]
-@@ -1234,6 +2752,8 @@ struct RemoteServerStatusJson {
+@@ -1234,6 +2753,8 @@ struct RemoteServerStatusJson {
      running: bool,
      version: Option<String>,
      protocol: Option<u32>,
@@ -4833,7 +4865,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      capabilities: Option<RemoteServerCapabilitiesJson>,
  }
  
-@@ -1248,28 +2768,39 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
+@@ -1248,28 +2769,39 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
      serde_json::from_str(status).ok()
  }
  
@@ -4876,7 +4908,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  fn confirm_remote_server_stop(
-@@ -1359,25 +2890,28 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
+@@ -1359,25 +2891,28 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
          return Err(command_failed("remote server live handoff failed", &output));
      }
  
@@ -4913,7 +4945,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      Ok(())
  }
  
-@@ -1443,6 +2977,21 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -1443,6 +2978,21 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
          let _ = fs::remove_dir_all(&dir);
          return Err(io::Error::other("download failed"));
      }
@@ -4935,7 +4967,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      if let Some(expected) = &asset.sha256 {
          if let Err(err) = crate::checksum::verify_sha256(&path, expected) {
              let _ = fs::remove_dir_all(&dir);
-@@ -1453,7 +3002,18 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -1453,7 +3003,18 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
          }
      }
  
@@ -4955,7 +4987,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
-@@ -1480,6 +3040,7 @@ fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
+@@ -1480,6 +3041,7 @@ fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
      RemoteReleaseAsset {
          url: asset.url().to_string(),
          sha256: asset.sha256().map(str::to_string),
@@ -4963,7 +4995,19 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      }
  }
  
-@@ -1581,7 +3142,11 @@ fn confirm_remote_install(
+@@ -1487,6 +3049,11 @@ fn preview_assets_for_build<'a>(
+     manifest: &'a RemotePreviewManifest,
+     build_id: &str,
+ ) -> io::Result<(u32, &'a BTreeMap<String, RemoteAssetRef>)> {
++    if manifest.prerelease {
++        return Err(io::Error::other(
++            "update manifest is marked as a GitHub prerelease",
++        ));
++    }
+     if manifest.build_id == build_id {
+         return Ok((manifest.protocol, &manifest.assets));
+     }
+@@ -1581,7 +3148,11 @@ fn confirm_remote_install(
      target: &str,
      remote_herdr: &RemoteHerdr,
      source_description: &str,
@@ -4975,7 +5019,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      if !io::stdin().is_terminal() {
          return Err(io::Error::other(format!(
              "matching remote herdr {} is not installed at {}; run from an interactive terminal to approve installation",
-@@ -1614,14 +3179,89 @@ fn confirm_remote_install(
+@@ -1614,14 +3185,89 @@ fn confirm_remote_install(
      Ok(())
  }
  
@@ -5072,7 +5116,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
  }
  
  fn reattach_command(
-@@ -1668,9 +3308,8 @@ struct SshStdioBridge {
+@@ -1668,9 +3314,8 @@ struct SshStdioBridge {
  impl SshStdioBridge {
      fn start(
          target: String,
@@ -5083,7 +5127,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          ssh_options: Option<&ManagedSshOptions>,
      ) -> io::Result<Self> {
          crate::ipc::prepare_socket_path(&local_socket, |path| {
-@@ -1709,8 +3348,7 @@ impl SshStdioBridge {
+@@ -1709,8 +3354,7 @@ impl SshStdioBridge {
                          if let Err(err) = bridge_connection(
                              stream,
                              &target,
@@ -5093,7 +5137,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
                              thread_ssh_options.as_ref(),
                              &thread_stop,
                          ) {
-@@ -1817,8 +3455,7 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
+@@ -1817,8 +3461,7 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
  fn bridge_connection(
      stream: crate::ipc::LocalStream,
      target: &str,
@@ -5103,7 +5147,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      ssh_options: Option<&ManagedSshOptions>,
      _bridge_stop: &Arc<AtomicBool>,
  ) -> io::Result<()> {
-@@ -1827,7 +3464,7 @@ fn bridge_connection(
+@@ -1827,7 +3470,7 @@ fn bridge_connection(
      command
          .arg("-T")
          .arg(target)
@@ -5112,7 +5156,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          .stdin(Stdio::piped())
          .stdout(Stdio::piped())
          .stderr(Stdio::inherit());
-@@ -1872,8 +3509,7 @@ fn bridge_connection(
+@@ -1872,8 +3515,7 @@ fn bridge_connection(
  fn bridge_connection(
      stream: crate::ipc::LocalStream,
      target: &str,
@@ -5122,7 +5166,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      ssh_options: Option<&ManagedSshOptions>,
      bridge_stop: &Arc<AtomicBool>,
  ) -> io::Result<()> {
-@@ -1882,7 +3518,7 @@ fn bridge_connection(
+@@ -1882,7 +3524,7 @@ fn bridge_connection(
      command
          .arg("-T")
          .arg(target)
@@ -5131,7 +5175,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          .stdin(Stdio::piped())
          .stdout(Stdio::piped())
          .stderr(Stdio::inherit());
-@@ -2204,9 +3840,8 @@ mod tests {
+@@ -2204,9 +3846,8 @@ mod tests {
          });
          let bridge = SshStdioBridge::start(
              "example".to_string(),
@@ -5142,7 +5186,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              None,
          )
          .expect("start bridge listener");
-@@ -2264,9 +3899,8 @@ mod tests {
+@@ -2264,9 +3905,8 @@ mod tests {
          });
          let bridge = SshStdioBridge::start(
              "example".to_string(),
@@ -5153,7 +5197,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              None,
          )
          .expect("start bridge listener");
-@@ -2364,6 +3998,7 @@ mod tests {
+@@ -2364,6 +4004,7 @@ mod tests {
          let ssh = RemoteSsh {
              target: "example".to_string(),
              managed_config: Some(managed_config),
@@ -5161,7 +5205,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          };
  
          let command = ssh.command();
-@@ -2402,6 +4037,7 @@ mod tests {
+@@ -2402,6 +4043,7 @@ mod tests {
          let ssh = RemoteSsh {
              target: "example".to_string(),
              managed_config: Some(managed_config),
@@ -5169,7 +5213,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          };
          let args = ssh
              .command()
-@@ -2433,6 +4069,7 @@ mod tests {
+@@ -2433,6 +4075,7 @@ mod tests {
          let ssh = RemoteSsh {
              target: "example".to_string(),
              managed_config: None,
@@ -5177,7 +5221,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
          };
  
          let command = ssh.command();
-@@ -2496,6 +4133,14 @@ mod tests {
+@@ -2496,6 +4139,14 @@ mod tests {
          assert_eq!(remote.keybindings, RemoteKeybindings::Local);
      }
  
@@ -5192,7 +5236,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      #[test]
      fn extract_remote_args_removes_equals_form() {
          let args = vec!["herdr".into(), "--remote=user@host".into()];
-@@ -2546,6 +4191,26 @@ mod tests {
+@@ -2546,6 +4197,26 @@ mod tests {
          assert!(remote.live_handoff);
      }
  
@@ -5219,7 +5263,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
      #[test]
      fn extract_remote_args_preserves_child_remote_options_after_separator() {
          let args = vec![
-@@ -2721,7 +4386,8 @@ mod tests {
+@@ -2721,7 +4392,8 @@ mod tests {
              arch: "x86_64",
          });
          assert_eq!(
@@ -5229,7 +5273,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
          );
      }
-@@ -2736,7 +4402,8 @@ mod tests {
+@@ -2736,7 +4408,8 @@ mod tests {
              .expect("path binary");
  
          assert_eq!(
@@ -5239,7 +5283,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              "exec /usr/bin/herdr remote-client-bridge"
          );
      }
-@@ -2752,7 +4419,8 @@ mod tests {
+@@ -2752,7 +4425,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -5249,7 +5293,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              "exec '/opt/herdr bin/herdr' remote-client-bridge"
          );
      }
-@@ -2768,7 +4436,8 @@ mod tests {
+@@ -2768,7 +4442,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -5259,7 +5303,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              "exec /opt/homebrew/bin/herdr remote-client-bridge"
          );
          assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
-@@ -2855,7 +4524,8 @@ mod tests {
+@@ -2855,7 +4530,8 @@ mod tests {
                  .expect("path binary");
  
          assert_eq!(
@@ -5269,7 +5313,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
              "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
          );
      }
-@@ -2916,6 +4586,7 @@ mod tests {
+@@ -2916,6 +4592,7 @@ mod tests {
              RemoteServerStatus::Running {
                  version: Some("0.6.0".into()),
                  protocol: Some(8),
@@ -5277,7 +5321,7 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
                  live_handoff: true,
                  detached_server_daemon: true
              }
-@@ -2932,6 +4603,7 @@ mod tests {
+@@ -2932,6 +4609,7 @@ mod tests {
              RemoteServerStatus::Running {
                  version: Some("0.6.0".into()),
                  protocol: Some(8),
@@ -5285,7 +5329,28 @@ index 33e191f4d64d939c85de52752a08daeeba0b961c..d4b031c66761cbf61d5e5f47f777adc1
                  live_handoff: false,
                  detached_server_daemon: false
              }
-@@ -3177,6 +4849,33 @@ mod tests {
+@@ -3072,8 +4750,9 @@ mod tests {
+ 
+     #[test]
+     fn remote_preview_manifest_falls_back_to_archived_exact_build_assets() {
+-        let manifest: RemotePreviewManifest = serde_json::from_str(
++        let mut manifest: RemotePreviewManifest = serde_json::from_str(
+             r#"{
++                "prerelease": false,
+                 "build_id": "2026-06-06-new",
+                 "protocol": 12,
+                 "assets": {
+@@ -3103,6 +4782,9 @@ mod tests {
+         assert_eq!(protocol, 11);
+         assert_eq!(asset.url(), "https://example.com/old");
+         assert_eq!(asset.sha256(), Some("old"));
++
++        manifest.prerelease = true;
++        assert!(preview_assets_for_build(&manifest, "2026-06-02-old").is_err());
+     }
+ 
+     #[test]
+@@ -3177,6 +4859,33 @@ mod tests {
          );
      }
  
@@ -6627,7 +6692,7 @@ index 0000000000000000000000000000000000000000..698776d1c5be106f71d66b46cdc529fb
 +    }
 +}
 diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
-index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9df7a72ff 100644
+index 337c388f9a2bedd4e72159317e160e8bab6d92d0..66a370ac06a2cb1f2150eabe31aed781a176841d 100644
 --- a/src/server/autodetect.rs
 +++ b/src/server/autodetect.rs
 @@ -25,13 +25,15 @@ const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -6717,7 +6782,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9
          Err(crate::protocol::FramingError::Io(err))
              if matches!(
                  err.kind(),
-@@ -147,6 +173,88 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
+@@ -147,6 +173,82 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
      }
  }
  
@@ -6795,18 +6860,12 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9
 +        ))
 +        .unwrap());
 +    }
-+
-+    #[test]
-+    fn explicit_server_start_uses_the_requested_binary() {
-+        let exe = PathBuf::from(r"C:\remote-sidecar\herdr.exe");
-+        assert_eq!(server_daemon_program_for_test(exe.clone()), exe);
-+    }
 +}
 +
  fn validate_running_server_compatibility() -> io::Result<()> {
      let Some(status) = read_server_status()? else {
          return Err(io::Error::other(format!(
-@@ -207,6 +315,24 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
+@@ -207,6 +309,19 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
      Ok(pid)
  }
  
@@ -6823,15 +6882,10 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9
 +    wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT)
 +}
 +
-+#[cfg(test)]
-+fn server_daemon_program_for_test(exe: PathBuf) -> PathBuf {
-+    build_server_daemon_command(exe).get_program().into()
-+}
-+
  fn build_server_daemon_command(exe: PathBuf) -> Command {
      let mut command = Command::new(&exe);
      command
-@@ -216,6 +342,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
+@@ -216,6 +331,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
          .stdout(std::process::Stdio::null())
          .stderr(std::process::Stdio::null());
      crate::platform::detach_server_daemon_command(&mut command);
@@ -6839,7 +6893,7 @@ index 337c388f9a2bedd4e72159317e160e8bab6d92d0..698c871fef7f81b571e4e6335c77e8a9
  
      match std::env::current_dir() {
          Ok(cwd) => {
-@@ -249,7 +376,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
+@@ -249,7 +365,11 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
  
      while std::time::Instant::now() < deadline {
          #[cfg(windows)]

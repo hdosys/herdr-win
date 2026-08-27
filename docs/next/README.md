@@ -4,11 +4,11 @@
 
 [![Latest stable release](https://img.shields.io/github/v/release/hdosys/herdr-win?display_name=tag&sort=semver)](https://github.com/hdosys/herdr-win/releases/latest) [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Release pipeline](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)
 
-Despite its historical name, `herdr-win` is not Windows-only. It is an unofficial, upstream-first distribution focused on the remaining Windows feature gap, not a separate product line. The executable, command, configuration, state, sessions, sockets, and protocol remain `herdr`.
+Despite its historical name, `herdr-win` is not Windows-only. It is an unofficial, upstream-first distribution that develops and ships practical bug fixes and extensions where upstream support is incomplete or not yet available. Its strongest focus areas are Windows, OpenCode reliability, and multi-Agent workflows. It complements upstream Herdr while the executable, command, configuration, state, sessions, sockets, and protocol remain `herdr`.
 
 Every published release contains matching Windows, Linux, and macOS binaries built from one reviewed stable Herdr release and one ordered patch queue. Releases are normal stable GitHub releases, and the integrated update paths reject prerelease feeds.
 
-[Install](#install) · [First use](#first-use) · [Everyday use](#everyday-use) · [Troubleshooting](#troubleshooting) · [What differs from upstream](#what-differs-from-upstream) · [Project reference](#project-reference)
+[What differs from upstream](#what-differs-from-upstream) · [Install](#install) · [First use](#first-use) · [Everyday use](#everyday-use) · [Troubleshooting](#troubleshooting) · [Project reference](#project-reference)
 
 ## Engineering approach
 
@@ -35,6 +35,25 @@ https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
 
 Detach from a Windows-hosted Herdr session, reconnect from another terminal, and continue the same OpenCode session without RDP.
 
+## What differs from upstream
+
+The table is intentionally capability-level. The linked mailboxes contain the exact implementation and focused evidence.
+
+| Area | Status | What this repository contributes |
+| --- | --- | --- |
+| Native ConPTY foundation | **Upstreamed in Herdr v0.6.9** | Reuses Herdr's modern app-local ConPTY packaging instead of carrying a duplicate foundation. |
+| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance, preserves cursor and Windows VTI input behavior, and avoids unframed OSC 4 palette replies. |
+| Windows SSH target support | **Maintained here** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds x86_64/ARM64 host detection, exact provisioning and activation, visible interactive progress, and fail-closed detached launch into the SSH user's active desktop session. |
+| Managed Windows releases | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, process-safe uninstall, and stable-only release selection. |
+| OpenCode and multi-Agent workflows | **Maintained here** · [#3052](https://github.com/herdrdev/herdr/issues/3052) · [#2450](https://github.com/herdrdev/herdr/issues/2450) · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps retries and prompts truthful, preserves each pane's selected root session, and maps concurrent direct subagents into adaptive readable splits. |
+| Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Ignores user `curl` configuration and bounds runtime downloads to TLS 1.2+ HTTPS with limited redirects. |
+| Cross-platform docs checks | **Maintained here** · [#3041](https://github.com/herdrdev/herdr/issues/3041) · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
+| Worktree lifecycle | **Maintained here** · [#3044](https://github.com/herdrdev/herdr/issues/3044) · [`0008`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0008-worktree-scoped-git-trust.patch) | Scopes Git trust to the selected checkout, waits for Windows terminals before unregistering worktrees, and preserves foreground focus during background removal. |
+| Managed Agent start | **Maintained here** · [#321](https://github.com/herdrdev/herdr/issues/321) · [#2685](https://github.com/herdrdev/herdr/issues/2685) · [`0009`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0009-session-agent-autostart.patch) | Optionally starts one Agent in each new tab, catches up eligible shell roots after live reload, and resolves argument-bearing Windows shims reliably. |
+| Agent hook recovery | **Maintained here** · [#1033](https://github.com/herdrdev/herdr/issues/1033) · [`0010`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0010-agent-transient-hook-takeover.patch) | Lets a still-running full-lifecycle Agent regain hook authority after a temporary foreground takeover without reviving a session after a real exit. |
+| Metadata capacity | **Maintained here** · [`0011`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0011-metadata-token-capacity.patch) | Atomically updates and retains up to 64 pane or workspace metadata tokens while preserving existing validation bounds. |
+| Completion alerts | **Maintained here** · [`0012`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0012-agent-completion-controls.patch) | Exposes one persistent opt-out for completion popups and sounds while keeping questions, permission prompts, and errors actionable. |
+
 ## Install
 
 ### Requirements
@@ -45,24 +64,17 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 
 WinGet-owned installations update through WinGet. Direct and portable installations update through the fork-owned release feed. `herdr update` deliberately refuses to replace package-managed bytes.
 
-### WinGet package-managed install
+### WinGet
 
-The official WinGet community source can trail the latest GitHub release. Check the version it currently offers, then install:
+Install from the WinGet community source:
 
 ```powershell
-winget show --id hdosys.herdr-win --exact --source winget
 winget install --id hdosys.herdr-win --exact --source winget
 ```
 
-Update later with:
+### Direct setup
 
-```powershell
-winget upgrade --id hdosys.herdr-win --exact --source winget
-```
-
-### Latest stable setup
-
-To install the newest GitHub release immediately, download `herdr-win_v<version>_windows_amd64_setup.exe` from the [latest Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest), verify its GitHub SHA-256 digest, and run it.
+Download `herdr-win_v<version>_windows_amd64_setup.exe` from the [latest Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest), verify its GitHub SHA-256 digest, and run it.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">
@@ -140,32 +152,12 @@ Settings under `%USERPROFILE%\.herdr` are preserved unless you explicitly choose
 | Symptom | Action |
 | --- | --- |
 | `herdr --version` does not start with `herdr-win` | Open a new terminal, run `where.exe herdr`, and inspect an earlier upstream or user-owned executable on `PATH`. Setup does not overwrite foreign PATH ownership. |
-| WinGet offers an older version than GitHub | This is expected while the community source catches up. Use `winget show --id hdosys.herdr-win --exact --source winget` to inspect it, or run the latest stable setup directly. The installation remains WinGet-owned for future package updates. |
 | Setup rejects an existing Herdr layout | Uninstall the existing **Herdr** or **Herdr Win** entry from Installed Apps, then run setup again. The installer preserves and rejects incompatible legacy layouts instead of migrating them. |
 | SmartScreen warns about the download | Confirm that the file came from this repository's release page and verify its GitHub SHA-256 digest before choosing to run it. |
 | Windows SSH provisioning fails before session start | Confirm that the default OpenSSH shell is `cmd.exe` or `pwsh.exe` and that exactly one active desktop session belongs to the SSH user. Windows PowerShell 5.1 is unsupported for this byte-stream path. |
 | Update remains pending, or uninstall reports running sessions | Let active work finish or stop the reported Herdr sessions, then launch or retry. The managed lifecycle never force-terminates active work. |
 
 For exact changes in downloadable fork releases, see the [herdr-win changelog](https://github.com/hdosys/herdr-win/blob/master/CHANGELOG.md). For general Herdr behavior, use the [upstream documentation](https://herdr.dev/docs/) and [upstream changelog](https://github.com/herdrdev/herdr/blob/master/CHANGELOG.md).
-
-## What differs from upstream
-
-The table is intentionally capability-level. The linked mailboxes contain the exact implementation and focused evidence.
-
-| Area | Status | What this repository contributes |
-| --- | --- | --- |
-| Native ConPTY foundation | **Upstreamed in Herdr v0.6.9** | Reuses Herdr's modern app-local ConPTY packaging instead of carrying a duplicate foundation. |
-| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance, preserves cursor and Windows VTI input behavior, and avoids unframed OSC 4 palette replies. |
-| Windows SSH target support | **Maintained here** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds x86_64/ARM64 host detection, exact provisioning and activation, visible interactive progress, and fail-closed detached launch into the SSH user's active desktop session. |
-| Managed Windows releases | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, process-safe uninstall, and stable-only release selection. |
-| OpenCode integration | **Maintained here** · [#3052](https://github.com/herdrdev/herdr/issues/3052) · [#2450](https://github.com/herdrdev/herdr/issues/2450) · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps retries and prompts truthful, preserves each pane's selected root session, and maps concurrent direct subagents into adaptive readable splits. |
-| Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Ignores user `curl` configuration and bounds runtime downloads to TLS 1.2+ HTTPS with limited redirects. |
-| Cross-platform docs checks | **Maintained here** · [#3041](https://github.com/herdrdev/herdr/issues/3041) · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
-| Worktree lifecycle | **Maintained here** · [#3044](https://github.com/herdrdev/herdr/issues/3044) · [`0008`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0008-worktree-scoped-git-trust.patch) | Scopes Git trust to the selected checkout, waits for Windows terminals before unregistering worktrees, and preserves foreground focus during background removal. |
-| Managed Agent start | **Maintained here** · [#321](https://github.com/herdrdev/herdr/issues/321) · [#2685](https://github.com/herdrdev/herdr/issues/2685) · [`0009`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0009-session-agent-autostart.patch) | Optionally starts one Agent in each new tab, catches up eligible shell roots after live reload, and resolves argument-bearing Windows shims reliably. |
-| Agent hook recovery | **Maintained here** · [#1033](https://github.com/herdrdev/herdr/issues/1033) · [`0010`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0010-agent-transient-hook-takeover.patch) | Lets a still-running full-lifecycle Agent regain hook authority after a temporary foreground takeover without reviving a session after a real exit. |
-| Metadata capacity | **Maintained here** · [`0011`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0011-metadata-token-capacity.patch) | Atomically updates and retains up to 64 pane or workspace metadata tokens while preserving existing validation bounds. |
-| Completion alerts | **Maintained here** · [`0012`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0012-agent-completion-controls.patch) | Exposes one persistent opt-out for completion popups and sounds while keeping questions, permission prompts, and errors actionable. |
 
 ## Project reference
 

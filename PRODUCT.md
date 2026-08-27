@@ -3,17 +3,17 @@
 ## Purpose
 
 This file is the short durable user-perspective truth for herdr-win: the fork's
-product promise, visible Windows-specific behavior, terminology, supported choices,
+product promise, visible fork-specific behavior, terminology, supported choices,
 and acceptance outcomes. Upstream Herdr owns general product behavior; code and
 tests remain the detailed implementation truth.
 
 ## Product Shape and Identity
 
-- herdr-win is an unofficial, upstream-first cross-platform distribution focused
-  on Windows feature parity, not a separate product line. Its historical name
-  reflects where the remaining delta began, not a Windows-only runtime. It advances
-  Herdr's Windows support through a small patch set designed to remain reviewable
-  and suitable for upstream.
+- herdr-win is an unofficial, upstream-first cross-platform distribution that
+  develops and ships practical bug fixes and extensions where upstream support is
+  incomplete or not yet available. Its strongest focus areas are Windows, OpenCode
+  reliability, and multi-Agent workflows. The maintained patch set remains small,
+  reviewable, and suitable for upstream rather than presenting a competing product.
 - Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
@@ -35,12 +35,13 @@ tests remain the detailed implementation truth.
   manual binary copying or independently released builds. Windows can run both the
   interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
-  and owned upstream unless a maintained Windows delta explicitly changes it.
-- The maintained user-visible delta covers terminal fidelity, Windows SSH target
-  provisioning, managed Windows distribution, truthful OpenCode lifecycle and
-  session selection, managed Agent launch, and recovery after temporary foreground
-  takeover. Upstream Herdr owns the shared remote client and clipboard/file image
-  bridge.
+  and owned upstream unless a maintained fork delta explicitly changes it.
+- The maintained user-visible delta covers Windows terminal fidelity, SSH target
+  provisioning, and managed distribution; OpenCode reliability and multi-Agent
+  layouts; managed Agent launch and recovery; completion controls and metadata
+  capacity; worktree lifecycle; and focused cross-platform correctness and download
+  hardening. Upstream Herdr owns general behavior unless a maintained delta changes
+  it.
 
 ## Installation, Update, and Uninstall
 

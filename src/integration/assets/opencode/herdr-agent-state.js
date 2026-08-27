@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=15
+// HERDR_INTEGRATION_VERSION=16
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -87,7 +87,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     return {};
   }
 
-  let requestChain = Promise.resolve();
+  let reportRequestChain = Promise.resolve();
+  let paneRequestChain = Promise.resolve();
   let panePlacementChain = Promise.resolve();
   let currentRootSessionID;
   let unscopedErrorBlocked = false;
@@ -206,13 +207,19 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
   }
 
   function request(method, params, allowWhileDisposing = false) {
-    const pending = requestChain.then(() => {
-      if (disposed || (disposing && !allowWhileDisposing)) {
-        return;
-      }
-      return requestOnce(method, params, allowWhileDisposing);
-    });
-    requestChain = pending.catch(() => {});
+    if (disposed || (disposing && !allowWhileDisposing)) {
+      return Promise.resolve();
+    }
+    return requestOnce(method, params, allowWhileDisposing);
+  }
+
+  function paneRequest(method, params, allowWhileDisposing = false) {
+    const pending = paneRequestChain.then(() => request(
+      method,
+      params,
+      allowWhileDisposing,
+    ));
+    paneRequestChain = pending.catch(() => {});
     return pending;
   }
 
@@ -221,13 +228,17 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     if (!paneId) {
       return Promise.resolve();
     }
-    return request(method, {
-      pane_id: paneId,
-      source: SOURCE,
-      agent: AGENT,
-      seq: nextReportSeq(),
-      ...params,
-    });
+    const pending = reportRequestChain.then(() =>
+      request(method, {
+        pane_id: paneId,
+        source: SOURCE,
+        agent: AGENT,
+        seq: nextReportSeq(),
+        ...params,
+      }),
+    );
+    reportRequestChain = pending.catch(() => {});
+    return pending;
   }
 
   function reportSession(sessionID, sessionStartSource) {
@@ -287,6 +298,15 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
   function subagentName(sessionID) {
     const suffix = createHash("sha256").update(sessionID).digest("hex").slice(0, 12);
     return `opencode-${suffix}`;
+  }
+
+  async function agentStartSucceeded(name, paneID, response) {
+    if (responseResult(response, "agent_started")) {
+      return true;
+    }
+    const observedResponse = await request("agent.get", { target: name });
+    const observed = responseResult(observedResponse, "agent_info")?.agent;
+    return observed?.name === name && observed?.pane_id === paneID;
   }
 
   function childDirectory(info) {
@@ -363,7 +383,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
       return undefined;
     }
-    const layoutResponse = await request(
+    const layoutResponse = await paneRequest(
       "pane.layout",
       { pane_id: rootPaneID },
       allowWhileDisposing,
@@ -404,10 +424,14 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     if (!paneID) {
       return true;
     }
-    const response = await request("pane.close", { pane_id: paneID }, allowWhileDisposing);
+    const response = await paneRequest(
+      "pane.close",
+      { pane_id: paneID },
+      allowWhileDisposing,
+    );
     let closed = Boolean(responseResult(response, "ok")) || responseErrorCode(response) === "pane_not_found";
     if (!closed) {
-      const layoutResponse = await request(
+      const layoutResponse = await paneRequest(
         "pane.layout",
         { pane_id: paneID },
         allowWhileDisposing,
@@ -467,7 +491,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         if (child.pendingSplitPaneIDs) {
           paneID = await recoverPendingSplit(sessionID);
         } else {
-          const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
+          const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
           const layout = responseResult(layoutResponse, "pane_layout")?.layout;
           const target = splitTarget(layout);
           if (
@@ -480,7 +504,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           }
 
           child.pendingSplitPaneIDs = layoutPaneIDs(layout);
-          const splitResponse = await request("pane.split", {
+          const splitResponse = await paneRequest("pane.split", {
             target_pane_id: target.paneID,
             direction: target.direction,
             ratio: 0.5,
@@ -509,8 +533,9 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         releasePanePlacement();
       }
 
+      const name = subagentName(sessionID);
       const startResponse = await request("agent.start", {
-        name: subagentName(sessionID),
+        name,
         kind: AGENT,
         pane_id: paneID,
         args: [
@@ -522,7 +547,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         ],
         timeout_ms: SUBAGENT_START_TIMEOUT_MS,
       });
-      if (!responseResult(startResponse, "agent_started")) {
+      if (!(await agentStartSucceeded(name, paneID, startResponse))) {
         await closeChildPane(sessionID, disposing);
       }
     } finally {
@@ -806,7 +831,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     serverCreatedSessions.clear();
     currentRootSessionID = undefined;
     unscopedErrorBlocked = false;
-    requestChain = Promise.resolve();
+    reportRequestChain = Promise.resolve();
+    paneRequestChain = Promise.resolve();
   }
 
   return {

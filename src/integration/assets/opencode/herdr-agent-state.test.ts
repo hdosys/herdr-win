@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
+import { createHash } from "node:crypto";
 
 const requests: unknown[] = [];
 const clients: FakeClient[] = [];
@@ -623,6 +624,138 @@ test("opens concurrent direct child sessions in adaptive same-tab splits", async
   await plugin.event(sessionStatusEvent("child-one", { type: "idle" }));
   expect(requests.map(requestMethod)).toEqual(["pane.close"]);
   expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+});
+
+test("does not let a pending agent start block later pane placement", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+  clients.length = 0;
+  autoAcknowledge = false;
+
+  let dispatched = waitForNextRequest();
+  const first = plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-one",
+        info: { id: "child-one", parentID: "root-session" },
+      },
+    },
+  });
+  await dispatched;
+  expect(requestMethod(requests[0])).toBe("pane.layout");
+
+  dispatched = waitForNextRequest();
+  acknowledgeRequest(0, 0, {
+    result: {
+      type: "pane_layout",
+      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+    },
+  });
+  await dispatched;
+  expect(requestMethod(requests[1])).toBe("pane.split");
+
+  dispatched = waitForNextRequest();
+  acknowledgeRequest(1, 1, {
+    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
+  });
+  await dispatched;
+  expect(requestMethod(requests[2])).toBe("agent.start");
+
+  dispatched = waitForNextRequest();
+  const second = plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-two",
+        info: { id: "child-two", parentID: "root-session" },
+      },
+    },
+  });
+  await dispatched;
+  expect(requestMethod(requests[3])).toBe("pane.layout");
+
+  dispatched = waitForNextRequest();
+  acknowledgeRequest(3, 3, {
+    result: {
+      type: "pane_layout",
+      layout: {
+        panes: [
+          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
+        ],
+      },
+    },
+  });
+  await dispatched;
+  expect(requestMethod(requests[4])).toBe("pane.split");
+
+  dispatched = waitForNextRequest();
+  acknowledgeRequest(4, 4, {
+    result: { type: "pane_info", pane: { pane_id: "test:p3" } },
+  });
+  await dispatched;
+  expect(requestMethod(requests[5])).toBe("agent.start");
+
+  acknowledgeRequest(2, 2, {
+    result: { type: "agent_started", agent: { pane_id: "test:p2" }, argv: [] },
+  });
+  acknowledgeRequest(5, 5, {
+    result: { type: "agent_started", agent: { pane_id: "test:p3" }, argv: [] },
+  });
+  await Promise.all([first, second]);
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.layout",
+    "pane.split",
+    "agent.start",
+    "pane.layout",
+    "pane.split",
+    "agent.start",
+  ]);
+});
+
+test("retains a child pane when the agent start response is lost", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+
+  const sessionID = "child-session";
+  const name = `opencode-${createHash("sha256").update(sessionID).digest("hex").slice(0, 12)}`;
+  enqueueResult("pane.layout", {
+    type: "pane_layout",
+    layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+  });
+  enqueueResult("pane.split", { type: "pane_info", pane: { pane_id: "test:p2" } });
+  enqueueResult("agent.start", { type: "ok" });
+  enqueueResult("agent.get", {
+    type: "agent_info",
+    agent: { name, pane_id: "test:p2" },
+  });
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID,
+        info: { id: sessionID, parentID: "root-session" },
+      },
+    },
+  });
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.layout",
+    "pane.split",
+    "agent.start",
+    "agent.get",
+  ]);
 });
 
 test("keeps the child pane when delayed idle disagrees with live status", async () => {

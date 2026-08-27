@@ -1,4 +1,4 @@
-From 3ca666a8250e81bc1ac88bf6119e81712e38bd62 Mon Sep 17 00:00:00 2001
+From a1a6a080c8aef612c116114f7dfe9339edc27b0f Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/11] feat(windows): manage fork distribution
@@ -7,7 +7,7 @@ Subject: [PATCH 3/11] feat(windows): manage fork distribution
  .cargo/config.toml                            |    2 +
  Cargo.toml                                    |   12 +
  README.zh-CN.md                               |    2 +-
- build.rs                                      |   60 +-
+ build.rs                                      |   65 +-
  docs/next/README.zh-CN.md                     |    2 +-
  .../src/content/docs/cli-reference.mdx        |    5 +-
  .../next/website/src/content/docs/install.mdx |   34 +-
@@ -80,7 +80,7 @@ Subject: [PATCH 3/11] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 76 files changed, 13858 insertions(+), 2442 deletions(-)
+ 76 files changed, 13863 insertions(+), 2442 deletions(-)
  create mode 100644 .cargo/config.toml
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
@@ -179,7 +179,7 @@ index 083db6de437a523e72fddbdabcc5c7f6156122b3..b3ce316fa922c223a140fc97352441e8
  然后在工作所在的目录启动它：
  
 diff --git a/build.rs b/build.rs
-index b7a6a00549f9cc795da91ed00fe61db406013df1..c0dca7384c2335a777619e58a3bab44d73ed4241 100644
+index b7a6a00549f9cc795da91ed00fe61db406013df1..864aa9c67a4a2ba6f3f9d6cfcc1fd053537337a5 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -29,6 +29,43 @@ fn env_bool(name: &str) -> Option<bool> {
@@ -263,6 +263,21 @@ index b7a6a00549f9cc795da91ed00fe61db406013df1..c0dca7384c2335a777619e58a3bab44d
      let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
      let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
      let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
+@@ -61,9 +119,14 @@ fn main() {
+         .to_string();
+ 
+     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
++    let zig_cache = vendored_dir.join(".zig-cache");
+     let mut command = Command::new(zig);
+     command
+         .arg("build")
++        .arg("--cache-dir")
++        .arg(zig_cache.join("local"))
++        .arg("--global-cache-dir")
++        .arg(zig_cache.join("global"))
+         .arg("-Demit-lib-vt")
+         .arg(format!("-Doptimize={optimize}"))
+         .arg(format!("-Dsimd={simd}"))
 diff --git a/docs/next/README.zh-CN.md b/docs/next/README.zh-CN.md
 index a762bc8657bb69587394723c811da8a172c9a65f..2d7483ba6091206c0ad31d4861f68ca65470e4a1 100644
 --- a/docs/next/README.zh-CN.md

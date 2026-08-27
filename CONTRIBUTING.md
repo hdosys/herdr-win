@@ -17,17 +17,19 @@ Before editing, classify the change:
 - **Upstream Herdr behavior:** propose it to
   [`herdrdev/herdr`](https://github.com/herdrdev/herdr) under that
   project's contribution policy. Do not use the fork to bypass upstream review.
-- **Maintained Windows behavior:** update the owning logical mailbox in
-  `patches/delta/`.
+- **Maintained Windows behavior:** implement and validate it on a topic branch or
+  `candidate/development`. Update the owning logical mailbox in `patches/delta/`
+  only after the current user explicitly authorizes a patch update or release.
 - **Fork control plane:** edit repository branding, contributor and delta-workflow
   automation, patch inventory tests, or the two workflows directly in this
   repository.
 - **Frozen patch archive:** do not refresh or rename files in
   `patches/upstream/`; existing links must remain valid.
-- **Stable user-visible fork behavior:** update `PRODUCT.md`, the owning logical
-  mailbox when applicable, and the mirrored public README projection.
-- **Stable technical design:** update `ARCHITECTURE.md` and the owning code/tests
-  or mailbox together.
+- **Stable user-visible fork behavior:** update `PRODUCT.md` and the mirrored
+  public README projection. Update an applicable logical mailbox only under the
+  explicit patch authorization below.
+- **Stable technical design:** update `ARCHITECTURE.md` and the owning code/tests.
+  Update a mailbox only under the explicit patch authorization below.
 - **Selected future product work:** use `BACKLOG.md` only after the current user
   chooses the outcome for later implementation. It never owns findings,
   verification assignments, evidence, or test reminders.
@@ -45,7 +47,20 @@ current behavior, and expected behavior.
 The patch queue is the release representation, not the day-to-day editing surface.
 Do not make a product-source edit only in this repository's control checkout. The
 development build starts from recorded `BASE`, so every finished product
-change must still be represented by the canonical queue.
+change selected for a release must eventually be represented by the canonical
+queue.
+
+Patch promotion is a hard user-authorization boundary. Ordinary development,
+candidate building, installer acceptance, clean-slate work, and completion of a
+topic or development commit never authorize patch generation or a write under
+`patches/`. Before invoking `delta_workflow.py finalize`, `git format-patch`, or
+any equivalent patch-generation path, the current user must have explicitly
+requested an update, regeneration, or finalization of the maintained patches, or
+creation or publication of a release. If the current request does not already
+name that outcome, stop and ask the user explicitly before the first such action.
+Do not carry authorization from an earlier task. Until authorized, commit and push
+only the topic branch or `candidate/development`; leave `patches/delta/`, its
+`series`, and `BASE` byte-identical.
 
 Maintained product-source work uses one long-lived shared worktree on
 `candidate/development`. Its local branch and remote
@@ -55,8 +70,9 @@ the control checkout. Ordinary sessions reopen, coordinate, and work directly in
 that development tree. They do not create a worktree per issue.
 
 Integrate every completed topic into `candidate/development` immediately after its
-focused check and push that cumulative branch. User acceptance gates patch-queue
-promotion, not routine integration of completed development work.
+focused check and push that cumulative branch. An explicit current-user patch or
+release request gates patch-queue promotion, not routine integration of completed
+development work.
 
 Only when `candidate/development` does not yet exist locally or on `origin`, create
 the development tree from the exact local commit recorded in `BASE`, replay the
@@ -107,9 +123,11 @@ topic worktrees. A committed topic head that is not an ancestor of the developme
 head blocks the operation. Dirty uncommitted topic state remains in progress and is
 not part of the reported completed superset.
 
-A user statement that the current fixed installer works, or an explicit request to
-regenerate the patches, authorizes promotion of the complete reported development
-tree. It never promotes an individual topic. One session owns the complete path:
+Only an explicit current-user request to update, regenerate, or finalize the
+maintained patches, or to create or publish a release, authorizes promotion of the
+complete reported development tree. A statement that the fixed installer works
+does not authorize patch generation. Authorization never promotes an individual
+topic. One session owns the complete path:
 
 1. Reinspect shared ownership, collect completed handoffs, and stop overlapping
    writes. Reuse the focused evidence while its source, inputs, and environment
@@ -157,10 +175,10 @@ Installer acceptance does not authorize publication. Release remains a separate
 explicit user request.
 
 There is no scheduled or nightly delta replay. Run replay and mailbox inventory
-only during an explicitly approved promotion, an explicitly assigned release, or
-a separately requested diagnosis. A release and any `BASE` refresh remain blocked
-until the complete accepted development tree has been promoted into the canonical
-queue.
+only during a patch promotion explicitly authorized under the boundary above, an
+explicitly assigned release, or a separately requested read-only diagnosis. A
+release and any `BASE` refresh remain blocked until the complete accepted
+development tree has been promoted into the canonical queue.
 
 Keep the queue small and responsibility-oriented rather than mirroring development
 commit history. Never hand-edit a diff to force application; regenerate the owning

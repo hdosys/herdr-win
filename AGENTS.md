@@ -46,6 +46,20 @@ active memory owner.
   `BASE` records the exact commit behind the latest non-draft, non-prerelease
   upstream stable release selected during the last explicit manual refresh. It
   never tracks upstream `master` or a preview tag.
+- Patch generation and patch-queue writes require explicit current-user
+  authorization in the current task. Unless the user explicitly requests an
+  update, regeneration, or finalization of the maintained patches, or explicitly
+  requests creation or publication of a release, never invoke a patch-generation
+  or mailbox-finalization command and never create, modify, reorder, rename,
+  stage, commit, or push anything under `patches/`, including `patches/delta/BASE`
+  and `patches/delta/series`. A source fix, completed topic, development-branch
+  integration, matching replay tree, installer build or acceptance, clean-slate
+  request, improvement task, or repository invariant does not imply this
+  authorization. Work remains on the topic branch or `candidate/development`.
+  When the current request does not already name the patch update or release,
+  stop immediately before the first patch-generation or patch-writing action and
+  ask the user explicitly. Authorization from an earlier task never carries
+  forward.
 - Never fetch, clone, query, download, check out, replay, test, or otherwise obtain
   anything from official upstream `herdrdev/herdr` unless the user explicitly
   requests that exact upstream operation in the current task. This prohibition also

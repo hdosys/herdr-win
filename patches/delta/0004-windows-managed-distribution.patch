@@ -1,4 +1,4 @@
-From 365420ff837153c9022e157df8fdaa7403517c47 Mon Sep 17 00:00:00 2001
+From 30acfbc5b8adde1def040bb4f96ef197663253d9 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/11] feat(windows): manage fork distribution
@@ -51,7 +51,7 @@ Subject: [PATCH 3/11] feat(windows): manage fork distribution
  src/config.rs                                 |    2 +-
  src/config/model.rs                           |   65 -
  src/distribution.rs                           |   13 +
- src/integration/tests.rs                      |   30 +-
+ src/integration/tests.rs                      |  105 +-
  src/main.rs                                   |   73 +-
  src/managed_install.rs                        |  322 ++
  src/platform/mod.rs                           |   30 +-
@@ -77,7 +77,7 @@ Subject: [PATCH 3/11] feat(windows): manage fork distribution
  website/index.html                            |    2 +-
  website/install.ps1                           |  815 -----
  website/scripts/prepare-docs.mjs              |    1 -
- 73 files changed, 12132 insertions(+), 2062 deletions(-)
+ 73 files changed, 12192 insertions(+), 2077 deletions(-)
  create mode 100644 .cargo/config.toml
  create mode 100644 packaging/windows/installer/artwork/README.md
  create mode 100644 packaging/windows/installer/artwork/installer-welcome-finish-164x314.bmp
@@ -56859,10 +56859,10 @@ index 0000000000000000000000000000000000000000..e16b775dcacee3a4677a8010a4961a13
 +pub(crate) const WINDOWS_RELEASE_DOWNLOAD_PREFIX: &str =
 +    "https://github.com/hdosys/herdr-win/releases/download/";
 diff --git a/src/integration/tests.rs b/src/integration/tests.rs
-index d54183f2957f63fd7868f0ac22843c2f08fc0588..30b1369fff36e5d1de28556a8605d670ee7fdf2d 100644
+index d54183f2957f63fd7868f0ac22843c2f08fc0588..e7a2a81f2012d160748402437453216e7eb09b51 100644
 --- a/src/integration/tests.rs
 +++ b/src/integration/tests.rs
-@@ -2801,12 +2801,30 @@ fn bundled_integration_assets_report_session_refs() {
+@@ -2801,25 +2801,64 @@ fn bundled_integration_assets_report_session_refs() {
      );
      assert!(!CODEX_HOOK_ASSET.contains("\"state\": action"));
      assert!(!CODEX_HOOK_ASSET.contains("pane.release_agent"));
@@ -56897,8 +56897,106 @@ index d54183f2957f63fd7868f0ac22843c2f08fc0588..30b1369fff36e5d1de28556a8605d670
 +            || KIMI_HOOK_ASSET.contains("--state $Action")
 +    );
      assert!(!KIMI_HOOK_ASSET.contains("pane.release_agent"));
-     assert!(COPILOT_HOOK_ASSET.contains("agent_session_id"));
-     assert!(COPILOT_HOOK_ASSET.contains("pane.report_agent_session"));
+-    assert!(COPILOT_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(COPILOT_HOOK_ASSET.contains("pane.report_agent_session"));
++    assert!(
++        COPILOT_HOOK_ASSET.contains("agent_session_id")
++            || COPILOT_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        COPILOT_HOOK_ASSET.contains("pane.report_agent_session")
++            || COPILOT_HOOK_ASSET.contains("report-agent-session")
++    );
+     assert!(!COPILOT_HOOK_ASSET.contains("\"state\":"));
+     assert!(!COPILOT_HOOK_ASSET.contains("pane.release_agent"));
+-    assert!(DEVIN_HOOK_ASSET.contains("HERDR_DEVIN_LIST_JSON"));
+-    assert!(DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent_session\""));
++    assert!(
++        DEVIN_HOOK_ASSET.contains("HERDR_DEVIN_LIST_JSON")
++            || DEVIN_HOOK_ASSET.contains("devin list --format json")
++    );
++    assert!(
++        DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent_session\"")
++            || DEVIN_HOOK_ASSET.contains("report-agent-session")
++    );
+     assert!(!DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent\""));
+     assert!(!DEVIN_HOOK_ASSET.contains("\"state\":"));
+     assert!(!DEVIN_HOOK_ASSET.contains("pane.release_agent"));
+-    assert!(DEVIN_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(DROID_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(DROID_HOOK_ASSET.contains("pane.report_agent_session"));
++    assert!(
++        DEVIN_HOOK_ASSET.contains("agent_session_id")
++            || DEVIN_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        DROID_HOOK_ASSET.contains("agent_session_id")
++            || DROID_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        DROID_HOOK_ASSET.contains("pane.report_agent_session")
++            || DROID_HOOK_ASSET.contains("report-agent-session")
++    );
+     assert!(!DROID_HOOK_ASSET.contains("\"state\": action"));
+     assert!(!DROID_HOOK_ASSET.contains("pane.release_agent"));
+     assert!(OPENCODE_PLUGIN_ASSET.contains("properties?.sessionID"));
+@@ -2843,8 +2882,14 @@ fn bundled_integration_assets_report_session_refs() {
+     assert!(CURSOR_HOOK_ASSET.contains("conversation_id"));
+     assert!(CURSOR_HOOK_ASSET.contains("conversationId"));
+     assert!(CURSOR_HOOK_ASSET.contains("sessionId"));
+-    assert!(CURSOR_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(CURSOR_HOOK_ASSET.contains("pane.report_agent_session"));
++    assert!(
++        CURSOR_HOOK_ASSET.contains("agent_session_id")
++            || CURSOR_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        CURSOR_HOOK_ASSET.contains("pane.report_agent_session")
++            || CURSOR_HOOK_ASSET.contains("report-agent-session")
++    );
+     assert!(CURSOR_HOOK_ASSET.contains("hook_event_name"));
+     assert!(CURSOR_HOOK_ASSET.contains("sessionStart"));
+     assert!(!CURSOR_HOOK_ASSET.contains("\"state\":"));
+@@ -2853,15 +2898,33 @@ fn bundled_integration_assets_report_session_refs() {
+     assert!(MASTRACODE_HOOK_ASSET.contains("HERDR_INTEGRATION_VERSION=2"));
+     assert!(MASTRACODE_HOOK_ASSET.contains("session_id"));
+     assert!(!MASTRACODE_HOOK_ASSET.contains("run_id"));
+-    assert!(MASTRACODE_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(MASTRACODE_HOOK_ASSET.contains("pane.report_agent_session"));
+-    assert!(MASTRACODE_HOOK_ASSET.contains("session_start_source"));
+-    assert!(MASTRACODE_HOOK_ASSET.contains("pane.report_agent"));
++    assert!(
++        MASTRACODE_HOOK_ASSET.contains("agent_session_id")
++            || MASTRACODE_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        MASTRACODE_HOOK_ASSET.contains("pane.report_agent_session")
++            || MASTRACODE_HOOK_ASSET.contains("report-agent-session")
++    );
++    assert!(
++        MASTRACODE_HOOK_ASSET.contains("session_start_source")
++            || MASTRACODE_HOOK_ASSET.contains("--session-start-source")
++    );
++    assert!(
++        MASTRACODE_HOOK_ASSET.contains("pane.report_agent")
++            || MASTRACODE_HOOK_ASSET.contains("report-agent")
++    );
+     assert!(GROK_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=grok"));
+     assert!(GROK_HOOK_ASSET.contains("GROK_SESSION_ID"));
+     assert!(GROK_HOOK_ASSET.contains("sessionId"));
+-    assert!(GROK_HOOK_ASSET.contains("agent_session_id"));
+-    assert!(GROK_HOOK_ASSET.contains("pane.report_agent_session"));
++    assert!(
++        GROK_HOOK_ASSET.contains("agent_session_id")
++            || GROK_HOOK_ASSET.contains("--agent-session-id")
++    );
++    assert!(
++        GROK_HOOK_ASSET.contains("pane.report_agent_session")
++            || GROK_HOOK_ASSET.contains("report-agent-session")
++    );
+     assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
+     assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
+     assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));
 diff --git a/src/main.rs b/src/main.rs
 index f697d9b3f454599909136c85fac058ec9486184d..791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b 100644
 --- a/src/main.rs

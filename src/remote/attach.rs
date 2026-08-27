@@ -514,6 +514,7 @@ struct RemoteReleaseMetadata {
 
 #[derive(Deserialize)]
 struct RemotePreviewManifest {
+    prerelease: bool,
     build_id: String,
     protocol: u32,
     assets: BTreeMap<String, RemoteAssetRef>,
@@ -3049,6 +3050,11 @@ fn preview_assets_for_build<'a>(
     manifest: &'a RemotePreviewManifest,
     build_id: &str,
 ) -> io::Result<(u32, &'a BTreeMap<String, RemoteAssetRef>)> {
+    if manifest.prerelease {
+        return Err(io::Error::other(
+            "update manifest is marked as a GitHub prerelease",
+        ));
+    }
     if manifest.build_id == build_id {
         return Ok((manifest.protocol, &manifest.assets));
     }
@@ -4745,8 +4751,9 @@ mod tests {
 
     #[test]
     fn remote_preview_manifest_falls_back_to_archived_exact_build_assets() {
-        let manifest: RemotePreviewManifest = serde_json::from_str(
+        let mut manifest: RemotePreviewManifest = serde_json::from_str(
             r#"{
+                "prerelease": false,
                 "build_id": "2026-06-06-new",
                 "protocol": 12,
                 "assets": {
@@ -4776,6 +4783,9 @@ mod tests {
         assert_eq!(protocol, 11);
         assert_eq!(asset.url(), "https://example.com/old");
         assert_eq!(asset.sha256(), Some("old"));
+
+        manifest.prerelease = true;
+        assert!(preview_assets_for_build(&manifest, "2026-06-02-old").is_err());
     }
 
     #[test]

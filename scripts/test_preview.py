@@ -50,6 +50,7 @@ class PreviewNotesTests(unittest.TestCase):
             )
             data = json.loads(content)
             self.assertEqual(data["channel"], "preview")
+            self.assertIs(data["prerelease"], False)
             self.assertEqual(data["release_version"], "2026.06.02.1")
             self.assertEqual(data["build_id"], "abcdef123456.7890abcdef12")
             self.assertEqual(
@@ -87,6 +88,10 @@ class PreviewNotesTests(unittest.TestCase):
             self.assertEqual(
                 data["builds"]["abcdef123456.7890abcdef12"]["release_version"],
                 "2026.06.02.1",
+            )
+            self.assertIs(
+                data["builds"]["abcdef123456.7890abcdef12"]["prerelease"],
+                False,
             )
 
     def test_herdr_win_asset_names_require_real_calver(self):

@@ -311,6 +311,7 @@ def build_manifest(
         "built_at": built_at,
         "protocol": protocol,
         "tag": tag,
+        "prerelease": False,
         "assets": assets,
     }
     if release_version is not None:
@@ -327,6 +328,7 @@ def build_manifest(
     manifest = {
         "schema_version": 1,
         "channel": "preview",
+        "prerelease": False,
         "base_version": normalize_version(base_version),
         "build_id": build_id,
         "commit": commit,

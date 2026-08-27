@@ -290,6 +290,7 @@ struct ManifestReleaseMetadata {
 #[derive(Deserialize)]
 struct PreviewManifest {
     channel: String,
+    prerelease: bool,
     base_version: String,
     build_id: String,
     release_version: String,
@@ -573,10 +574,14 @@ fn is_fork_build_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn preview_release_should_install(
+fn published_release_should_install(
     latest: ReleaseVersion,
     current: Option<&str>,
+    prerelease: bool,
 ) -> Result<bool, String> {
+    if prerelease {
+        return Ok(false);
+    }
     let Some(current) = current else {
         return Ok(true);
     };
@@ -612,7 +617,11 @@ fn release_info_from_preview_manifest(
             manifest.release_version
         )
     })?;
-    if !preview_release_should_install(release_version, crate::build_info::release_version())? {
+    if !published_release_should_install(
+        release_version,
+        crate::build_info::release_version(),
+        manifest.prerelease,
+    )? {
         return Ok(None);
     }
     let notes_body = manifest.notes.trim().to_string();
@@ -2692,23 +2701,30 @@ mod cross_platform_tests {
     }
 
     #[test]
-    fn published_preview_rejects_equal_or_older_calver() {
+    fn published_release_rejects_prerelease_and_non_newer_calver() {
         let latest = ReleaseVersion::parse("2026.08.12.2").unwrap();
 
-        assert_eq!(preview_release_should_install(latest, None), Ok(true));
         assert_eq!(
-            preview_release_should_install(latest, Some("2026.08.12.1")),
+            published_release_should_install(latest, None, false),
             Ok(true)
         );
         assert_eq!(
-            preview_release_should_install(latest, Some("2026.08.12.2")),
+            published_release_should_install(latest, None, true),
             Ok(false)
         );
         assert_eq!(
-            preview_release_should_install(latest, Some("2026.08.13.1")),
+            published_release_should_install(latest, Some("2026.08.12.1"), false),
+            Ok(true)
+        );
+        assert_eq!(
+            published_release_should_install(latest, Some("2026.08.12.2"), false),
             Ok(false)
         );
-        assert!(preview_release_should_install(latest, Some("not-calver")).is_err());
+        assert_eq!(
+            published_release_should_install(latest, Some("2026.08.13.1"), false),
+            Ok(false)
+        );
+        assert!(published_release_should_install(latest, Some("not-calver"), false).is_err());
     }
 
     #[test]
@@ -2843,6 +2859,7 @@ mod cross_platform_tests {
         };
         let manifest = PreviewManifest {
             channel: "preview".to_string(),
+            prerelease: false,
             base_version: "9.9.9".to_string(),
             build_id: build_id.to_string(),
             release_version: "2026.07.31.1".to_string(),
@@ -2908,6 +2925,7 @@ mod cross_platform_tests {
         )]);
         let manifest = PreviewManifest {
             channel: "preview".to_string(),
+            prerelease: false,
             base_version: "9.9.9".to_string(),
             build_id: build_id.to_string(),
             release_version: "2026.08.12.2".to_string(),

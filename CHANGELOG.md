@@ -4,6 +4,11 @@ This changelog records only user-visible changes released by the `herdr-win` for
 
 ## Unreleased
 
+### Changed
+- Managed Agent startup now stays in the selected interactive shell. PowerShell,
+  cmd, Nushell, Git Bash, and `sh` use their native command syntax instead of a
+  PowerShell transport.
+
 ## [2026.08.27.5] - 2026-08-27
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

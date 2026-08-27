@@ -127,11 +127,13 @@ behavior; code and tests remain the detailed implementation truth.
   shell-only tab root once; an unchanged reload cannot duplicate pending work.
   Restore or reattach at startup, live handoff, `--no-session`, pane split, and
   existing managed-Agent terminals do not queue this path. Native Agent resume
-  remains the only Agent launch path for restored Agent terminals. On Windows,
-  argument-bearing PowerShell launches resolve only executable `PATHEXT`
-  applications before `Start-Process`, while argument-free launches retain one
-  concise native command line. The Windows-focused Rust tests and a real shell
-  round trip own that boundary.
+  remains the only Agent launch path for restored Agent terminals. Managed
+  submission stays in the selected interactive shell: PowerShell resolves only
+  executable `PATHEXT` applications before `Start-Process`, cmd uses escaped cmd
+  syntax, Nushell uses explicit external invocation, and Git Bash uses POSIX
+  quoting. Unknown Windows shells fail closed instead of routing through another
+  shell. Linux and macOS retain the same shell-native path, including Nushell.
+  The Windows-focused Rust tests and a real shell round trip own that boundary.
 - Mailbox 0010 owns full-lifecycle hook-authority recovery after a temporary
   recognized foreground-Agent takeover. Suppression remains active during the
   conflict, then the original still-running Agent may re-anchor the same session

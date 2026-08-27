@@ -191,10 +191,11 @@ namespace HerdrWin.Probes
                 }
                 if (!AssignProcessToJobObject(job, process.Process))
                 {
+                    int assignError = Marshal.GetLastWin32Error();
                     TerminateProcess(process.Process, 1);
                     WaitForSingleObject(process.Process, 5000);
                     throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
+                        assignError,
                         "AssignProcessToJobObject failed");
                 }
                 if (ResumeThread(process.Thread) == InfiniteResumeFailure)

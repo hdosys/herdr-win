@@ -104,8 +104,20 @@ if ($initialLaunchDirectories.Count -ne 0) {
 $initialProcesses = @(Get-ExactRuntimeProcesses $exe)
 $initialProcessIds = @($initialProcesses | ForEach-Object { [int] $_.ProcessId })
 
-$probeId = [Guid]::NewGuid().ToString('N').Substring(0, 6)
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "h$probeId"
+$probeId = $null
+$temporary = $null
+for ($attempt = 0; $attempt -lt 10; $attempt++) {
+    $candidateId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    $candidateRoot = Join-Path ([IO.Path]::GetTempPath()) "h$candidateId"
+    if (-not [IO.Directory]::Exists($candidateRoot)) {
+        $probeId = $candidateId
+        $temporary = $candidateRoot
+        break
+    }
+}
+if ($null -eq $temporary) {
+    throw 'could not allocate a unique interactive server probe root'
+}
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $batch = Join-Path $temporary 'launch.cmd'
 [IO.File]::WriteAllLines(

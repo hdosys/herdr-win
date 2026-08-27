@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=14
+// HERDR_INTEGRATION_VERSION=15
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -78,7 +78,7 @@ function promptEventKey(type, properties) {
     : undefined;
 }
 
-export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
+export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {}) => {
   if (
     process.env.HERDR_ENV !== "1" ||
     !process.env.HERDR_SOCKET_PATH ||
@@ -260,6 +260,10 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     return result?.type === expectedType ? result : undefined;
   }
 
+  function responseErrorCode(response) {
+    return typeof response?.error?.code === "string" ? response.error.code : undefined;
+  }
+
   async function serverAcceptsAttach() {
     if (!attachServerUrl) {
       return false;
@@ -334,16 +338,43 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     };
   }
 
-  function closeChildPane(sessionID, allowWhileDisposing = false) {
+  async function childSessionState(sessionID) {
+    if (typeof client?.session?.status !== "function") {
+      return "idle";
+    }
+    try {
+      const response = await client.session.status();
+      const statuses = response?.data;
+      if (!statuses || typeof statuses !== "object") {
+        return undefined;
+      }
+      const status = statuses[sessionID];
+      return status === undefined ? "idle" : stateFromSessionStatus(status);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function closeChildPane(sessionID, allowWhileDisposing = false) {
     const child = children.get(sessionID);
     const paneID = child?.paneID;
-    if (child) {
+    if (!paneID) {
+      return true;
+    }
+    const response = await request("pane.close", { pane_id: paneID }, allowWhileDisposing);
+    let closed = Boolean(responseResult(response, "ok")) || responseErrorCode(response) === "pane_not_found";
+    if (!closed) {
+      const layoutResponse = await request(
+        "pane.layout",
+        { pane_id: paneID },
+        allowWhileDisposing,
+      );
+      closed = responseErrorCode(layoutResponse) === "pane_not_found";
+    }
+    if (closed && child.paneID === paneID) {
       child.paneID = undefined;
     }
-    if (!paneID) {
-      return Promise.resolve();
-    }
-    return request("pane.close", { pane_id: paneID }, allowWhileDisposing);
+    return closed;
   }
 
   async function openChildPane(sessionID) {
@@ -419,11 +450,11 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
         if (typeof paneID !== "string" || !paneID) {
           return;
         }
+        child.paneID = paneID;
         if (disposing || !child.working || retiredChildren.has(sessionID)) {
-          await request("pane.close", { pane_id: paneID }, disposing);
+          await closeChildPane(sessionID, disposing);
           return;
         }
-        child.paneID = paneID;
       } finally {
         releasePanePlacement();
       }
@@ -447,6 +478,44 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     } finally {
       child.spawning = false;
     }
+  }
+
+  function reconcileChildPane(sessionID, allowWhileDisposing = false) {
+    const child = children.get(sessionID);
+    if (!child) {
+      return Promise.resolve();
+    }
+    const previous = child.reconcileChain ?? Promise.resolve();
+    const pending = previous.then(async () => {
+      if (children.get(sessionID) !== child) {
+        return;
+      }
+      if (child.working && !disposing && !retiredChildren.has(sessionID)) {
+        if (!child.paneID) {
+          await openChildPane(sessionID);
+        }
+        return;
+      }
+      if (!child.paneID) {
+        return;
+      }
+      if (!disposing && !retiredChildren.has(sessionID)) {
+        const liveState = await childSessionState(sessionID);
+        if (child.working) {
+          return;
+        }
+        if (liveState === "working") {
+          child.working = true;
+          return;
+        }
+        if (liveState !== "idle") {
+          return;
+        }
+      }
+      await closeChildPane(sessionID, allowWhileDisposing || disposing);
+    });
+    child.reconcileChain = pending.catch(() => {});
+    return pending;
   }
 
   function lifecycleFor(sessionID) {
@@ -506,15 +575,21 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
     return activePrompts.size > 0 ? "blocked" : "working";
   }
 
-  function retireChild(sessionID) {
+  async function retireChild(sessionID) {
     if (!sessionID) {
-      return Promise.resolve();
+      return;
     }
     clearPromptsForSession(sessionID);
-    const closing = closeChildPane(sessionID);
-    children.delete(sessionID);
     retiredChildren.add(sessionID);
-    return closing;
+    const child = children.get(sessionID);
+    if (!child) {
+      return;
+    }
+    child.working = false;
+    await reconcileChildPane(sessionID);
+    if (!child.paneID && children.get(sessionID) === child) {
+      children.delete(sessionID);
+    }
   }
 
   function retireChildrenOutsideRoot(rootSessionID) {
@@ -648,13 +723,16 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
       return;
     }
     disposing = true;
+    for (const child of children.values()) {
+      child.working = false;
+    }
+    await Promise.all(
+      [...children.keys()].map((sessionID) => reconcileChildPane(sessionID, true)),
+    );
     for (const finish of [...activeClients.values()]) {
       finish();
     }
     activeClients.clear();
-    await Promise.all(
-      [...children.keys()].map((sessionID) => closeChildPane(sessionID, true)),
-    );
     disposed = true;
     for (const lifecycle of sessionLifecycle.values()) {
       clearPendingError(lifecycle);
@@ -711,12 +789,13 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
             working: false,
             spawning: false,
             paneID: undefined,
+            reconcileChain: Promise.resolve(),
           };
           child.info = info;
           children.set(info.id, child);
           if (type === "session.created" && info.parentID === currentRootSessionID) {
             child.working = true;
-            await openChildPane(info.id);
+            await reconcileChildPane(info.id);
           }
         } else {
           await retireChild(info.id);
@@ -735,10 +814,10 @@ export const HerdrAgentStatePlugin = async ({ directory, serverUrl } = {}) => {
         const child = children.get(sessionID);
         if (childStatus === "working") {
           child.working = true;
-          await openChildPane(sessionID);
+          await reconcileChildPane(sessionID);
         } else if (childStatus === "idle" || type === "session.idle") {
           child.working = false;
-          await closeChildPane(sessionID);
+          await reconcileChildPane(sessionID);
         }
         const state = updatePromptState(type, properties, sessionID)
           ?? CHILD_EVENT_STATES.get(type);

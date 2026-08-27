@@ -72,7 +72,7 @@ async function loadPluginFactory() {
   return HerdrAgentStatePlugin;
 }
 
-async function loadPlugin(context?: { directory?: string; serverUrl?: URL }) {
+async function loadPlugin(context?: { client?: unknown; directory?: string; serverUrl?: URL }) {
   return (await loadPluginFactory())(context);
 }
 
@@ -86,14 +86,18 @@ function enqueueResult(method: string, result: unknown) {
   methodResults.set(method, results);
 }
 
-function acknowledgeRequest(clientIndex: number, requestIndex: number) {
+function acknowledgeRequest(
+  clientIndex: number,
+  requestIndex: number,
+  response: Record<string, unknown> = { result: { type: "ok" } },
+) {
   const request = requests[requestIndex];
   if (!isRecord(request) || typeof request.id !== "string") {
     throw new Error("missing request id");
   }
   clients[clientIndex]?.emit(
     "data",
-    `${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`,
+    `${JSON.stringify({ id: request.id, ...response })}\n`,
   );
 }
 
@@ -104,6 +108,31 @@ function sessionStatusEvent(sessionID: string, status: Record<string, unknown>) 
       properties: { sessionID, status },
     },
   };
+}
+
+async function openDirectChild(
+  plugin: Awaited<ReturnType<typeof loadPlugin>>,
+  sessionID = "child-session",
+) {
+  enqueueResult("pane.layout", {
+    type: "pane_layout",
+    layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+  });
+  enqueueResult("pane.split", { type: "pane_info", pane: { pane_id: "test:p2" } });
+  enqueueResult("agent.start", {
+    type: "agent_started",
+    agent: { pane_id: "test:p2" },
+    argv: [],
+  });
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID,
+        info: { id: sessionID, parentID: "root-session" },
+      },
+    },
+  });
 }
 
 function apiErrorEvent(sessionID?: string) {
@@ -594,6 +623,173 @@ test("opens concurrent direct child sessions in adaptive same-tab splits", async
   await plugin.event(sessionStatusEvent("child-one", { type: "idle" }));
   expect(requests.map(requestMethod)).toEqual(["pane.close"]);
   expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+});
+
+test("keeps the child pane when delayed idle disagrees with live status", async () => {
+  let liveStatus = { type: "busy" };
+  const plugin = await loadPlugin({
+    client: {
+      session: {
+        status: async () => ({ data: { "child-session": liveStatus } }),
+      },
+    },
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+  await openDirectChild(plugin);
+
+  requests.length = 0;
+  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  expect(requests).toHaveLength(0);
+
+  liveStatus = { type: "idle" };
+  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  expect(requests.map(requestMethod)).toEqual(["pane.close"]);
+  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+});
+
+test("reconciles child status changes while attach is starting", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+  clients.length = 0;
+  autoAcknowledge = false;
+
+  const layoutDispatched = waitForNextRequest();
+  const created = plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await layoutDispatched;
+
+  const splitDispatched = waitForNextRequest();
+  acknowledgeRequest(0, 0, {
+    result: {
+      type: "pane_layout",
+      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+    },
+  });
+  await splitDispatched;
+
+  const startDispatched = waitForNextRequest();
+  acknowledgeRequest(1, 1, {
+    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
+  });
+  await startDispatched;
+
+  const idle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  const working = plugin.event(sessionStatusEvent("child-session", { type: "busy" }));
+  acknowledgeRequest(2, 2, {
+    result: {
+      type: "agent_started",
+      agent: { pane_id: "test:p2" },
+      argv: [],
+    },
+  });
+  await Promise.all([created, idle, working]);
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.layout",
+    "pane.split",
+    "agent.start",
+  ]);
+});
+
+test("dispose lets an in-flight child split report its pane before cleanup", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+  clients.length = 0;
+  autoAcknowledge = false;
+
+  const layoutDispatched = waitForNextRequest();
+  const created = plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await layoutDispatched;
+  const splitDispatched = waitForNextRequest();
+  acknowledgeRequest(0, 0, {
+    result: {
+      type: "pane_layout",
+      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+    },
+  });
+  await splitDispatched;
+
+  const disposing = plugin.dispose();
+  expect(clients[1]?.destroyed).toBe(false);
+  const closeDispatched = waitForNextRequest();
+  acknowledgeRequest(1, 1, {
+    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
+  });
+  await closeDispatched;
+  acknowledgeRequest(2, 2);
+  await Promise.all([created, disposing]);
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.layout",
+    "pane.split",
+    "pane.close",
+  ]);
+});
+
+test("retains pane ownership when close is not acknowledged", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  await openDirectChild(plugin);
+
+  requests.length = 0;
+  clients.length = 0;
+  autoAcknowledge = false;
+  const firstCloseDispatched = waitForNextRequest();
+  const firstIdle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  await firstCloseDispatched;
+  const presenceDispatched = waitForNextRequest();
+  acknowledgeRequest(0, 0, {
+    error: { code: "server_unavailable", message: "busy" },
+  });
+  await presenceDispatched;
+  acknowledgeRequest(1, 1, {
+    result: {
+      type: "pane_layout",
+      layout: { panes: [{ pane_id: "test:p2", rect: { width: 100, height: 50 } }] },
+    },
+  });
+  await firstIdle;
+
+  const secondCloseDispatched = waitForNextRequest();
+  const secondIdle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  await secondCloseDispatched;
+  acknowledgeRequest(2, 2);
+  await secondIdle;
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.close",
+    "pane.layout",
+    "pane.close",
+  ]);
 });
 
 test("does not split when the root OpenCode server is not externally reachable", async () => {

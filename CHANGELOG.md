@@ -5,6 +5,26 @@
 
 ## Unreleased
 
+## [2026.08.27.1] - 2026-08-27
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
+### Added
+- OpenCode direct subagents now open in adaptive readable splits beside Main, stay bound to the pane-selected root session after resume, and close when the child becomes idle or is deleted.
+- New persistent sessions can start one configured interactive Agent in each new tab with `[session] auto_start_agent`, including eligible shell roots after a live configuration reload.
+- Managed Agent launches preserve configured arguments through PowerShell, cmd, NuShell, Git Bash, and `sh` on Windows, with explicit NuShell external-command support on Linux and macOS.
+- Interactive Windows remote updates report download, validation, activation, and restart progress.
+
+### Changed
+- Pane and workspace metadata reports can atomically retain up to 64 custom tokens while preserving existing bounds.
+- Agent completion alerts follow the upstream enabled default and can be disabled from **Settings > completion** or with `ui.notify_on_agent_completion = false` without suppressing questions, permission prompts, or errors.
+
+### Fixed
+- Windows SSH provisioning now starts the persistent server reliably in the authenticated user's active desktop session and keeps it independent of the transient SSH channel.
+- Windows worktree removal waits for terminal sessions to release the checkout before unregistering it, and background removal preserves the currently focused workspace.
+- Cancelling an OpenCode response no longer reports an error that asks for attention.
+- A full-lifecycle Agent can regain hook authority after a temporary recognized foreground takeover ends.
+
 ## [2026.08.21.2] - 2026-08-21
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

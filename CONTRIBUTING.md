@@ -334,8 +334,8 @@ separate dispatches:
 2. Review the successful candidate run, then choose `promote` and supply that run
    ID before its artifacts expire. Promotion accepts no replacement CalVer and
    does not replay source, compile, or package; it publishes only the candidate's
-   validated files. If `master` has advanced or the candidate expired, dispatch a
-   new build instead.
+   validated files as one normal, non-prerelease GitHub release and marks it Latest.
+   If `master` has advanced or the candidate expired, dispatch a new build instead.
 
 Do not reuse one CalVer for different source. Linux and macOS publish raw
 `herdr-win_v<CalVer>_{linux,macos}_{amd64,arm64}` executables. Windows publishes
@@ -360,10 +360,12 @@ with no `herdr channel` command or `update.channel` setting.
 The build fails closed on replay conflict, source drift, or a wrong installer pin.
 Promotion additionally validates the selected successful workflow run and attempt,
 source/control identities, expected file set, and every digest before publication;
-it also fails on missing or mutable assets or feed content that was not fetched and
-verified independently. Runtime builds retain the manifest's `preview` schema token
-for wire-format compatibility, while CalVer owns fork update order and release
-presentation; all builds use only fork-owned update/setup sources.
+it also fails on missing or mutable assets, a draft or prerelease classification,
+or feed content that was not fetched and verified independently. Runtime builds
+retain the manifest's `preview` schema token for wire-format compatibility, while
+the required `prerelease: false` value gates update selection and CalVer owns fork
+update order and release presentation. All builds use only fork-owned update/setup
+sources.
 
 Manual release work is ephemeral: never create or force-push an integration
 branch, merge upstream into a release branch, resolve replay conflicts
@@ -394,6 +396,12 @@ changes, a pull request, or release publication.
 
 ## Verification
 
+The **Fork verification policy** in `AGENTS.md` is the admission gate for every
+new or retained herdr-win check. Change evidence must identify its stable contract,
+unique realistic failure, cheapest reliable layer, and observed runtime. Remove or
+retier a check when those facts no longer justify its maintenance or wait cost.
+Workflow review rejects software provisioned only to satisfy a test.
+
 During explicit promotion, run the fast inventory checks from the control repository:
 
 ```powershell
@@ -410,7 +418,6 @@ that own the changed boundary rather than running the whole list by default:
 
 ```powershell
 python -m unittest scripts.test_package_windows_conpty
-python -m unittest scripts.test_windows_installer
 python -m unittest scripts.test_vendor_libghostty_vt
 python -m unittest scripts.test_vendor_portable_pty
 ```
@@ -425,9 +432,9 @@ cargo clippy --bins --locked --target x86_64-pc-windows-msvc -- -D warnings
 
 An explicit release assignment uses the manually dispatched workflow's `build`
 operation for the Linux/macOS target builds and machine checks as well as the
-signed ConPTY package, enhanced-input, native quiet-uninstall checks,
-installer-helper lifecycle and fault-retry matrix, managed launcher, and
-system-fallback gates that depend on GitHub's Windows runner.
+signed ConPTY package, native quiet-uninstall checks, installer-helper lifecycle
+and focused fault-retry matrix, managed launcher, and system-fallback gates that
+depend on GitHub's Windows runner.
 
 Workflow changes require `actionlint` plus review of triggers, permissions,
 credential persistence, immutable source identity, artifact digests, and failure

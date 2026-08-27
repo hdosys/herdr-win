@@ -46,15 +46,6 @@ configuration repository.
   the focused parser, mirror, renderer, and staged-change tests passed. Owner:
   `.githooks/pre-commit`, `scripts/readme_mermaid_check.py`, and its focused tests.
 
-- **Status: done. Use one repository-owned local Windows input acceptance probe.**
-  The focused script isolates socket, config, state, client trace, Windows Terminal,
-  app-local ConPTY, and cleanup ownership under one deadline, and now waits for the
-  server's client-listener ready message before launching the client. Evidence: the
-  real installed Windows Terminal path passed every legacy, Kitty, raw, and native
-  input assertion in 17.061 seconds with complete process and temporary-state
-  cleanup. Owner: `scripts/windows_conpty_enhanced_input_probe.ps1`, its native
-  probe source, and the Windows CI package gate.
-
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle
   hashes and executable identity below ignored `target/`, then delegates repeated
@@ -120,13 +111,6 @@ configuration repository.
   remained stale for the complete 110-second window and exposed the correct build
   shortly afterward; the extended workflow passed focused inventory and Actionlint
   checks. Owner: `.github/workflows/release.yml`.
-
-- **Status: done. Keep successful portable release jobs free of unrelated runner
-  warnings.** The workflow removes only the unused ambient `aws/tap`, uses the
-  dependency-free Node.js 24 `vercel-labs/setup-zig` action, and upgrades the macOS
-  cache step to Node.js 24-native `actions/cache` v6.1.0. Evidence: both exact
-  latest-stable action tags and pinned commits were inspected, and the workflow
-  passed Actionlint. Owner: `.github/workflows/release.yml`.
 
 - **Status: done. Document one clean sparse checkout for WinGet PR updates.** The
   contribution procedure now starts sparse mode in the initial single-branch clone,

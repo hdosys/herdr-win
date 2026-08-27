@@ -134,8 +134,10 @@ tests remain the detailed implementation truth.
   user-selectable stable/preview channel or `update.channel` setting and cannot be
   redirected to official Herdr update sources. CalVer `YYYY.MM.DD.N` orders fork
   releases: a published binary accepts only a newer feed CalVer, while a local
-  build may install the latest published release. The runtime build ID remains the
-  exact immutable payload and matching remote-asset identity, upstream Cargo
+  build may install the latest published release. The feed advances only from an
+  immutable normal GitHub release and explicitly rejects drafts, prereleases, and
+  a feed without that stable-release classification. The runtime build ID remains
+  the exact immutable payload and matching remote-asset identity, upstream Cargo
   SemVer remains plugin/provenance compatibility metadata, and the wire protocol
   remains the client/server compatibility gate.
 - A copy installed by WinGet updates only through

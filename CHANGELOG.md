@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-## [2026.08.27.4] - 2026-08-27
+## [2026.08.27.5] - 2026-08-27
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
 
@@ -16,6 +16,7 @@ Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
 - Interactive Windows remote updates report download, validation, activation, and restart progress.
 
 ### Changed
+- herdr-win releases now publish as normal stable GitHub releases. Direct updates and Windows remote provisioning reject prerelease feeds.
 - Pane and workspace metadata reports can atomically retain up to 64 custom tokens while preserving existing bounds.
 - Agent completion alerts follow the upstream enabled default and can be disabled from **Settings > completion** or with `ui.notify_on_agent_completion = false` without suppressing questions, permission prompts, or errors.
 

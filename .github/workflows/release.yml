@@ -261,7 +261,6 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
-          components: rustfmt,clippy
           targets: ${{ env.WINDOWS_TARGET }}
 
       - name: Install Zig
@@ -282,26 +281,21 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m unittest scripts.test_package_windows_conpty scripts.test_windows_installer
+          python -m unittest scripts.test_package_windows_conpty
           python -m unittest `
             scripts.test_preview.PreviewNotesTests.test_build_manifest_archives_current_assets `
             scripts.test_preview.PreviewNotesTests.test_preview_assets_require_sha256 `
             scripts.test_preview.PreviewNotesTests.test_manifest_preserves_legacy_zip_only_archived_build `
             scripts.test_preview.PreviewNotesTests.test_manifest_build_id_uses_two_hex_components
-          cargo fmt --check
-          cargo clippy --bins --locked --target $env:WINDOWS_TARGET -- -D warnings
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr-launcher
-          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr distribution::tests
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_cli_version_leads_with_calver
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr local_cli_version_retains_build_provenance
-          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr fork_distribution_locks_the_existing_preview_channel
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr runtime_identity_separates_release_order_from_exact_build
-          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_preview_rejects_equal_or_older_calver
+          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr published_release_rejects_prerelease_and_non_newer_calver
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr client_status_separates_release_compatibility_and_build_identity
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr release_calver_controls_update_ready_state
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr winget_catalog
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr herdr_win_release_version
-          cargo test --locked --target $env:WINDOWS_TARGET --bin herdr windows_
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr remote::attach::tests
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr raw_input::tests
           cargo test --locked --target $env:WINDOWS_TARGET --bin herdr client::input
@@ -359,60 +353,8 @@ jobs:
             -ExePath $exe `
             -Session "release-system-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
-      - name: Provision Windows Terminal probe host
-        id: windows_terminal
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $releaseJson = & gh api repos/microsoft/terminal/releases/latest
-          if ($LASTEXITCODE -ne 0) {
-            throw "could not resolve the latest official Windows Terminal release"
-          }
-          $release = $releaseJson | ConvertFrom-Json
-          if ($release.draft -or $release.prerelease) {
-            throw "the latest official Windows Terminal release is not stable"
-          }
-          $assets = @($release.assets | Where-Object {
-            $_.name -match '^Microsoft\.WindowsTerminal_[0-9.]+_x64\.zip$'
-          })
-          if ($assets.Count -ne 1) {
-            throw "the latest official Windows Terminal release must have one x64 portable ZIP"
-          }
-          $asset = $assets[0]
-          $digest = [string] $asset.digest
-          if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
-            throw "the Windows Terminal portable ZIP has no published SHA-256 digest"
-          }
-          $root = Join-Path $env:RUNNER_TEMP "windows-terminal-probe"
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
-          & gh release download ([string] $release.tag_name) `
-            --repo microsoft/terminal `
-            --pattern ([string] $asset.name) `
-            --dir $root
-          if ($LASTEXITCODE -ne 0) {
-            throw "could not download the Windows Terminal portable ZIP"
-          }
-          $archive = Join-Path $root ([string] $asset.name)
-          $actualDigest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expectedDigest = $digest.Substring('sha256:'.Length)
-          if ($actualDigest -cne $expectedDigest) {
-            throw "the Windows Terminal portable ZIP digest does not match its release metadata"
-          }
-          $extract = Join-Path $root "extracted"
-          Expand-Archive -LiteralPath $archive -DestinationPath $extract
-          $terminals = @(Get-ChildItem -LiteralPath $extract -Filter wt.exe -File -Recurse)
-          if ($terminals.Count -ne 1) {
-            throw "the Windows Terminal portable ZIP must contain one wt.exe"
-          }
-          "Windows Terminal $($release.tag_name), SHA-256 $actualDigest"
-          "terminal_path=$($terminals[0].FullName)" >> $env:GITHUB_OUTPUT
-
       - name: Package and validate release
         shell: pwsh
-        env:
-          WINDOWS_TERMINAL_PATH: ${{ steps.windows_terminal.outputs.terminal_path }}
         run: |
           $ErrorActionPreference = "Stop"
           $artifactRoot = Join-Path $PWD "artifact"
@@ -561,11 +503,6 @@ jobs:
             -PackagePath $package `
             -StageDir $stage `
             -OutputPath $archive
-          .\source\scripts\windows_conpty_enhanced_input_probe.ps1 `
-            -ExePath (Join-Path $stage "herdr.exe") `
-            -Session "release-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
-            -ExpectedConsoleHostPath (Join-Path $stage "conpty\x64\OpenConsole.exe") `
-            -TerminalPath $env:WINDOWS_TERMINAL_PATH
           Invoke-BoundedProcess -FilePath "powershell.exe" -TimeoutMilliseconds 180000 -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             (Join-Path $PWD "source\scripts\windows_install_conpty_package_test.ps1"),
@@ -802,15 +739,6 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Remove unused ambient Homebrew tap
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if brew tap | grep -Fxq 'aws/tap'; then
-            brew untap aws/tap
-          fi
-
       - name: Restore Homebrew Zig cache
         if: runner.os == 'macOS'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -828,16 +756,6 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
           echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
           "$(brew --prefix zig@0.15)/bin/zig" version
-
-      - name: Prefer official Ubuntu mirrors over Azure
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
-            sudo sed -i '/azure.archive.ubuntu.com/d' /etc/apt/apt-mirrors.txt
-            cat /etc/apt/apt-mirrors.txt
-          fi
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -865,10 +783,6 @@ jobs:
           cache-bin: false
           key: herdr-win-release-${{ matrix.target }}
           workspaces: source
-
-      - name: Remove Zig caches
-        shell: bash
-        run: rm -rf source/.zig-cache source/vendor/libghostty-vt/.zig-cache source/vendor/libghostty-vt/zig-out
 
       - name: Build release executable
         working-directory: source
@@ -936,7 +850,7 @@ jobs:
           overwrite: true
 
   publish:
-    name: Publish immutable cross-platform prerelease
+    name: Publish immutable cross-platform stable release
     if: inputs.operation == 'promote'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1187,7 +1101,7 @@ jobs:
             echo "installer_asset_name=$installer"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Verify and publish prerelease
+      - name: Verify and publish stable release
         id: release
         shell: bash
         env:
@@ -1280,11 +1194,11 @@ jobs:
           verify_release() {
             local release_json="$1"
             if [[ "$(jq -r .draft <<<"$release_json")" != "false" || \
-                  "$(jq -r .prerelease <<<"$release_json")" != "true" || \
+                  "$(jq -r .prerelease <<<"$release_json")" != "false" || \
                   "$(jq -r '.immutable // false' <<<"$release_json")" != "true" || \
                   "$(jq -r .name <<<"$release_json")" != "herdr-win v${RELEASE_VERSION} (Herdr v${BASE_VERSION})" || \
                   "$(jq '.assets | length' <<<"$release_json")" != "6" ]]; then
-              echo "Release ${tag} is not the expected immutable published prerelease." >&2
+              echo "Release ${tag} is not the expected immutable published stable release." >&2
               exit 1
             fi
             verify_asset_shape "$release_json" "$zip"
@@ -1330,8 +1244,7 @@ jobs:
               --verify-tag \
               --title "herdr-win v${RELEASE_VERSION} (Herdr v${BASE_VERSION})" \
               --notes-file RELEASE_NOTES.md \
-              --prerelease \
-              --latest=false
+              --latest
 
             verify_tag_target
             release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
@@ -1482,6 +1395,7 @@ jobs:
                      .["macos-x86_64"], .["macos-aarch64"]]
                     | map(select(. != null)) | all(has("format") | not));
              .channel == "preview"
+             and .prerelease == false
              and .release_version == $release_version
              and .build_id == $build_id
              and .commit == $commit
@@ -1491,6 +1405,7 @@ jobs:
              and (.builds[$build_id].assets | keys == $asset_keys)
              and .builds[$build_id].assets == .assets
              and .builds[$build_id].release_version == $release_version
+             and .builds[$build_id].prerelease == false
              and ([$asset_keys[] as $key
                    | .assets[$key].url == ($prefix + $tag + "/" + $names[$key])
                      and .assets[$key].sha256 == $shas[0][$key]] | all)

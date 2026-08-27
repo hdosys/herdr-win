@@ -393,6 +393,10 @@ behavior; code and tests remain the detailed implementation truth.
   sidecars. Candidate sidecars remain internal verification inputs; GitHub records
   SHA-256 for every immutable release asset and the update manifest carries the same
   six verified digests.
+- Promotion creates a normal non-draft, non-prerelease GitHub release and marks it
+  Latest. The generated feed records `prerelease: false`; the integrated updater
+  and remote provisioning path fail closed on a missing or true value, so no GitHub
+  prerelease can become a future update source.
 - Promotion never deletes or repoints a release tag or GitHub release. An existing
   draft or mutable release, or a newly created release that is not immutable, is
   preserved as terminal evidence while promotion fails before publishing the update
@@ -440,10 +444,14 @@ behavior; code and tests remain the detailed implementation truth.
 - Verification has distinct control-plane inventory, replayed-product, and
   native/package lanes. `CONTRIBUTING.md` owns when each lane runs and keeps broad
   gates on one frozen logical snapshot.
-- Formatting, Clippy, and Rust tests run in replayed product source. Cross-platform
-  release builds add native target/machine checks and static-link validation for
-  Linux. Windows packaging changes add package/vendor checks, native quiet-uninstall,
-  helper and launcher tests, and realistic installer evidence where that boundary
-  changed.
+- Formatting, Clippy, and the smallest changed-behavior test run in replayed
+  product source during development. Cross-platform release builds add native
+  target/machine checks and static-link validation for Linux. Windows candidate
+  builds retain only product-owned package checks, exact Rust filters, native
+  quiet-uninstall, helper and launcher checks, and representative installer fault
+  evidence whose failure would change a supported lifecycle outcome.
+- Fork-owned checks follow the admission gate in `AGENTS.md`. Release automation
+  never provisions an external application solely to exercise a test, and it does
+  not repeat source formatting or blanket lint gates already owned by development.
 - Broad gates run on an implementation-frozen snapshot. Passing evidence remains
   valid until relevant source, inputs, or environment-sensitive assumptions change.

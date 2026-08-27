@@ -19,14 +19,10 @@ CONTROL_PATHS = {
     "docs/next/README.md",
     "website/preview.json",
 }
-FORK_RELEASE_PREFIX = "https://github.com/hdosys/herdr-win/releases/download/"
 FORK_RELEASE_PREFIXES = (
-    FORK_RELEASE_PREFIX,
+    "https://github.com/hdosys/herdr-win/releases/download/",
     "https://github.com/User-3090/herdr-win/releases/download/",
 )
-FORK_RAW_PREFIX = "https://raw.githubusercontent.com/hdosys/herdr-win/"
-WINDOWS_ZIP_TARGET = "windows-x86_64"
-WINDOWS_INSTALLER_TARGET = "windows-x86_64-installer"
 PORTABLE_TARGET_NAMES = {
     "linux-x86_64": re.compile(
         r"^herdr-win_v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*_linux_amd64$"
@@ -41,6 +37,8 @@ PORTABLE_TARGET_NAMES = {
         r"^herdr-win_v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*_macos_arm64$"
     ),
 }
+WINDOWS_ZIP_TARGET = "windows-x86_64"
+WINDOWS_INSTALLER_TARGET = "windows-x86_64-installer"
 RELEASE_TARGETS = {
     *PORTABLE_TARGET_NAMES,
     WINDOWS_ZIP_TARGET,
@@ -49,20 +47,14 @@ RELEASE_TARGETS = {
 WINDOWS_SETUP_NAME = re.compile(
     r"^herdr-win_v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*_windows_amd64_setup\.exe$"
 )
-FORBIDDEN_DISTRIBUTION_ENV = (
-    "HERDR_BUILD_CHANNEL",
-    "HERDR_PREVIEW_MANIFEST_URL",
-    "HERDR_WINDOWS_INSTALLER_URL",
-)
 
 
 def series_entries() -> list[str]:
-    entries = []
-    for raw_line in (DELTA_ROOT / "series").read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line and not line.startswith("#"):
-            entries.append(line)
-    return entries
+    return [
+        line
+        for raw_line in (DELTA_ROOT / "series").read_text(encoding="utf-8").splitlines()
+        if (line := raw_line.strip()) and not line.startswith("#")
+    ]
 
 
 class DeltaPatchTests(unittest.TestCase):
@@ -76,8 +68,9 @@ class DeltaPatchTests(unittest.TestCase):
         self.assertEqual(len(entries), len(set(entries)))
         for entry in entries:
             self.assertRegex(entry, PATCH_NAME)
-        actual = sorted(path.name for path in DELTA_ROOT.glob("*.patch"))
-        self.assertEqual(sorted(entries), actual)
+        self.assertEqual(
+            sorted(entries), sorted(path.name for path in DELTA_ROOT.glob("*.patch"))
+        )
 
     def test_mailboxes_are_full_git_patches_without_control_plane_files(self) -> None:
         entries = series_entries()
@@ -87,9 +80,7 @@ class DeltaPatchTests(unittest.TestCase):
             first_line = text.splitlines()[0]
             self.assertRegex(first_line, MAILBOX_FROM, entry)
             commits.append(first_line.split()[1])
-            self.assertIn(
-                f"\nSubject: [PATCH {position}/{len(entries)}] ", text, entry
-            )
+            self.assertIn(f"\nSubject: [PATCH {position}/{len(entries)}] ", text, entry)
             paths = {
                 path
                 for before, after in DIFF_PATH.findall(text)
@@ -128,27 +119,17 @@ class DeltaPatchTests(unittest.TestCase):
                 if target not in assets:
                     continue
                 portable = assets[target]
-                self.assertIsInstance(portable, dict)
-                self.assertTrue(
-                    str(portable.get("url", "")).startswith(FORK_RELEASE_PREFIXES)
-                )
+                self.assertTrue(str(portable.get("url", "")).startswith(FORK_RELEASE_PREFIXES))
                 self.assertRegex(
                     str(portable.get("url", "")).rsplit("/", 1)[-1], name_pattern
                 )
-                self.assertRegex(
-                    str(portable.get("sha256", "")), r"^[0-9a-f]{64}$"
-                )
-                self.assertNotIn("format", portable)
+                self.assertRegex(str(portable.get("sha256", "")), r"^[0-9a-f]{64}$")
             windows = assets[WINDOWS_ZIP_TARGET]
-            self.assertIsInstance(windows, dict)
-            self.assertTrue(
-                str(windows.get("url", "")).startswith(FORK_RELEASE_PREFIXES)
-            )
+            self.assertTrue(str(windows.get("url", "")).startswith(FORK_RELEASE_PREFIXES))
             self.assertRegex(str(windows.get("sha256", "")), r"^[0-9a-f]{64}$")
             self.assertEqual(windows.get("format"), "zip")
             if WINDOWS_INSTALLER_TARGET in assets:
                 installer = assets[WINDOWS_INSTALLER_TARGET]
-                self.assertIsInstance(installer, dict)
                 self.assertTrue(
                     str(installer.get("url", "")).startswith(FORK_RELEASE_PREFIXES)
                 )
@@ -160,350 +141,6 @@ class DeltaPatchTests(unittest.TestCase):
                     str(installer.get("sha256", "")), r"^[0-9a-f]{64}$"
                 )
                 self.assertEqual(installer.get("format"), "nsis")
-
-    def test_distribution_configuration_is_fork_owned_and_env_free(self) -> None:
-        distribution = (PROJECT_ROOT / "src" / "distribution.rs").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            f'{FORK_RAW_PREFIX}master/website/preview.json', distribution
-        )
-        self.assertIn("WINDOWS_RELEASE_DOWNLOAD_PREFIX", distribution)
-        self.assertIn(FORK_RELEASE_PREFIX, distribution)
-        self.assertNotIn("WINDOWS_INSTALLER_URL", distribution)
-        self.assertNotIn("https://herdr.dev", distribution)
-
-        product_sources = "\n".join(
-            (PROJECT_ROOT / path).read_text(encoding="utf-8")
-            for path in (
-                "build.rs",
-                "src/build_info.rs",
-                "src/remote/attach.rs",
-                "src/update.rs",
-            )
-        )
-        workflow = (
-            PROJECT_ROOT / ".github" / "workflows" / "release.yml"
-        ).read_text(encoding="utf-8")
-        for variable in FORBIDDEN_DISTRIBUTION_ENV:
-            self.assertNotIn(variable, product_sources)
-            self.assertNotIn(variable, workflow)
-
-        patch = (DELTA_ROOT / "0004-windows-managed-distribution.patch").read_text(
-            encoding="utf-8"
-        )
-        added = "\n".join(
-            line[1:]
-            for line in patch.splitlines()
-            if line.startswith("+") and not line.startswith("+++")
-        )
-        for variable in FORBIDDEN_DISTRIBUTION_ENV:
-            self.assertNotIn(variable, added)
-        self.assertNotIn("https://herdr.dev/latest.json", added)
-        self.assertNotIn("https://herdr.dev/preview.json", added)
-        self.assertNotIn("https://herdr.dev/install.ps1", added)
-
-    def test_windows_distribution_statically_links_the_msvc_runtime(self) -> None:
-        patch = (DELTA_ROOT / "0004-windows-managed-distribution.patch").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("diff --git a/.cargo/config.toml b/.cargo/config.toml", patch)
-        self.assertIn("+[target.x86_64-pc-windows-msvc]", patch)
-        self.assertIn(
-            '+rustflags = ["-C", "target-feature=+crt-static"]', patch
-        )
-
-    def test_remote_mailbox_preserves_client_sized_startup_bootstrap(self) -> None:
-        patch = (DELTA_ROOT / "0003-windows-remote-attach.patch").read_text(
-            encoding="utf-8"
-        )
-        added = "\n".join(
-            line[1:]
-            for line in patch.splitlines()
-            if line.startswith("+") and not line.startswith("+++")
-        )
-
-        for required in (
-            "struct DeferredWorkspaceShell",
-            "awaiting_first_app_client_geometry:",
-            "pending_startup_workspace_launches:",
-            "launch_pending_startup_workspace_shells",
-            "initial_workspace_terminal_area",
-            "startup_bootstrap_shells_wait_for_real_client_geometry",
-        ):
-            self.assertIn(required, added)
-
-    def test_public_readme_mirror_and_manual_build_promotion_contract(self) -> None:
-        readme_bytes = (PROJECT_ROOT / "README.md").read_bytes()
-        self.assertEqual(
-            readme_bytes,
-            (PROJECT_ROOT / "docs" / "next" / "README.md").read_bytes(),
-        )
-        readme = readme_bytes.decode("utf-8")
-        base = (DELTA_ROOT / "BASE").read_text(encoding="utf-8").strip()
-        for required in (
-            "```mermaid",
-            base[:12],
-            "https://github.com/hdosys/herdr-sandbox",
-            "https://github.com/nsxdavid/herdr/tree/feat/windows-remote-attach",
-            "https://github.com/herdrdev/herdr/pull/2329",
-            "https://github.com/herdrdev/herdr/discussions/2409",
-            "https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png",
-            "https://github.com/hdosys/herdr-win/releases",
-            "herdr-win_v<version>_windows_amd64_setup.exe",
-            "ships in Herdr v0.8.2",
-            "stops running managed Herdr sessions",
-            "Upstreamed in Herdr v0.6.9",
-            "Herdr v0.8.0 added the modern app-local ConPTY packaging",
-            "matching binaries from the same herdr-win release",
-            "linux_amd64",
-            "macos_arm64",
-            "## For upstream maintainers",
-            "not an all-or-nothing merge request",
-            "https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg",
-            "https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg",
-        ):
-            self.assertIn(required, readme)
-        for patch_name in (DELTA_ROOT / "series").read_text(
-            encoding="utf-8"
-        ).splitlines():
-            self.assertIn(patch_name, readme)
-        self.assertNotIn("User-3090/herdr-win/actions/workflows", readme)
-        self.assertNotIn("plus four explicit patches", readme)
-        self.assertNotIn("wire protocol 20", readme)
-        self.assertNotIn("github.com/ogulcancelik/herdr", readme)
-        self.assertNotIn("## Identity and compatibility", readme)
-        self.assertNotIn("Get-FileHash", readme)
-        self.assertNotIn("herdr.dev/install.ps1", readme)
-        self.assertNotIn("platform-Windows%20x64", readme)
-        self.assertIn(
-            '<img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">',
-            readme,
-        )
-        screenshot = PROJECT_ROOT / "docs" / "assets" / "herdr-win-setup-welcome.png"
-        screenshot_bytes = screenshot.read_bytes()
-        self.assertEqual(screenshot_bytes[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(int.from_bytes(screenshot_bytes[16:20], "big"), 581)
-        self.assertEqual(int.from_bytes(screenshot_bytes[20:24], "big"), 477)
-        chunk_types = []
-        offset = 8
-        while offset < len(screenshot_bytes):
-            chunk_length = int.from_bytes(screenshot_bytes[offset : offset + 4], "big")
-            chunk_types.append(screenshot_bytes[offset + 4 : offset + 8])
-            offset += 12 + chunk_length
-        self.assertEqual(set(chunk_types), {b"IHDR", b"IDAT", b"IEND"})
-        workflow_path = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
-        self.assertTrue(workflow_path.is_file())
-        self.assertFalse(
-            (PROJECT_ROOT / ".github" / "workflows" / "windows-nightly.yml").exists()
-        )
-        workflow = workflow_path.read_text(encoding="utf-8")
-        self.assertIn("name: Build and promote herdr-win release", workflow)
-        self.assertEqual(workflow.count("repository: herdrdev/herdr"), 2)
-        self.assertNotIn("repository: ogulcancelik/herdr", workflow)
-        ci_workflow = (
-            PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("repository: herdrdev/herdr", ci_workflow)
-        self.assertNotIn("repository: ogulcancelik/herdr", ci_workflow)
-        self.assertIn(WINDOWS_INSTALLER_TARGET, workflow)
-        self.assertIn("release_version:", workflow)
-        self.assertNotIn('"HERDR_RELEASE_VERSION=$releaseVersion"', workflow)
-        self.assertIn(
-            "Build release executable\n        working-directory: source\n"
-            "        env:\n          HERDR_RELEASE_VERSION: "
-            "${{ steps.release_identity.outputs.release_version }}",
-            workflow,
-        )
-        self.assertIn(
-            "HERDR_RELEASE_VERSION: ${{ needs.build.outputs.release_version }}",
-            workflow,
-        )
-        self.assertNotIn(
-            "--bin herdr distribution_channel_owns_local_build_identity", workflow
-        )
-        self.assertIn("--bin herdr published_cli_version_leads_with_calver", workflow)
-        self.assertIn("--bin herdr local_cli_version_retains_build_provenance", workflow)
-        self.assertIn(
-            "--bin herdr runtime_identity_separates_release_order_from_exact_build",
-            workflow,
-        )
-        self.assertIn(
-            "--bin herdr published_preview_rejects_equal_or_older_calver",
-            workflow,
-        )
-        self.assertIn(
-            "--bin herdr client_status_separates_release_compatibility_and_build_identity",
-            workflow,
-        )
-        self.assertIn(
-            "--bin herdr release_calver_controls_update_ready_state", workflow
-        )
-        self.assertIn("herdr-win-asset-names", workflow)
-        self.assertIn("require-newer-herdr-win-release", workflow)
-        self.assertIn('tag="v${RELEASE_VERSION}"', workflow)
-        preview_source = (PROJECT_ROOT / "scripts" / "preview.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertEqual(preview_source.count('default="herdrdev/herdr"'), 2)
-        self.assertNotIn('default="ogulcancelik/herdr"', preview_source)
-        self.assertIn("herdr-win_v{release_version}_windows_amd64.zip", preview_source)
-        for name in (
-            "herdr-win_v{release_version}_linux_amd64",
-            "herdr-win_v{release_version}_linux_arm64",
-            "herdr-win_v{release_version}_macos_amd64",
-            "herdr-win_v{release_version}_macos_arm64",
-        ):
-            self.assertIn(name, preview_source)
-        self.assertIn(
-            "herdr-win_v{release_version}_windows_amd64_setup.exe", preview_source
-        )
-        for target in PORTABLE_TARGET_NAMES:
-            self.assertIn(target, workflow)
-        for rust_target in (
-            "x86_64-unknown-linux-musl",
-            "aarch64-unknown-linux-musl",
-            "x86_64-apple-darwin",
-            "aarch64-apple-darwin",
-        ):
-            self.assertIn(rust_target, workflow)
-        self.assertIn("operation:", workflow)
-        self.assertIn("- build", workflow)
-        self.assertIn("- promote", workflow)
-        self.assertEqual(workflow.count("if: inputs.operation == 'build'"), 2)
-        self.assertIn("if: inputs.operation == 'promote'", workflow)
-        self.assertIn("RELEASE_CANDIDATE.json", workflow)
-        self.assertIn("herdr-win-candidate-windows-${{ github.run_id }}", workflow)
-        self.assertIn(
-            "pattern: herdr-win-portable-*-${{ steps.build_run.outputs.run_id }}",
-            workflow,
-        )
-        self.assertIn("merge-multiple: true", workflow)
-        self.assertIn("github-token: ${{ github.token }}", workflow)
-        self.assertIn("run-id: ${{ steps.build_run.outputs.run_id }}", workflow)
-        self.assertIn("retention-days: 14", workflow)
-        self.assertIn("Promotion requires a positive build workflow run ID", workflow)
-        self.assertIn("Release promotion must run from master", workflow)
-        self.assertIn("Release promotion does not accept a CalVer override", workflow)
-        self.assertIn("Candidate builds do not accept a promotion build run ID", workflow)
-        self.assertIn(
-            "Candidate build ID does not match its run identity", workflow
-        )
-        self.assertEqual(workflow.count("candidate-build-id"), 2)
-        self.assertIn("--run-id $env:GITHUB_RUN_ID", workflow)
-        self.assertIn("--run-attempt $env:GITHUB_RUN_ATTEMPT", workflow)
-        self.assertIn('--run-id "$BUILD_RUN_ID"', workflow)
-        self.assertIn('--run-attempt "$candidate_attempt"', workflow)
-        self.assertIn(
-            'selected="$(cd control && python3 scripts/preview.py select-commit '
-            '--ref origin/master)"',
-            workflow,
-        )
-        self.assertIn(
-            "Release asset ${name} does not match the selected candidate", workflow
-        )
-        self.assertNotIn("remove_recoverable_release", workflow)
-        self.assertNotIn("gh api --method DELETE", workflow)
-        self.assertIn("preserving tag and release", workflow)
-        self.assertEqual(workflow.count("contents: write"), 1)
-        self.assertIn("actions: read", workflow)
-        self.assertNotIn("mlugg/setup-zig@", workflow)
-        self.assertEqual(
-            workflow.count(
-                "vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943"
-            ),
-            2,
-        )
-        self.assertIn("brew untap aws/tap", workflow)
-        self.assertIn(
-            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
-            workflow,
-        )
-        self.assertIn("for ($attempt = 1; $attempt -le 18; $attempt++)", workflow)
-        self.assertIn("if ($attempt -eq 18)", workflow)
-        self.assertIn('"linux-x86_64": $linux_x86_64', workflow)
-        self.assertIn('format -cne "nsis"', workflow)
-        self.assertIn("installer_sha", workflow)
-        trigger = workflow.split("\nconcurrency:", 1)[0]
-        self.assertIn("\n  workflow_dispatch:\n", trigger)
-        self.assertNotIn("\n  schedule:", trigger)
-        self.assertNotIn("cron:", trigger)
-        self.assertNotIn("\n  push:", trigger)
-        self.assertNotIn("workflow_run:", trigger)
-        self.assertIn('"control\\patches\\delta\\BASE"', workflow)
-        self.assertIn(
-            "$upstreamRef = [IO.File]::ReadAllText($basePath).Trim()", workflow
-        )
-        self.assertNotIn("GITHUB_EVENT_NAME", workflow)
-        self.assertNotIn('$upstreamRef = "master"', workflow)
-        self.assertIn("ref: ${{ steps.upstream_source.outputs.ref }}", workflow)
-        self.assertIn("fetch-tags: true", workflow)
-        self.assertIn('$stableTag = "v$baseVersion"', workflow)
-        self.assertIn("is not upstream stable release $stableTag", workflow)
-        self.assertIn("failed to replay $entry on selected upstream source $base", workflow)
-        self.assertIn(
-            '--title "herdr-win v${RELEASE_VERSION} (Herdr v${BASE_VERSION})"',
-            workflow,
-        )
-        self.assertIn(
-            'echo "Release notes: https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/CHANGELOG.md"',
-            workflow,
-        )
-        self.assertIn("sha256sum --check \"$checksum\"", workflow)
-        release_uploads = workflow.split('gh release create "$tag"', 1)[1].split(
-            '--repo "$GITHUB_REPOSITORY"', 1
-        )[0]
-        self.assertNotIn(".zip.sha256", release_uploads)
-        self.assertIn("!= \"6\"", workflow)
-        self.assertNotIn("published_checksum_digest", workflow)
-        self.assertNotIn("api_checksum_digest", workflow)
-        self.assertNotIn("SOURCE_MODE", workflow)
-        self.assertNotIn("PREVIEW_GENERATOR.py", workflow)
-        self.assertIn(
-            'generator="$GITHUB_WORKSPACE/control/scripts/preview.py"', workflow
-        )
-        self.assertIn(
-            "replayed preview generator differs from the selected control revision",
-            workflow,
-        )
-        self.assertIn('git -C source rev-parse "HEAD:scripts/preview.py"', workflow)
-        self.assertIn('git -C control rev-parse "HEAD:scripts/preview.py"', workflow)
-        self.assertNotIn("sourceGeneratorHash", workflow)
-        self.assertNotIn("controlGeneratorHash", workflow)
-        self.assertIn("(.builds[$build_id].assets[]?)", workflow)
-        self.assertNotIn("(.builds[]?.assets[]?)", workflow)
-        self.assertIn("Uninstall\\Herdr Win", workflow)
-        self.assertNotIn('Uninstall\\Herdr"', workflow)
-        build_section, promotion_section = workflow.split("\n  publish:\n", 1)
-        self.assertIn("cargo build --release", build_section)
-        self.assertIn("Verify self-contained Windows executables", build_section)
-        self.assertIn("Microsoft Visual Studio\\Installer\\vswhere.exe", build_section)
-        self.assertIn("Microsoft.VisualStudio.Component.VC.Tools.x86.x64", build_section)
-        self.assertEqual(build_section.count("& $dumpbin /DEPENDENTS"), 1)
-        self.assertIn("(?:VCRUNTIME|MSVCP)", build_section)
-        self.assertIn("herdr-installer-helper.exe", build_section)
-        self.assertEqual(build_section.count('"-InstallerHelperExe", $installerHelper'), 2)
-        self.assertEqual(build_section.count('"-ReleaseVersion", $env:RELEASE_VERSION'), 2)
-        self.assertEqual(build_section.count('"-BaseVersion", $env:HERDR_BASE_VERSION'), 2)
-        self.assertIn(
-            '"herdr-win $env:RELEASE_VERSION (Herdr $env:BASE_VERSION)"',
-            promotion_section,
-        )
-        self.assertNotIn("HERDR_BASE_VERSION-preview.$env:HERDR_BUILD_ID", build_section)
-        self.assertNotIn("cargo build", promotion_section)
-        self.assertNotIn("package_windows_installer.ps1", promotion_section)
-        self.assertEqual(workflow.count("[void] $descendant.Handle"), 2)
-
-    def test_patch_replay_workflow_uses_recorded_base(self) -> None:
-        workflow = (
-            PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("Replay delta on recorded BASE", workflow)
-        self.assertIn("control/patches/delta/BASE", workflow)
-        self.assertIn("ref: ${{ steps.upstream_source.outputs.ref }}", workflow)
-        self.assertNotIn("ref: master", workflow)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -456,12 +456,15 @@ Keep `PRODUCT.md` as the concise canonical user-visible truth and
 facts into the fork README without turning it into internal design documentation.
 Keep root `README.md` and `docs/next/README.md` byte-for-byte identical. Product
 documentation carried in release source belongs in the logical mailbox that owns
-the behavior. Do not edit changelog, release notes, website, or broad docs unless
-changed behavior requires it, and never edit generated preview/version
-documentation directories. The repository pre-commit hook renders a changed staged
-Mermaid block through `mmdc`, requires the mirrored block to match, and rejects
-extreme aspect ratios before generated output can enter the worktree. Set
-`MERMAID_CLI` only when the renderer uses a nonstandard executable path.
+the behavior. Root `CHANGELOG.md` records only herdr-win CalVer releases and
+user-visible fork changes; link the official upstream Herdr changelog instead of
+copying upstream release entries. Do not edit changelog, release notes, website,
+or broad docs unless changed behavior requires it, and never edit generated
+preview/version documentation directories. The repository pre-commit hook renders
+a changed staged Mermaid block through `mmdc`, requires the mirrored block to
+match, and rejects extreme aspect ratios before generated output can enter the
+worktree. Set `MERMAID_CLI` only when the renderer uses a nonstandard executable
+path.
 
 ## Pull requests and commits
 

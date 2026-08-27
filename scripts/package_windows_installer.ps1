@@ -28,13 +28,8 @@ param(
 
     [ValidateSet(
         "after-bin-directory",
-        "after-uninstall-pending",
-        "after-launcher-lock",
-        "after-installer-helper",
         "after-state-directory",
-        "before-uninstaller",
         "after-uninstaller",
-        "after-user-path",
         "after-arp-registration",
         "terminate-after-installer-helper"
     )]

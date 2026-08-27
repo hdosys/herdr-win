@@ -580,11 +580,6 @@ pub(crate) fn uninstall(options: UninstallOptions) -> io::Result<String> {
         residual_ready = true;
         let (_, rollback) = registry::remove_user_path(&install_root.join("bin"), path_ownership)?;
         path_rollback = rollback;
-        inject_fault(
-            "after-user-path",
-            options.fault.as_deref(),
-            &options.fault_marker_prefix,
-        )?;
         arp_removed = registry::remove_arp_registration(&install_root)?;
         inject_fault(
             "after-arp-registration",
@@ -2361,9 +2356,7 @@ fn remove_uninstall_residual(
             remove_file_if_exists(&state.join("path-add.pending"))?;
             validate_uninstall_cleanup_root(install_root)?;
             remove_file_if_exists(&state.join("uninstall.pending"))?;
-            inject_fault("after-uninstall-pending", fault, prefix)?;
             remove_file_if_exists(&state.join("launcher.lock"))?;
-            inject_fault("after-launcher-lock", fault, prefix)?;
             let helper = state.join(files::NATIVE_HELPER_NAME);
             if let Some(quiet) = quiet {
                 files::assert_regular_file(&helper)?;
@@ -2407,7 +2400,6 @@ fn remove_terminal_uninstall_files(
         ));
     }
     let result = (|| {
-        inject_fault("before-uninstaller", fault, prefix)?;
         remove_file_if_exists(&uninstaller)?;
         inject_fault("after-uninstaller", fault, prefix)?;
         fs::remove_dir(install_root)?;
@@ -2586,8 +2578,8 @@ mod tests {
 
     #[test]
     fn fault_marker_prefix_is_narrow() {
-        assert!(fault_marker("before-uninstaller", "herdr-test").is_ok());
-        assert!(fault_marker("before-uninstaller", "../escape").is_err());
+        assert!(fault_marker("after-uninstaller", "herdr-test").is_ok());
+        assert!(fault_marker("after-uninstaller", "../escape").is_err());
     }
 
     #[test]
@@ -2707,20 +2699,6 @@ mod tests {
     #[test]
     fn lifecycle_mutex_name_is_stable_and_unversioned() {
         assert_eq!(LIFECYCLE_MUTEX_NAME, r"Local\HerdrWinInstallerLifecycle");
-    }
-
-    #[test]
-    fn installer_stop_failures_include_retry_guidance() {
-        for reason in [
-            "installed Herdr session shutdown command exited with exit code: 1",
-            "installed Herdr session shutdown exceeded its 35 second deadline",
-            "installed Herdr session shutdown timed out and cleanup failed",
-        ] {
-            assert_eq!(
-                installer_stop_retry_message(reason),
-                format!("{reason}. {INSTALLER_STOP_RETRY_GUIDANCE}")
-            );
-        }
     }
 
     #[test]

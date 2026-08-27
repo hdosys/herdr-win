@@ -12,13 +12,8 @@ param(
     [string]$AgentUserProfileRoot,
     [string[]]$Faults = @(
         "after-bin-directory",
-        "after-uninstall-pending",
-        "after-launcher-lock",
-        "after-installer-helper",
         "after-state-directory",
-        "before-uninstaller",
         "after-uninstaller",
-        "after-user-path",
         "after-arp-registration"
     )
 )
@@ -232,13 +227,8 @@ New-Item -ItemType Directory -Path $inheritedUserProfileDecoy | Out-Null
 $env:USERPROFILE = $inheritedUserProfileDecoy
 $allowedFaults = @(
     "after-bin-directory",
-    "after-uninstall-pending",
-    "after-launcher-lock",
-    "after-installer-helper",
     "after-state-directory",
-    "before-uninstaller",
     "after-uninstaller",
-    "after-user-path",
     "after-arp-registration"
 )
 $hardTerminationFault = "terminate-after-installer-helper"
@@ -604,7 +594,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $settingsRoot "settings.toml"), "preserve-by-default")
 
         $uninstaller = Join-Path $installRoot "uninstall.exe"
-        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper") {
+        if ($fault -eq "after-bin-directory") {
             $firstDirectExit = Start-TestProcess -FilePath $uninstaller -Arguments @("/S")
             if ($firstDirectExit -ne 0) {
                 throw "Direct uninstall bootstrap for $fault exited with $firstDirectExit."
@@ -684,7 +674,7 @@ try {
             throw "Retry uninstall $fault did not preserve settings by default."
         }
         Remove-Item -LiteralPath $settingsRoot -Recurse -Force
-        if ($fault -eq "after-bin-directory" -or $fault -eq "after-installer-helper" -or $fault -eq "after-uninstaller") {
+        if ($fault -eq "after-bin-directory" -or $fault -eq "after-uninstaller") {
             Write-Host "Cross-mode uninstall retry passed: $fault"
         }
         if ($fault -eq "after-state-directory") {

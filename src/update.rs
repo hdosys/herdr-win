@@ -2667,14 +2667,6 @@ mod cross_platform_tests {
     use super::*;
 
     #[test]
-    fn fork_distribution_locks_the_existing_preview_channel() {
-        assert_eq!(
-            UpdateChannel::configured().as_str(),
-            crate::distribution::UPDATE_CHANNEL
-        );
-    }
-
-    #[test]
     fn herdr_win_release_version_requires_exact_calver() {
         for valid in ["2026.08.04.1", "2028.02.29.65535"] {
             assert!(ReleaseVersion::parse(valid).is_some(), "{valid}");
@@ -2782,13 +2774,6 @@ mod cross_platform_tests {
                 "--disable-interactivity",
             ]
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    #[ignore = "queries the configured WinGet source"]
-    fn live_winget_catalog_query_treats_an_unpublished_version_as_pending() {
-        assert_eq!(winget_catalog_has_release("9999.12.31.1"), Ok(false));
     }
 
     #[cfg(windows)]

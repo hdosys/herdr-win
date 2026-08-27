@@ -1525,8 +1525,7 @@ async fn run_client_loop(
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
 
     // Spawn the stdin reader thread.
-    let will_query_host_terminal_theme =
-        state.attach_escape.is_none() && should_query_host_terminal_theme();
+    let will_query_host_terminal_theme = state.attach_escape.is_none();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
     let will_query_host_cell_size = state.attach_escape.is_none()
@@ -2676,10 +2675,6 @@ fn query_host_terminal_theme() {
     let _ = write_host_terminal_theme_query(io::stdout());
 }
 
-fn should_query_host_terminal_theme() -> bool {
-    true
-}
-
 fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
     let query = crate::terminal_theme::host_terminal_theme_query_sequence();
     writer.write_all(query.as_bytes())?;
@@ -3140,11 +3135,6 @@ mod tests {
         assert!(crate::raw_input::events_require_host_terminal_theme_query(
             &events
         ));
-    }
-
-    #[test]
-    fn host_terminal_theme_query_is_enabled_on_all_platforms() {
-        assert!(should_query_host_terminal_theme());
     }
 
     #[test]

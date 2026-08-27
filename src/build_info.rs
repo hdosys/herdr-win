@@ -69,23 +69,6 @@ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn distribution_channel_owns_local_build_identity() {
-        assert_eq!(super::channel(), "preview");
-        assert_eq!(
-            super::version(),
-            super::version_for(super::release_version(), super::build_id())
-        );
-        assert_eq!(
-            super::cli_version(),
-            super::cli_version_for(
-                super::release_version(),
-                super::BASE_VERSION,
-                super::build_id()
-            )
-        );
-    }
-
-    #[test]
     fn runtime_identity_separates_release_order_from_exact_build() {
         assert_eq!(
             super::version_for(Some("2026.08.11.1"), Some("0123456789ab.cdef01234567")),

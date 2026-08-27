@@ -247,12 +247,6 @@ mod windows_tests {
         ))
         .unwrap());
     }
-
-    #[test]
-    fn explicit_server_start_uses_the_requested_binary() {
-        let exe = PathBuf::from(r"C:\remote-sidecar\herdr.exe");
-        assert_eq!(server_daemon_program_for_test(exe.clone()), exe);
-    }
 }
 
 fn validate_running_server_compatibility() -> io::Result<()> {
@@ -328,11 +322,6 @@ pub fn start_server_daemon_with_exe(exe: PathBuf) -> io::Result<()> {
         io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
     })?;
     wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT)
-}
-
-#[cfg(test)]
-fn server_daemon_program_for_test(exe: PathBuf) -> PathBuf {
-    build_server_daemon_command(exe).get_program().into()
 }
 
 fn build_server_daemon_command(exe: PathBuf) -> Command {

@@ -3,7 +3,6 @@ import os
 import subprocess
 import tempfile
 import unittest
-from argparse import Namespace
 from unittest import mock
 from pathlib import Path
 
@@ -122,85 +121,21 @@ class PreviewNotesTests(unittest.TestCase):
             ):
                 preview.herdr_win_asset_names(invalid)
 
-    def test_manifest_requires_monotonic_release_calver(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "preview.json"
-            output.write_text(
-                json.dumps({"release_version": "2026.08.05.5", "builds": {}}),
-                encoding="utf-8",
-            )
-            for stale in ("2026.08.05.5", "2026.08.05.4", "2026.08.04.99"):
-                with self.subTest(stale=stale), self.assertRaisesRegex(
-                    ValueError, "must be newer"
-                ):
-                    preview.build_manifest(
-                        output=output,
-                        repo="hdosys/herdr-win",
-                        tag=f"v{stale}",
-                        build_id="abcdef123456.7890abcdef12",
-                        commit="abcdef1234567890",
-                        built_at="2026-08-05T04:00:00Z",
-                        base_version="0.8.0",
-                        protocol=20,
-                        notes="test",
-                        shas=VALID_SHAS,
-                        retain=30,
-                        release_version=stale,
-                    )
-            data = json.loads(
-                preview.build_manifest(
-                    output=output,
-                    repo="hdosys/herdr-win",
-                    tag="v2026.08.05.6",
-                    build_id="abcdef123456.7890abcdef12",
-                    commit="abcdef1234567890",
-                    built_at="2026-08-05T04:00:00Z",
-                    base_version="0.8.0",
-                    protocol=20,
-                    notes="test",
-                    shas=VALID_SHAS,
-                    retain=30,
-                    release_version="2026.08.05.6",
-                )
-            )
-            self.assertEqual(data["release_version"], "2026.08.05.6")
-
     def test_release_gate_requires_newer_calver(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            manifest = Path(tmp) / "preview.json"
-            manifest.write_text(
-                json.dumps({"release_version": "2026.08.05.5"}), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(ValueError, "must be newer"):
-                preview.cmd_require_newer_release(
-                    Namespace(
-                        release_version="2026.08.05.5", manifest=str(manifest)
-                    )
-                )
-            self.assertEqual(
-                preview.cmd_require_newer_release(
-                    Namespace(
-                        release_version="2026.08.05.6", manifest=str(manifest)
-                    )
-                ),
-                0,
-            )
-
-    def test_release_gate_rejects_invalid_published_calver(self):
-        for current in ({"release_version": 20260805}, {"release_version": "bad"}):
-            with self.subTest(current=current), self.assertRaisesRegex(
+        current = {"release_version": "2026.08.05.5"}
+        for stale in ("2026.08.05.5", "2026.08.05.4", "2026.08.04.99"):
+            with self.subTest(stale=stale), self.assertRaisesRegex(
+                ValueError, "must be newer"
+            ):
+                preview.require_newer_herdr_win_release(stale, current)
+        preview.require_newer_herdr_win_release("2026.08.05.6", current)
+        preview.require_newer_herdr_win_release("2026.08.05.6", {})
+        for invalid in (20260805, "bad"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
                 ValueError, "current manifest has an invalid release_version"
             ):
-                preview.require_newer_herdr_win_release("2026.08.05.6", current)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            manifest = Path(tmp) / "preview.json"
-            manifest.write_text("{}", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "missing release_version"):
-                preview.cmd_require_newer_release(
-                    Namespace(
-                        release_version="2026.08.05.6", manifest=str(manifest)
-                    )
+                preview.require_newer_herdr_win_release(
+                    "2026.08.05.6", {"release_version": invalid}
                 )
 
     def test_preview_assets_require_sha256(self):

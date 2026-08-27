@@ -338,6 +338,49 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     };
   }
 
+  function layoutPaneIDs(layout) {
+    return new Set(
+      (Array.isArray(layout?.panes) ? layout.panes : [])
+        .map((pane) => pane?.pane_id)
+        .filter((paneID) => typeof paneID === "string" && paneID),
+    );
+  }
+
+  async function acquirePanePlacement() {
+    const previousPanePlacement = panePlacementChain;
+    let releasePanePlacement = () => {};
+    panePlacementChain = new Promise((resolve) => {
+      releasePanePlacement = resolve;
+    });
+    await previousPanePlacement;
+    return releasePanePlacement;
+  }
+
+  async function recoverPendingSplit(sessionID, allowWhileDisposing = false) {
+    const child = children.get(sessionID);
+    const previousPaneIDs = child?.pendingSplitPaneIDs;
+    const rootPaneID = process.env.HERDR_PANE_ID;
+    if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
+      return undefined;
+    }
+    const layoutResponse = await request(
+      "pane.layout",
+      { pane_id: rootPaneID },
+      allowWhileDisposing,
+    );
+    const layout = responseResult(layoutResponse, "pane_layout")?.layout;
+    const newPaneIDs = [...layoutPaneIDs(layout)].filter(
+      (paneID) => !previousPaneIDs.has(paneID),
+    );
+    if (newPaneIDs.length !== 1) {
+      return undefined;
+    }
+    const paneID = newPaneIDs[0];
+    child.paneID = paneID;
+    child.pendingSplitPaneIDs = undefined;
+    return paneID;
+  }
+
   async function childSessionState(sessionID) {
     if (typeof client?.session?.status !== "function") {
       return "idle";
@@ -405,12 +448,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         return;
       }
 
-      const previousPanePlacement = panePlacementChain;
-      let releasePanePlacement = () => {};
-      panePlacementChain = new Promise((resolve) => {
-        releasePanePlacement = resolve;
-      });
-      await previousPanePlacement;
+      const releasePanePlacement = await acquirePanePlacement();
 
       let directory;
       let paneID;
@@ -425,28 +463,40 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         ) {
           return;
         }
-        const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
-        const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-        const target = splitTarget(layout);
-        if (
-          disposing ||
-          !target ||
-          !child.working ||
-          retiredChildren.has(sessionID)
-        ) {
-          return;
-        }
-
         directory = childDirectory(info);
-        const splitResponse = await request("pane.split", {
-          target_pane_id: target.paneID,
-          direction: target.direction,
-          ratio: 0.5,
-          ...(directory ? { cwd: directory } : {}),
-          focus: false,
-          env: { [SUBAGENT_SESSION_ENV]: sessionID },
-        });
-        paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
+        if (child.pendingSplitPaneIDs) {
+          paneID = await recoverPendingSplit(sessionID);
+        } else {
+          const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
+          const layout = responseResult(layoutResponse, "pane_layout")?.layout;
+          const target = splitTarget(layout);
+          if (
+            disposing ||
+            !target ||
+            !child.working ||
+            retiredChildren.has(sessionID)
+          ) {
+            return;
+          }
+
+          child.pendingSplitPaneIDs = layoutPaneIDs(layout);
+          const splitResponse = await request("pane.split", {
+            target_pane_id: target.paneID,
+            direction: target.direction,
+            ratio: 0.5,
+            ...(directory ? { cwd: directory } : {}),
+            focus: false,
+            env: { [SUBAGENT_SESSION_ENV]: sessionID },
+          });
+          paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
+          if (typeof paneID === "string" && paneID) {
+            child.pendingSplitPaneIDs = undefined;
+          } else if (responseErrorCode(splitResponse)) {
+            child.pendingSplitPaneIDs = undefined;
+          } else {
+            paneID = await recoverPendingSplit(sessionID, disposing);
+          }
+        }
         if (typeof paneID !== "string" || !paneID) {
           return;
         }
@@ -495,6 +545,14 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           await openChildPane(sessionID);
         }
         return;
+      }
+      if (!child.paneID && child.pendingSplitPaneIDs) {
+        const releasePanePlacement = await acquirePanePlacement();
+        try {
+          await recoverPendingSplit(sessionID, allowWhileDisposing || disposing);
+        } finally {
+          releasePanePlacement();
+        }
       }
       if (!child.paneID) {
         return;
@@ -587,7 +645,11 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     }
     child.working = false;
     await reconcileChildPane(sessionID);
-    if (!child.paneID && children.get(sessionID) === child) {
+    if (
+      !child.paneID &&
+      !child.pendingSplitPaneIDs &&
+      children.get(sessionID) === child
+    ) {
       children.delete(sessionID);
     }
   }
@@ -789,6 +851,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
             working: false,
             spawning: false,
             paneID: undefined,
+            pendingSplitPaneIDs: undefined,
             reconcileChain: Promise.resolve(),
           };
           child.info = info;

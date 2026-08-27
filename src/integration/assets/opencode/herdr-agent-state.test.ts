@@ -752,6 +752,86 @@ test("dispose lets an in-flight child split report its pane before cleanup", asy
   ]);
 });
 
+test("recovers pane ownership when a successful split response is lost", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+  clients.length = 0;
+  autoAcknowledge = false;
+
+  const layoutDispatched = waitForNextRequest();
+  const created = plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await layoutDispatched;
+  const splitDispatched = waitForNextRequest();
+  acknowledgeRequest(0, 0, {
+    result: {
+      type: "pane_layout",
+      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
+    },
+  });
+  await splitDispatched;
+
+  const recoveryLayoutDispatched = waitForNextRequest();
+  clients[1]?.emit("close");
+  await recoveryLayoutDispatched;
+  const startDispatched = waitForNextRequest();
+  acknowledgeRequest(2, 2, {
+    result: {
+      type: "pane_layout",
+      layout: {
+        panes: [
+          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
+        ],
+      },
+    },
+  });
+  await startDispatched;
+  acknowledgeRequest(3, 3, {
+    result: {
+      type: "agent_started",
+      agent: { pane_id: "test:p2" },
+      argv: [],
+    },
+  });
+  await created;
+
+  const closeDispatched = waitForNextRequest();
+  const retired = plugin.event({
+    event: {
+      type: "session.deleted",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await closeDispatched;
+  acknowledgeRequest(4, 4);
+  await retired;
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.layout",
+    "pane.split",
+    "pane.layout",
+    "agent.start",
+    "pane.close",
+  ]);
+  expect(requestParam(requests[3], "pane_id")).toBe("test:p2");
+  expect(requestParam(requests[4], "pane_id")).toBe("test:p2");
+});
+
 test("retains pane ownership when close is not acknowledged", async () => {
   const plugin = await loadPlugin({
     directory: "C:\\repo",

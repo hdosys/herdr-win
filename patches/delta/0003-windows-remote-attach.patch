@@ -1,4 +1,4 @@
-From 8011fc61e80a75d12bc9471dc856f92ddccbc349 Mon Sep 17 00:00:00 2001
+From 86e0f2a003633a2d057addfd8e4b67af54820f3e Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
@@ -12,6 +12,8 @@ Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
  .../src/content/docs/zh-cn/cli-reference.mdx  |    4 +-
  scripts/package_windows_conpty.py             |   22 +-
  scripts/test_package_windows_conpty.py        |    6 +
+ ...indows_interactive_server_launch_probe.ps1 |  315 +++
+ .../windows_interactive_server_probe_job.cs   |  244 +++
  src/api/client.rs                             |    2 +
  src/api/schema/response.rs                    |    2 +
  src/api/schema/tests.rs                       |    1 +
@@ -42,7 +44,9 @@ Subject: [PATCH 2/11] feat(remote): support Windows SSH hosts
  src/server/headless.rs                        |  307 ++-
  src/ui.rs                                     |   67 +-
  src/update.rs                                 |    3 +
- 38 files changed, 5160 insertions(+), 591 deletions(-)
+ 40 files changed, 5719 insertions(+), 591 deletions(-)
+ create mode 100644 scripts/windows_interactive_server_launch_probe.ps1
+ create mode 100644 scripts/windows_interactive_server_probe_job.cs
  create mode 100644 src/platform/windows_interactive_launch.ps1
  create mode 100644 src/remote/windows.rs
  create mode 100644 src/remote/windows_attach_probe.ps1
@@ -536,6 +540,577 @@ index b8d73a6c32e43807e6f8d0d56b0d3bfc73c98802..2962b9e98a8eae5496aacc831b6a45b8
  
              output = root / "herdr.zip"
              package.archive_bundle(metadata_path, "x86_64", stage, output)
+diff --git a/scripts/windows_interactive_server_launch_probe.ps1 b/scripts/windows_interactive_server_launch_probe.ps1
+new file mode 100644
+index 0000000000000000000000000000000000000000..f772ac8b851dae0e569f833dd4ab678ac4d62e25
+--- /dev/null
++++ b/scripts/windows_interactive_server_launch_probe.ps1
+@@ -0,0 +1,315 @@
++[CmdletBinding()]
++param(
++    [Parameter(Mandatory = $true)]
++    [string] $ExePath,
++
++    [ValidateRange(10, 120)]
++    [int] $TimeoutSeconds = 45
++)
++
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version 2.0
++
++function Get-ExactRuntimeProcesses {
++    param([string] $RuntimePath)
++
++    $target = [IO.Path]::GetFullPath($RuntimePath)
++    @(
++        Get-CimInstance -ClassName Win32_Process -Filter "Name = 'herdr.exe'" |
++            Where-Object {
++                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
++                [string]::Equals(
++                    [IO.Path]::GetFullPath($_.ExecutablePath),
++                    $target,
++                    [StringComparison]::OrdinalIgnoreCase
++                )
++            }
++    )
++}
++
++function Get-InteractiveTaskNames {
++    $service = New-Object -ComObject 'Schedule.Service'
++    $service.Connect()
++    $tasks = $service.GetFolder('\').GetTasks(1)
++    $names = @()
++    for ($index = 1; $index -le $tasks.Count; $index++) {
++        $task = $tasks.Item($index)
++        if ($task.Name -like 'HerdrInteractiveServer-*') {
++            $names += $task.Name
++        }
++    }
++    @($names | Sort-Object)
++}
++
++function Get-InteractiveLaunchDirectories {
++    param([string] $Base)
++
++    if (-not [IO.Directory]::Exists($Base)) {
++        return @()
++    }
++    @(
++        [IO.Directory]::EnumerateDirectories($Base) |
++            Where-Object {
++                [IO.Path]::GetFileName($_).StartsWith(
++                    'herdr-server-launch-',
++                    [StringComparison]::OrdinalIgnoreCase
++                )
++            } |
++            Sort-Object
++    )
++}
++
++function Stop-OwnedRuntimeProcesses {
++    param(
++        [string] $RuntimePath,
++        [int[]] $InitialProcessIds
++    )
++
++    $owned = @(
++        Get-ExactRuntimeProcesses $RuntimePath |
++            Where-Object { $InitialProcessIds -notcontains [int] $_.ProcessId }
++    )
++    foreach ($process in $owned) {
++        & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F 2>&1 | Out-Null
++    }
++}
++
++$stopwatch = [Diagnostics.Stopwatch]::StartNew()
++$exe = (Resolve-Path -LiteralPath $ExePath).Path
++if ([IO.Path]::GetFileName($exe) -ine 'herdr.exe') {
++    throw "interactive server probe requires herdr.exe, got $exe"
++}
++
++$profile = [Environment]::GetFolderPath('UserProfile')
++$bootstrapBase = Join-Path $profile 'AppData\Local\herdr\server-launch'
++$createdBootstrapBase = $false
++if ([IO.Directory]::Exists($bootstrapBase)) {
++    $bootstrapItem = Get-Item -LiteralPath $bootstrapBase -Force
++    if (($bootstrapItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
++        throw "interactive server launch root must not be a reparse point: $bootstrapBase"
++    }
++} else {
++    [IO.Directory]::CreateDirectory($bootstrapBase) | Out-Null
++    $createdBootstrapBase = $true
++}
++
++$initialTasks = @(Get-InteractiveTaskNames)
++if ($initialTasks.Count -ne 0) {
++    throw "interactive server probe found pre-existing scheduled task residue: $($initialTasks -join ', ')"
++}
++$initialLaunchDirectories = @(Get-InteractiveLaunchDirectories $bootstrapBase)
++if ($initialLaunchDirectories.Count -ne 0) {
++    throw "interactive server probe found pre-existing bootstrap residue: $($initialLaunchDirectories -join ', ')"
++}
++$initialProcesses = @(Get-ExactRuntimeProcesses $exe)
++$initialProcessIds = @($initialProcesses | ForEach-Object { [int] $_.ProcessId })
++
++$probeId = $null
++$temporary = $null
++for ($attempt = 0; $attempt -lt 10; $attempt++) {
++    $candidateId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
++    $candidateRoot = Join-Path ([IO.Path]::GetTempPath()) "h$candidateId"
++    if (-not [IO.Directory]::Exists($candidateRoot)) {
++        $probeId = $candidateId
++        $temporary = $candidateRoot
++        break
++    }
++}
++if ($null -eq $temporary) {
++    throw 'could not allocate a unique interactive server probe root'
++}
++[IO.Directory]::CreateDirectory($temporary) | Out-Null
++$batch = Join-Path $temporary 'launch.cmd'
++[IO.File]::WriteAllLines(
++    $batch,
++    @(
++        '@echo off',
++        'set "HERDR_REMOTE_SIDECAR_V1="',
++        'set "HERDR_BIN_PATH="',
++        'set "HERDR_SANDBOX_HERDR_EXE="',
++        'cd /d "%HERDR_PROBE_WORKING_DIRECTORY%"',
++        '"%HERDR_PROBE_EXE%" server start',
++        'exit /b %ERRORLEVEL%'
++    ),
++    [Text.Encoding]::ASCII
++)
++
++$savedEnvironment = @{}
++$environmentNames = @(
++    Get-ChildItem Env: |
++        Where-Object { $_.Name -like 'HERDR_*' } |
++        ForEach-Object Name
++    'XDG_CONFIG_HOME'
++    'XDG_STATE_HOME'
++) | Sort-Object -Unique
++foreach ($name in $environmentNames) {
++    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
++    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
++}
++
++$session = "h$probeId"
++$env:HERDR_SESSION = $session
++$env:HERDR_PROBE_EXE = $exe
++$env:HERDR_PROBE_WORKING_DIRECTORY = (Get-Location).ProviderPath
++$env:XDG_CONFIG_HOME = $temporary
++$env:XDG_STATE_HOME = $temporary
++
++$watcher = New-Object IO.FileSystemWatcher $bootstrapBase
++$watcher.IncludeSubdirectories = $true
++$watcher.NotifyFilter = [IO.NotifyFilters]::DirectoryName -bor [IO.NotifyFilters]::FileName
++$watcher.EnableRaisingEvents = $true
++$eventSource = "herdr-interactive-server-probe-$probeId"
++$eventSubscription = Register-ObjectEvent -InputObject $watcher -EventName Created `
++    -SourceIdentifier $eventSource
++$serverProcessId = $null
++$bootstrapObserved = $false
++$completed = $false
++
++try {
++    $jobHelper = Join-Path $PSScriptRoot 'windows_interactive_server_probe_job.cs'
++    if (-not (Test-Path -LiteralPath $jobHelper -PathType Leaf)) {
++        throw "interactive server probe job helper is missing: $jobHelper"
++    }
++    if ($null -eq ('HerdrWin.Probes.KillOnCloseProcess' -as [type])) {
++        Add-Type -Path $jobHelper
++    }
++    $argumentLine = '/d /q /c ""{0}""' -f $batch
++    $launcherExitCode = [HerdrWin.Probes.KillOnCloseProcess]::Run(
++        $env:ComSpec,
++        $argumentLine,
++        (Get-Location).ProviderPath,
++        $TimeoutSeconds * 1000
++    )
++    $events = @(Get-Event -SourceIdentifier $eventSource -ErrorAction SilentlyContinue)
++    if ($events.Count -eq 0) {
++        Wait-Event -SourceIdentifier $eventSource -Timeout 1 | Out-Null
++        $events = @(Get-Event -SourceIdentifier $eventSource -ErrorAction SilentlyContinue)
++    }
++    $bootstrapObserved = @(
++        $events | Where-Object { $_.SourceEventArgs.Name -like '*bootstrap.json' }
++    ).Count -ne 0
++    if ($launcherExitCode -ne 0) {
++        $detail = 'cmd.exe server start failed; see the command output above'
++        $serverLog = Join-Path $env:XDG_CONFIG_HOME "herdr\sessions\$session\herdr-server.log"
++        if ([IO.File]::Exists($serverLog)) {
++            $logDetail = [IO.File]::ReadAllText($serverLog)
++            if ($logDetail.Length -gt 8192) {
++                $logDetail = $logDetail.Substring($logDetail.Length - 8192)
++            }
++            $detail = "$detail`nserver log:`n$($logDetail.Trim())"
++        }
++        $runningDetail = @(
++            Get-ExactRuntimeProcesses $exe |
++                Where-Object { $initialProcessIds -notcontains [int] $_.ProcessId } |
++                ForEach-Object {
++                    "pid=$($_.ProcessId), session=$($_.SessionId), command=$($_.CommandLine)"
++                }
++        )
++        if ($runningDetail.Count -ne 0) {
++            $detail = "$detail`nruntime processes:`n$($runningDetail -join [Environment]::NewLine)"
++        }
++        if ([IO.Directory]::Exists($env:XDG_CONFIG_HOME)) {
++            $files = @(
++                [IO.Directory]::EnumerateFiles($env:XDG_CONFIG_HOME, '*', [IO.SearchOption]::AllDirectories) |
++                    ForEach-Object { $_.Substring($env:XDG_CONFIG_HOME.Length).TrimStart('\') }
++            )
++            if ($files.Count -ne 0) {
++                $detail = "$detail`nconfig files:`n$($files -join [Environment]::NewLine)"
++            }
++        }
++        throw "interactive server probe launcher failed with exit code ${launcherExitCode}: $detail"
++    }
++    if (-not $bootstrapObserved) {
++        throw 'server start did not use the Task Scheduler interactive launch path'
++    }
++
++    $newProcesses = @(
++        Get-ExactRuntimeProcesses $exe |
++            Where-Object { $initialProcessIds -notcontains [int] $_.ProcessId }
++    )
++    if ($newProcesses.Count -ne 1) {
++        throw "interactive server probe expected one new runtime process, found $($newProcesses.Count)"
++    }
++    $server = $newProcesses[0]
++    $serverProcessId = [int] $server.ProcessId
++    $currentSession = (Get-Process -Id $PID).SessionId
++    if ([int] $server.SessionId -ne [int] $currentSession) {
++        throw "interactive server launched in session $($server.SessionId), expected $currentSession"
++    }
++    $owner = Invoke-CimMethod -InputObject $server -MethodName GetOwner
++    if ($owner.ReturnValue -ne 0) {
++        throw "could not resolve interactive server owner, Win32 status $($owner.ReturnValue)"
++    }
++    $actualOwner = "$($owner.Domain)\$($owner.User)"
++    $expectedOwner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
++    if (-not [string]::Equals($actualOwner, $expectedOwner, [StringComparison]::OrdinalIgnoreCase)) {
++        throw "interactive server launched as $actualOwner, expected $expectedOwner"
++    }
++
++    $statusOutput = @(& $exe status server --json 2>&1)
++    $statusExitCode = $LASTEXITCODE
++    if ($statusExitCode -ne 0) {
++        throw "interactive server status failed with exit code ${statusExitCode}: $($statusOutput -join [Environment]::NewLine)"
++    }
++    $status = ($statusOutput -join [Environment]::NewLine) | ConvertFrom-Json
++    if ($status.running -ne $true) {
++        throw 'interactive server status did not report a running server'
++    }
++    if (@(Get-InteractiveTaskNames).Count -ne 0) {
++        throw 'interactive server launch left scheduled task residue'
++    }
++    if (@(Get-InteractiveLaunchDirectories $bootstrapBase).Count -ne 0) {
++        throw 'interactive server did not consume its bootstrap state'
++    }
++
++    $stopOutput = @(& $exe server stop 2>&1)
++    $stopExitCode = $LASTEXITCODE
++    if ($stopExitCode -ne 0) {
++        throw "interactive server stop failed with exit code ${stopExitCode}: $($stopOutput -join [Environment]::NewLine)"
++    }
++    $serverProcess = Get-Process -Id $serverProcessId -ErrorAction SilentlyContinue
++    if ($null -ne $serverProcess -and -not $serverProcess.WaitForExit(10000)) {
++        throw 'interactive server did not exit within 10 seconds after stop'
++    }
++    $serverProcessId = $null
++
++    if (@(Get-InteractiveTaskNames).Count -ne 0) {
++        throw 'interactive server stop left scheduled task residue'
++    }
++    if (@(Get-InteractiveLaunchDirectories $bootstrapBase).Count -ne 0) {
++        throw 'interactive server stop left bootstrap residue'
++    }
++    $completed = $true
++} finally {
++    if ($null -ne $serverProcessId) {
++        try { & $exe server stop 2>&1 | Out-Null } catch {}
++    }
++    Stop-OwnedRuntimeProcesses $exe $initialProcessIds
++    Unregister-Event -SourceIdentifier $eventSource -ErrorAction SilentlyContinue
++    Remove-Event -SourceIdentifier $eventSource -ErrorAction SilentlyContinue
++    $watcher.Dispose()
++    foreach ($name in $savedEnvironment.Keys) {
++        if ($null -eq $savedEnvironment[$name]) {
++            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
++        } else {
++            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
++        }
++    }
++    if ([IO.Directory]::Exists($temporary)) {
++        Remove-Item -LiteralPath $temporary -Recurse -Force
++    }
++    if ($createdBootstrapBase -and [IO.Directory]::Exists($bootstrapBase) -and
++        [IO.Directory]::GetFileSystemEntries($bootstrapBase).Count -eq 0) {
++        [IO.Directory]::Delete($bootstrapBase)
++    }
++}
++
++if (-not $completed) {
++    throw 'interactive server launch probe did not reach a terminal result'
++}
++$stopwatch.Stop()
++"interactive_server_launch_probe=passed"
++"parent=cmd.exe"
++"session=$currentSession"
++"owner=$expectedOwner"
++"elapsed_seconds=$('{0:F3}' -f $stopwatch.Elapsed.TotalSeconds)"
+diff --git a/scripts/windows_interactive_server_probe_job.cs b/scripts/windows_interactive_server_probe_job.cs
+new file mode 100644
+index 0000000000000000000000000000000000000000..0fcc32899e8ba1e6d8db453f5ea719d3cf0a63c4
+--- /dev/null
++++ b/scripts/windows_interactive_server_probe_job.cs
+@@ -0,0 +1,244 @@
++using System;
++using System.ComponentModel;
++using System.Runtime.InteropServices;
++using System.Text;
++
++namespace HerdrWin.Probes
++{
++    public static class KillOnCloseProcess
++    {
++        private const uint CreateSuspended = 0x00000004;
++        private const uint JobObjectExtendedLimitInformation = 9;
++        private const uint JobObjectLimitKillOnJobClose = 0x00002000;
++        private const uint WaitObject0 = 0x00000000;
++        private const uint WaitTimeout = 0x00000102;
++        private const uint InfiniteResumeFailure = 0xffffffff;
++
++        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
++        private struct StartupInfo
++        {
++            public int Size;
++            public string Reserved;
++            public string Desktop;
++            public string Title;
++            public uint X;
++            public uint Y;
++            public uint XSize;
++            public uint YSize;
++            public uint XCountChars;
++            public uint YCountChars;
++            public uint FillAttribute;
++            public uint Flags;
++            public ushort ShowWindow;
++            public ushort Reserved2Size;
++            public IntPtr Reserved2;
++            public IntPtr StandardInput;
++            public IntPtr StandardOutput;
++            public IntPtr StandardError;
++        }
++
++        [StructLayout(LayoutKind.Sequential)]
++        private struct ProcessInformation
++        {
++            public IntPtr Process;
++            public IntPtr Thread;
++            public uint ProcessId;
++            public uint ThreadId;
++        }
++
++        [StructLayout(LayoutKind.Sequential)]
++        private struct BasicLimitInformation
++        {
++            public long PerProcessUserTimeLimit;
++            public long PerJobUserTimeLimit;
++            public uint LimitFlags;
++            public UIntPtr MinimumWorkingSetSize;
++            public UIntPtr MaximumWorkingSetSize;
++            public uint ActiveProcessLimit;
++            public UIntPtr Affinity;
++            public uint PriorityClass;
++            public uint SchedulingClass;
++        }
++
++        [StructLayout(LayoutKind.Sequential)]
++        private struct IoCounters
++        {
++            public ulong ReadOperationCount;
++            public ulong WriteOperationCount;
++            public ulong OtherOperationCount;
++            public ulong ReadTransferCount;
++            public ulong WriteTransferCount;
++            public ulong OtherTransferCount;
++        }
++
++        [StructLayout(LayoutKind.Sequential)]
++        private struct ExtendedLimitInformation
++        {
++            public BasicLimitInformation BasicLimitInformation;
++            public IoCounters IoInfo;
++            public UIntPtr ProcessMemoryLimit;
++            public UIntPtr JobMemoryLimit;
++            public UIntPtr PeakProcessMemoryUsed;
++            public UIntPtr PeakJobMemoryUsed;
++        }
++
++        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
++        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool SetInformationJobObject(
++            IntPtr job,
++            uint informationClass,
++            IntPtr information,
++            uint informationLength);
++
++        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
++        private static extern bool CreateProcess(
++            string applicationName,
++            StringBuilder commandLine,
++            IntPtr processAttributes,
++            IntPtr threadAttributes,
++            bool inheritHandles,
++            uint creationFlags,
++            IntPtr environment,
++            string currentDirectory,
++            ref StartupInfo startupInfo,
++            out ProcessInformation processInformation);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern uint ResumeThread(IntPtr thread);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool TerminateProcess(IntPtr process, uint exitCode);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
++
++        [DllImport("kernel32.dll", SetLastError = true)]
++        private static extern bool CloseHandle(IntPtr handle);
++
++        public static int Run(
++            string executable,
++            string arguments,
++            string workingDirectory,
++            int timeoutMilliseconds)
++        {
++            if (string.IsNullOrWhiteSpace(executable) ||
++                string.IsNullOrWhiteSpace(workingDirectory) ||
++                timeoutMilliseconds <= 0)
++            {
++                throw new ArgumentException("probe process arguments are invalid");
++            }
++
++            IntPtr job = CreateJobObject(IntPtr.Zero, null);
++            if (job == IntPtr.Zero)
++            {
++                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed");
++            }
++
++            ProcessInformation process = new ProcessInformation();
++            try
++            {
++                ExtendedLimitInformation limits = new ExtendedLimitInformation();
++                limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
++                int limitsSize = Marshal.SizeOf(typeof(ExtendedLimitInformation));
++                IntPtr limitsPointer = Marshal.AllocHGlobal(limitsSize);
++                try
++                {
++                    Marshal.StructureToPtr(limits, limitsPointer, false);
++                    if (!SetInformationJobObject(
++                        job,
++                        JobObjectExtendedLimitInformation,
++                        limitsPointer,
++                        (uint)limitsSize))
++                    {
++                        throw new Win32Exception(
++                            Marshal.GetLastWin32Error(),
++                            "SetInformationJobObject failed");
++                    }
++                }
++                finally
++                {
++                    Marshal.FreeHGlobal(limitsPointer);
++                }
++
++                StartupInfo startup = new StartupInfo();
++                startup.Size = Marshal.SizeOf(typeof(StartupInfo));
++                StringBuilder commandLine = new StringBuilder(
++                    QuoteArgument(executable) + " " + arguments);
++                if (!CreateProcess(
++                    executable,
++                    commandLine,
++                    IntPtr.Zero,
++                    IntPtr.Zero,
++                    false,
++                    CreateSuspended,
++                    IntPtr.Zero,
++                    workingDirectory,
++                    ref startup,
++                    out process))
++                {
++                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcess failed");
++                }
++                if (!AssignProcessToJobObject(job, process.Process))
++                {
++                    int assignError = Marshal.GetLastWin32Error();
++                    TerminateProcess(process.Process, 1);
++                    WaitForSingleObject(process.Process, 5000);
++                    throw new Win32Exception(
++                        assignError,
++                        "AssignProcessToJobObject failed");
++                }
++                if (ResumeThread(process.Thread) == InfiniteResumeFailure)
++                {
++                    throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed");
++                }
++
++                uint wait = WaitForSingleObject(process.Process, (uint)timeoutMilliseconds);
++                if (wait == WaitTimeout)
++                {
++                    TerminateJobObject(job, 1);
++                    WaitForSingleObject(process.Process, 5000);
++                    throw new TimeoutException("probe process exceeded its deadline");
++                }
++                if (wait != WaitObject0)
++                {
++                    throw new Win32Exception(Marshal.GetLastWin32Error(), "process wait failed");
++                }
++
++                uint exitCode;
++                if (!GetExitCodeProcess(process.Process, out exitCode))
++                {
++                    throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed");
++                }
++                return unchecked((int)exitCode);
++            }
++            finally
++            {
++                if (process.Thread != IntPtr.Zero)
++                {
++                    CloseHandle(process.Thread);
++                }
++                if (process.Process != IntPtr.Zero)
++                {
++                    CloseHandle(process.Process);
++                }
++                CloseHandle(job);
++            }
++        }
++
++        private static string QuoteArgument(string value)
++        {
++            return "\"" + value.Replace("\"", "\\\"") + "\"";
++        }
++    }
++}
 diff --git a/src/api/client.rs b/src/api/client.rs
 index 326ebc7db4d913192a7eb202630d07b647f7699d..cc6051c5e770c5a05be4916959d80b00e0a40f36 100644
 --- a/src/api/client.rs

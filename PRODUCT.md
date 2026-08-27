@@ -9,11 +9,12 @@ tests remain the detailed implementation truth.
 
 ## Product Shape and Identity
 
-- herdr-win is an unofficial, upstream-first cross-platform distribution that
-  develops and ships practical bug fixes and extensions where upstream support is
-  incomplete or not yet available. Its strongest focus areas are Windows, OpenCode
-  reliability, and multi-Agent workflows. The maintained patch set remains small,
-  reviewable, and suitable for upstream rather than presenting a competing product.
+- herdr-win is an unofficial, upstream-first extended cross-platform distribution
+  for developers who need extended Herdr capabilities today. It makes practical
+  bug fixes and extensions available through a small, reviewable patch set designed
+  for upstream adoption. Its strongest focus areas are multi-Agent workflows,
+  terminal experience, OpenCode reliability, and Windows support; it complements
+  upstream Herdr rather than presenting a competing product.
 - Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
@@ -36,8 +37,8 @@ tests remain the detailed implementation truth.
   interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
   and owned upstream unless a maintained fork delta explicitly changes it.
-- The maintained user-visible delta covers Windows terminal fidelity, SSH target
-  provisioning, and managed distribution; OpenCode reliability and multi-Agent
+- The maintained user-visible delta covers the Windows terminal experience, SSH
+  target provisioning, and managed distribution; OpenCode reliability and multi-Agent
   layouts; managed Agent launch and recovery; completion controls and metadata
   capacity; worktree lifecycle; and focused cross-platform correctness and download
   hardening. Upstream Herdr owns general behavior unless a maintained delta changes

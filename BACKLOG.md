@@ -15,4 +15,6 @@ rules belong in `PRODUCT.md`; stable technical design belongs in
 
 ## Items
 
-No selected future outcomes.
+- Rename the repository and distribution presentation to **Herdr X** (**Herdr
+  Extended**) when the migration can be scheduled, while preserving the runtime
+  command, state, and protocol identity as `herdr`.

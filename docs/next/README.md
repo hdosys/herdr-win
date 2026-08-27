@@ -1,18 +1,24 @@
 # herdr-win
 
-**Develop on Windows from Linux, macOS, or Windows with a cross-platform [Herdr](https://github.com/herdrdev/herdr) distribution that makes Windows a first-class client and server.**
+**An upstream-friendly [Herdr](https://github.com/herdrdev/herdr) distribution for developers who need extended capabilities today: multi-Agent workflow extensions, terminal experience improvements, OpenCode integrations, and first-class Windows support.**
 
 [![Latest stable release](https://img.shields.io/github/v/release/hdosys/herdr-win?display_name=tag&sort=semver)](https://github.com/hdosys/herdr-win/releases/latest) [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Release pipeline](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)
 
-Despite its historical name, `herdr-win` is not Windows-only. It is an unofficial, upstream-first distribution that develops and ships practical bug fixes and extensions where upstream support is incomplete or not yet available. Its strongest focus areas are Windows, OpenCode reliability, and multi-Agent workflows. It complements upstream Herdr while the executable, command, configuration, state, sessions, sockets, and protocol remain `herdr`.
+Despite its historical name, `herdr-win` is not Windows-only. It is an unofficial, upstream-first extended distribution that makes practical bug fixes and extensions available today through a small, reviewable patch queue designed for upstream adoption. Its strongest focus areas are multi-Agent workflows, terminal experience, OpenCode reliability, and Windows support. It complements upstream Herdr while the executable, command, configuration, state, sessions, sockets, and protocol remain `herdr`.
 
 Every published release contains matching Windows, Linux, and macOS binaries built from one reviewed stable Herdr release and one ordered patch queue. Releases are normal stable GitHub releases, and the integrated update paths reject prerelease feeds.
 
 [What differs from upstream](#what-differs-from-upstream) · [Install](#install) · [First use](#first-use) · [Everyday use](#everyday-use) · [Troubleshooting](#troubleshooting) · [Project reference](#project-reference)
 
+## See it in action
+
+https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
+
+Detach from a Windows-hosted Herdr session, reconnect from another terminal, and continue the same OpenCode session without RDP.
+
 ## Engineering approach
 
-- **Upstream-first and deletion-oriented:** each remaining behavior has one responsibility-owned mailbox and disappears when equivalent support ships upstream.
+- **Upstream-first and contribution-oriented:** each behavior has one responsibility-owned mailbox designed for focused upstream review and leaves the queue when equivalent support ships upstream.
 - **One coherent distribution:** all supported clients, servers, and provisioned remote runtimes come from the same source tree, build identity, and wire protocol.
 - **Real boundary evidence:** Windows setup, ConPTY packaging, SSH provisioning, updates, uninstall, and cross-platform artifacts are exercised at their product-owned boundaries before publication.
 - **No parallel product:** fork identity stays in repository, release, update-feed, setup, and Installed Apps presentation while normal Herdr commands and state remain unchanged.
@@ -22,18 +28,12 @@ Every published release contains matching Windows, Linux, and macOS binaries bui
 ```mermaid
 flowchart TB
     S["Source<br/>Upstream Herdr v0.8.2 → BASE 9eb521456ac0"]
-    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;fidelity&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery<br/>↓&nbsp;0011&nbsp;Metadata&nbsp;capacity&nbsp;→&nbsp;0012&nbsp;Completion&nbsp;alerts"]
+    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;experience&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery<br/>↓&nbsp;0011&nbsp;Metadata&nbsp;capacity&nbsp;→&nbsp;0012&nbsp;Completion&nbsp;alerts"]
     V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
     S --> Q --> V
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact reviewed upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only patch order. A manual build replays that source and retains one complete candidate; promotion publishes those exact bytes without rebuilding or repackaging them.
-
-## See it in action
-
-https://github.com/user-attachments/assets/b6c02367-683b-4a1f-94e6-b662149d89d9
-
-Detach from a Windows-hosted Herdr session, reconnect from another terminal, and continue the same OpenCode session without RDP.
 
 ## What differs from upstream
 
@@ -42,7 +42,7 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 | Area | Status | What this repository contributes |
 | --- | --- | --- |
 | Native ConPTY foundation | **Upstreamed in Herdr v0.6.9** | Reuses Herdr's modern app-local ConPTY packaging instead of carrying a duplicate foundation. |
-| Terminal fidelity | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance, preserves cursor and Windows VTI input behavior, and avoids unframed OSC 4 palette replies. |
+| Terminal experience | **Maintained here** · [`0001`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0001-windows-terminal-appearance.patch) | Follows host light/dark appearance, preserves cursor and Windows VTI input behavior, and avoids unframed OSC 4 palette replies. |
 | Windows SSH target support | **Maintained here** · [#2329](https://github.com/herdrdev/herdr/pull/2329) · [`0003`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0003-windows-remote-attach.patch) | Adds x86_64/ARM64 host detection, exact provisioning and activation, visible interactive progress, and fail-closed detached launch into the SSH user's active desktop session. |
 | Managed Windows releases | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, process-safe uninstall, and stable-only release selection. |
 | OpenCode and multi-Agent workflows | **Maintained here** · [#3052](https://github.com/herdrdev/herdr/issues/3052) · [#2450](https://github.com/herdrdev/herdr/issues/2450) · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps retries and prompts truthful, preserves each pane's selected root session, and maps concurrent direct subagents into adaptive readable splits. |

@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-## [2026.08.27.2] - 2026-08-27
+## [2026.08.27.3] - 2026-08-27
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
 

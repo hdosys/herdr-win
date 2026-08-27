@@ -199,6 +199,16 @@ configuration repository.
   `scripts/delta_workflow.py`, `scripts/local_windows_installer.py`, and their focused
   tests, without a second integration-version registry.
 
+- **Status: proposed. Share the Candidate normal-test Cargo target with the
+  pre-push focused Rust gate.** Expose one repository-owned command that runs the
+  required pre-push `just test-one` boundary against Candidate's stable Cargo
+  target, so Candidate can rerun the same test after push without recompiling its
+  binary. Evidence: the pre-push four-test gate compiled in 30.430 seconds, then
+  Candidate compiled the same Windows test binary in a separate target for 46.750
+  seconds before its 6.804-second test. Reusing that cache should remove roughly 45
+  seconds without skipping either gate. Owner: `scripts/local_windows_installer.py`,
+  `justfile`, and the Candidate procedure in `CONTRIBUTING.md`.
+
 - **Status: blocked. Exercise restored OpenCode roots in the native split
   probe.** Start the existing adaptive-split acceptance from a persisted OpenCode
   session after a Herdr restart, then create several direct children concurrently

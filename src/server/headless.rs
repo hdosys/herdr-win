@@ -5814,7 +5814,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_shell_deferral_requires_pending_cwd_and_real_client_geometry() {
+    async fn startup_bootstrap_shells_wait_for_real_client_geometry() {
         let startup_size = (120, 40);
         let expected_terminal_area = Rect::new(26, 1, 94, 39);
         let expected_pane_size = (39, 93);

@@ -1,4 +1,4 @@
-From 9133eba1ea1040eb0725b71cd776f44b25c06291 Mon Sep 17 00:00:00 2001
+From ed47930e285ddd4d1ff0df291b7877afe1209378 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/11] feat(session): auto-start configured agent
@@ -8,7 +8,7 @@ Refs herdrdev/herdr#321
  docs/next/CHANGELOG.md                        |   5 +
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
- justfile                                      |   8 +-
+ justfile                                      |   9 +-
  src/agent_resume.rs                           |  23 +-
  src/app/agents.rs                             | 284 +++++++++++++++++-
  src/app/api/panes.rs                          |  30 ++
@@ -25,7 +25,7 @@ Refs herdrdev/herdr#321
  src/platform/windows.rs                       |  89 ++++--
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 20 files changed, 682 insertions(+), 37 deletions(-)
+ 20 files changed, 683 insertions(+), 37 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
@@ -88,10 +88,10 @@ index 60cc83c35a009e9c2d2e36ba7896da262e401660..8198ea516cee6c65922263cbb00d0952
            "key": "session.resume_agents_on_restore",
            "type": "boolean",
 diff --git a/justfile b/justfile
-index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977cea22e31 100644
+index 1c53286322d85961c75c2608e6c17c68da4c03e6..7e6c68a518ac44d641a20cf32e52db36a0ad36ca 100644
 --- a/justfile
 +++ b/justfile
-@@ -9,8 +9,14 @@ test:
+@@ -9,8 +9,15 @@ test:
      just plugin-marketplace-test
  
  # Run one nextest filter, e.g. `just test-one codex_stale_working`
@@ -99,6 +99,7 @@ index 85e0a59603da663bb52c3d2543735cddddeb3936..96d68a139951862b429fcf6acd532977
 +[windows]
 +test-one filter:
 +    cargo nextest run --locked --bin herdr "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
++    exit $LASTEXITCODE
 +
 +[unix]
  test-one filter:
@@ -1213,10 +1214,10 @@ index b99ec85848257429b398254d263fbe814dfd5459..37bfebaedc2499de54c531b92a7ce248
              let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
              let status = run_command(shell, &no_args_command, &no_args_capture);
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 108080f4be9e083904af5b2899e0fd3ef28b2dd1..55de82f7cb04b1858be109c21dfd7365b791565b 100644
+index 65b073817bd540baf16bcff7e43dfbb9622dcd3d..1af81acec16bd697c54d4a419e8e0b553ff9bc9a 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -4797,6 +4797,8 @@ impl HeadlessServer {
+@@ -4798,6 +4798,8 @@ impl HeadlessServer {
          // No resize polling needed — server has no terminal.
          // Client resize messages drive size changes instead.
  

@@ -318,7 +318,7 @@ mod initial_shell_readiness_tests {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub(crate) fn interactive_unix_shell_command(
     argv: &[String],
     shell_name: &str,
@@ -341,7 +341,7 @@ pub(crate) fn interactive_unix_shell_command(
     Some(command)
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn interactive_nushell_command(argv: &[String]) -> Option<String> {
     let mut parts = argv.iter();
     let mut command = format!("^{}", quote_nushell_arg(parts.next()?));
@@ -352,7 +352,7 @@ fn interactive_nushell_command(argv: &[String]) -> Option<String> {
     Some(command)
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn quote_nushell_arg(value: &str) -> String {
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('"');

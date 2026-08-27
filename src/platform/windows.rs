@@ -534,21 +534,63 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString 
 }
 
 pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
-    let shell_name = shell_name.to_ascii_lowercase();
-    let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
-    let (program, args) = argv.split_first()?;
-    if args.is_empty() {
-        return Some(if powershell {
-            format!("cmd.exe /d /c {program}")
-        } else {
-            program.clone()
-        });
+    match super::normalized_process_name(shell_name).as_str() {
+        "nu" => super::interactive_nushell_command(argv),
+        "bash" | "sh" => super::interactive_unix_shell_command(argv, shell_name, quote_posix_arg),
+        "powershell" | "pwsh" => powershell_agent_script(argv),
+        "cmd" => cmd_agent_command(argv),
+        _ => None,
     }
-    let script = powershell_agent_script(argv)?;
-    if powershell {
-        Some(script)
+}
+
+fn quote_posix_arg(value: &str) -> String {
+    if !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '@' | '%' | '_' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
+                )
+        })
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn cmd_agent_command(argv: &[String]) -> Option<String> {
+    let mut parts = argv.iter();
+    let mut command = quote_cmd_arg(parts.next()?);
+    for part in parts {
+        command.push(' ');
+        command.push_str(&quote_cmd_arg(part));
+    }
+    Some(command)
+}
+
+fn quote_cmd_arg(value: &str) -> String {
+    let mut encoded = String::new();
+    let mut chunk = String::new();
+    let flush_chunk = |encoded: &mut String, chunk: &mut String| {
+        if !chunk.is_empty() {
+            encoded.push_str(&quote_windows_command_line_arg(chunk));
+            chunk.clear();
+        }
+    };
+    for ch in value.chars() {
+        if matches!(ch, '%' | '!' | '&' | '|' | '<' | '>' | '^' | '(' | ')') {
+            flush_chunk(&mut encoded, &mut chunk);
+            encoded.push('^');
+            encoded.push(ch);
+        } else {
+            chunk.push(ch);
+        }
+    }
+    flush_chunk(&mut encoded, &mut chunk);
+    if encoded.is_empty() {
+        "\"\"".to_string()
     } else {
-        Some(cmd_encoded_powershell_command(&script))
+        encoded
     }
 }
 
@@ -558,13 +600,15 @@ fn powershell_agent_script(argv: &[String]) -> Option<String> {
         "& {{$herdrExtensions=if($env:PATHEXT){{@($env:PATHEXT -split ';')}}else{{@('.COM','.EXE','.BAT','.CMD')}};$herdrCommand=Get-Command -Name {} -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {{$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}}|Select-Object -First 1;if($null -eq $herdrCommand){{throw 'agent executable not found'}};$p=Start-Process -FilePath $herdrCommand.Path",
         super::quote_powershell_arg(program)
     );
-    let command_line = args
-        .iter()
-        .map(|arg| quote_windows_command_line_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-    command.push_str(" -ArgumentList ");
-    command.push_str(&super::quote_powershell_arg(&command_line));
+    if !args.is_empty() {
+        let command_line = args
+            .iter()
+            .map(|arg| quote_windows_command_line_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        command.push_str(" -ArgumentList ");
+        command.push_str(&super::quote_powershell_arg(&command_line));
+    }
     command.push_str(" -NoNewWindow -Wait -PassThru}");
     Some(command)
 }
@@ -596,17 +640,6 @@ fn quote_windows_command_line_arg(value: &str) -> String {
     quoted.push_str(&"\\".repeat(backslashes * 2));
     quoted.push('"');
     quoted
-}
-
-fn cmd_encoded_powershell_command(script: &str) -> String {
-    use base64::Engine as _;
-
-    let utf16 = script
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect::<Vec<_>>();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
-    format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -3408,17 +3441,43 @@ mod tests {
     }
 
     #[test]
-    fn argument_free_agent_commands_stay_concise_and_use_native_resolution() {
-        let argv = vec!["opencode".into()];
+    fn supported_windows_shells_keep_agent_launch_in_the_selected_shell() {
+        let argv = vec!["agent-cli".into()];
 
-        assert_eq!(
-            super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
-            Some("cmd.exe /d /c opencode")
-        );
+        let powershell = super::interactive_shell_command(&argv, "powershell.exe").unwrap();
+        assert!(powershell.contains("Start-Process"));
+        assert!(!powershell.to_ascii_lowercase().contains("cmd.exe"));
         assert_eq!(
             super::interactive_shell_command(&argv, "cmd.exe").as_deref(),
-            Some("opencode")
+            Some("agent-cli")
         );
+        assert_eq!(
+            super::interactive_shell_command(&argv, "nu.exe").as_deref(),
+            Some("^\"agent-cli\"")
+        );
+        assert_eq!(
+            super::interactive_shell_command(&argv, "bash.exe").as_deref(),
+            Some("agent-cli")
+        );
+        assert_eq!(super::interactive_shell_command(&argv, "unknown.exe"), None);
+    }
+
+    #[test]
+    fn nushell_agent_commands_use_direct_external_invocation() {
+        let argv = vec![
+            "agent-cli".into(),
+            "resume".into(),
+            "--workspace".into(),
+            r"C:\Workspaces\two words".into(),
+        ];
+
+        let command = super::interactive_shell_command(&argv, "nu.exe").unwrap();
+        assert_eq!(
+            command,
+            r#"^"agent-cli" "resume" "--workspace" "C:\\Workspaces\\two words""#
+        );
+        assert!(!command.to_ascii_lowercase().contains("powershell"));
+        assert!(!command.contains("EncodedCommand"));
     }
 
     #[test]
@@ -3453,31 +3512,18 @@ mod tests {
     }
 
     #[test]
-    fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
-        use base64::Engine as _;
-
-        assert_eq!(super::super::quote_powershell_arg("@options"), "'@options'");
+    fn cmd_agent_command_escapes_shell_expansion_without_powershell() {
         let argv = vec![
             "pi".into(),
             String::new(),
             "two words".into(),
             "100%".into(),
-            "wow!".into(),
-            "a'b".into(),
+            "%PATH%".into(),
+            "a&b".into(),
+            "!PATH!".into(),
         ];
         let command = super::interactive_shell_command(&argv, "cmd.exe").unwrap();
-        let encoded = command.split_whitespace().last().unwrap();
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .unwrap();
-        let utf16 = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            String::from_utf16(&utf16).unwrap(),
-            "& {$herdrExtensions=if($env:PATHEXT){@($env:PATHEXT -split ';')}else{@('.COM','.EXE','.BAT','.CMD')};$herdrCommand=Get-Command -Name pi -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}|Select-Object -First 1;if($null -eq $herdrCommand){throw 'agent executable not found'};$p=Start-Process -FilePath $herdrCommand.Path -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru}"
-        );
+        assert_eq!(command, r#"pi "" "two words" 100^% ^%PATH^% a^&b ^!PATH^!"#);
     }
 
     #[test]
@@ -3523,7 +3569,8 @@ mod tests {
             let mut process = match shell {
                 "cmd.exe" => {
                     let mut process = Command::new("cmd.exe");
-                    process.args(["/d", "/c", command]);
+                    process.args(["/d", "/s", "/c"]);
+                    process.raw_arg(format!("\"{command}\""));
                     process
                 }
                 "powershell.exe" => {

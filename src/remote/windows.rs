@@ -443,7 +443,13 @@ pub(super) fn powershell_attach_probe_command(
         server_arguments,
     );
     // Keep the encoded command and its Windows length budget checkout-independent.
-    let script = format!("{variables}{WINDOWS_ATTACH_PROBE_SCRIPT}").replace("\r\n", "\n");
+    let probe = WINDOWS_ATTACH_PROBE_SCRIPT
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let script = format!("{variables}{probe}");
     encoded_powershell_command(&script)
 }
 
@@ -719,12 +725,13 @@ mod tests {
     #[test]
     fn windows_attach_probe_combines_platform_binary_and_server_inspection() {
         let expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let session = "a".repeat(64);
         let command = powershell_attach_probe_command(
             "local",
             20,
             Some(expected_sha256),
             true,
-            Some("agent's work"),
+            Some(&session),
         );
         let script = decoded_powershell_command(&command);
 
@@ -738,15 +745,18 @@ mod tests {
         assert!(script.contains(&format!("$ExpectedPayloadSha256 = '{expected_sha256}'")));
         assert!(script.contains(&format!("$V = '{REMOTE_SIDECAR_VALIDATE_ARG}'")));
         assert!(script.contains("$AllowPathCandidate = $true"));
-        assert!(script.contains("$ServerArguments = @('--session', 'agent''s work')"));
+        assert!(script.contains(&format!("$ServerArguments = @('--session', '{session}')")));
         assert!(script.contains("PROCESSOR_ARCHITECTURE"));
         assert!(script.contains("default_shell"));
         assert!(script.contains("OpenSSH"));
         assert!(script.contains("Get-Command -Name 'herdr.exe'"));
         assert!(!script.contains("Get-FileHash"));
-        assert!(script.contains("'remote',\n    'herdr.exe'"));
+        assert!(script.contains("'remote',\n'herdr.exe'"));
         assert!(script.contains("'status' 'client' '--json'"));
         assert!(script.contains("@('status', 'server', '--json')"));
+        assert!(script.contains("matches_current"));
+        assert!(script.contains("candidate = $candidate"));
+        assert!(!script.contains("selected ="));
         assert!(script.contains("ConvertTo-Json -Compress"));
     }
 

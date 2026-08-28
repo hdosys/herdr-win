@@ -11,21 +11,13 @@ $defaultShell = if (
     'cmd.exe'
 }
 
-function Get-HerdrAttachCandidate([string]$Path, [bool]$Sidecar) {
+function Get-Candidate([string]$Path, [bool]$Sidecar) {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.File]::Exists($Path)) {
         return $null
     }
     if ($Sidecar) {
         $env:HERDR_REMOTE_SIDECAR_V1 = '1'
         Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
-        $a = @($V)
-        if ($null -ne $ExpectedPayloadSha256) {
-            $a += $ExpectedPayloadSha256
-        }
-        & $Path @a | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            return $null
-        }
     } else {
         Remove-Item Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
     }
@@ -38,11 +30,23 @@ function Get-HerdrAttachCandidate([string]$Path, [bool]$Sidecar) {
     } catch {
         return $null
     }
-    if (
-        [string]$client.version -cne $ExpectedRuntime -or
-        [uint32]$client.protocol -ne $ExpectedProtocol
-    ) {
-        return $null
+    $matchesCurrent = (
+        [string]$client.version -ceq $ExpectedRuntime -and
+        [uint32]$client.protocol -eq $ExpectedProtocol
+    )
+    if ($Sidecar) {
+        $a = @($V)
+        if ($matchesCurrent -and $null -ne $ExpectedPayloadSha256) {
+            $a += $ExpectedPayloadSha256
+        }
+        & $Path @a | Out-Null
+        if ($LASTEXITCODE -ne 0 -and $matchesCurrent -and $null -ne $ExpectedPayloadSha256) {
+            & $Path $V | Out-Null
+            $matchesCurrent = $false
+        }
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
     }
     $serverArguments = @($ServerArguments) + @('status', 'server', '--json')
     $serverLines = @(& $Path @serverArguments)
@@ -57,16 +61,17 @@ function Get-HerdrAttachCandidate([string]$Path, [bool]$Sidecar) {
     return [pscustomobject]@{
         path = $Path
         sidecar = $Sidecar
+        matches_current = $matchesCurrent
         client = $client
         server = $server
     }
 }
 
-$selected = $null
+$pathCandidate = $null
 if ($AllowPathCandidate) {
     $commands = @(Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue)
     if ($commands.Count -gt 0) {
-        $selected = Get-HerdrAttachCandidate ([string]$commands[0].Source) $false
+        $pathCandidate = Get-Candidate ([string]$commands[0].Source) $false
     }
 }
 $sidecarPath = [IO.Path]::Combine(
@@ -75,14 +80,25 @@ $sidecarPath = [IO.Path]::Combine(
     'remote',
     'herdr.exe'
 )
-if ($null -eq $selected) {
-    $selected = Get-HerdrAttachCandidate $sidecarPath $true
+$sidecarCandidate = if ($null -eq $pathCandidate -or -not $pathCandidate.matches_current) {
+    Get-Candidate $sidecarPath $true
+} else {
+    $null
+}
+$candidate = if ($null -ne $pathCandidate -and $pathCandidate.matches_current) {
+    $pathCandidate
+} elseif ($null -ne $sidecarCandidate -and $sidecarCandidate.matches_current) {
+    $sidecarCandidate
+} elseif ($null -ne $pathCandidate) {
+    $pathCandidate
+} else {
+    $sidecarCandidate
 }
 [ordered]@{
     os = 'Windows_NT'
     arch = [string]$env:PROCESSOR_ARCHITECTURE
     user_profile = [string]$env:USERPROFILE
     default_shell = $defaultShell
-    selected = $selected
+    candidate = $candidate
 } | ConvertTo-Json -Compress -Depth 8
 exit 0

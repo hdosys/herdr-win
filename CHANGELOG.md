@@ -12,7 +12,7 @@
 - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
 
 ### Changed
-- `herdr --remote <target> --yes` now approves installation or restart for one normal attach, while interactive progress summarizes checking, an optional verified update, and opening the target without exposing every internal staging step.
+- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
 - Windows setup Welcome and Finish headings now show only the sortable local UTC label or release CalVer. The exact build ID remains in technical metadata, while Welcome continues to name the current reviewed Herdr base version.
 
 ## [0.8.2] - 2026-08-19

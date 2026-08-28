@@ -69,31 +69,6 @@ function Remove-HerdrRemoteTree {
     [IO.Directory]::Delete($Path, $false)
 }
 
-function Invoke-HerdrRemotePrepareInstall {
-    param(
-        [Parameter(Mandatory = $true)][string] $Destination,
-        [Parameter(Mandatory = $true)][string] $ArchiveName
-    )
-
-    $parent = Split-Path -Parent $Destination
-    [IO.Directory]::CreateDirectory($parent) | Out-Null
-    if ($ArchiveName -cnotmatch '^payload-[0-9]+-[0-9a-f]+\.zip$') {
-        throw 'invalid remote payload archive name'
-    }
-    $archive = Join-Path $parent $ArchiveName
-    if ([IO.File]::Exists($archive)) {
-        throw "remote payload archive already exists: $archive"
-    }
-}
-
-function Remove-HerdrRemoteArchive {
-    param([Parameter(Mandatory = $true)][string] $Archive)
-
-    if ([IO.File]::Exists($Archive)) {
-        [IO.File]::Delete($Archive)
-    }
-}
-
 function Assert-HerdrRemoteStagePath {
     param(
         [Parameter(Mandatory = $true)][string] $Stage,
@@ -166,8 +141,7 @@ function Invoke-HerdrRemoteStageInstall {
         }
 
         [IO.File]::WriteAllBytes((Join-Path $stage '.lease'), [byte[]]@())
-        [Console]::Out.WriteLine($stage)
-        $stage = ''
+        return $stage
     } catch {
         if (-not [string]::IsNullOrEmpty($stage) -and [IO.Directory]::Exists($stage)) {
             Remove-HerdrRemoteTree -Path $stage
@@ -183,13 +157,58 @@ function Invoke-HerdrRemoteStageInstall {
 function Invoke-HerdrRemoteActivateInstall {
     param(
         [Parameter(Mandatory = $true)][string] $Stage,
-        [Parameter(Mandatory = $true)][string] $Destination
+        [Parameter(Mandatory = $true)][string] $Destination,
+        [string] $ExistingHerdr = '',
+        [bool] $ExistingSidecar = $false,
+        [string] $SessionName = '',
+        [Parameter(Mandatory = $true)][string] $ExpectedRuntimeVersion,
+        [Parameter(Mandatory = $true)][int] $ExpectedProtocol
     )
 
     Assert-HerdrRemoteStagePath -Stage $Stage -Destination $Destination
-    Assert-HerdrPortablePayload -Root $Stage -AllowLease
+    if (-not [IO.File]::Exists((Join-Path $Stage '.lease'))) {
+        throw 'validated remote payload stage is missing its lease'
+    }
+
+    if (-not [string]::IsNullOrEmpty($ExistingHerdr)) {
+        if ($ExistingSidecar) {
+            $env:HERDR_REMOTE_SIDECAR_V1 = '1'
+            Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
+        } else {
+            Remove-Item Env:HERDR_REMOTE_SIDECAR_V1 -ErrorAction SilentlyContinue
+        }
+        $scopedArguments = @()
+        if (-not [string]::IsNullOrEmpty($SessionName)) {
+            $scopedArguments += @('--session', $SessionName)
+        }
+        $stopArguments = @($scopedArguments) + @('server', 'stop')
+        & $ExistingHerdr @stopArguments | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'remote server stop failed before payload activation'
+        }
+    }
+
     if ([IO.Directory]::Exists($Destination)) {
         Remove-HerdrRemoteSidecar -Path $Destination
     }
     [IO.Directory]::Move($Stage, $Destination)
+
+    $env:HERDR_REMOTE_SIDECAR_V1 = '1'
+    Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue
+    $exe = Join-Path $Destination 'herdr.exe'
+    $clientLines = @(& $exe status client --json)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'activated remote Herdr failed its client status check'
+    }
+    try {
+        $client = (($clientLines -join "`n").Trim() | ConvertFrom-Json)
+    } catch {
+        throw 'activated remote Herdr returned invalid client status JSON'
+    }
+    if (
+        [string]$client.version -cne $ExpectedRuntimeVersion -or
+        [int]$client.protocol -ne $ExpectedProtocol
+    ) {
+        throw 'activated remote Herdr runtime identity or protocol mismatch'
+    }
 }

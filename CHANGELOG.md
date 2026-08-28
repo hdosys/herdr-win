@@ -5,9 +5,10 @@ This changelog records only user-visible changes released by the `herdr-win` for
 ## Unreleased
 
 ### Changed
-- Managed Agent startup now stays in the selected interactive shell. PowerShell,
-  cmd, Nushell, Git Bash, and `sh` use their native command syntax instead of a
-  PowerShell transport.
+- Managed Agent startup and native session restore now share the selected
+  interactive shell's command renderer. PowerShell, cmd, Nushell, Git Bash, and
+  `sh` use native command syntax instead of a PowerShell transport or a separate
+  restore quoting path.
 
 ## [2026.08.27.5] - 2026-08-27
 

@@ -192,10 +192,11 @@ tests remain the detailed implementation truth.
   `--no-session`, and split panes do not trigger it. Exiting or interrupting the
   Agent returns to the tab's underlying shell, and Herdr never writes the setting.
 - Managed Agent launch stays in the selected interactive shell and preserves
-  exact arguments. PowerShell, cmd, Nushell, and Git Bash each use their native
-  command syntax on Windows; unknown Windows shells fail closed. Linux and macOS
-  use shell-native argument quoting, including explicit external-command
-  invocation for Nushell.
+  exact arguments. Initial start, auto-start, and native session resume share
+  the same selected-shell renderer. PowerShell, cmd, Nushell, and Git Bash each
+  use their native command syntax on Windows; unknown Windows shells fail
+  closed. Linux and macOS use shell-native argument quoting, including explicit
+  external-command invocation for Nushell.
 - OpenCode panes remain bound to the root session selected locally in that pane;
   server-global creation events from another attached client cannot take over that
   selection, while child prompts still report blocked and working state through the

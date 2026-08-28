@@ -205,9 +205,12 @@ configuration repository.
   target, so Candidate can rerun the same test after push without recompiling its
   binary. Evidence: the pre-push four-test gate compiled in 30.430 seconds, then
   Candidate compiled the same Windows test binary in a separate target for 46.750
-  seconds before its 6.804-second test. Reusing that cache should remove roughly 45
-  seconds without skipping either gate. Owner: `scripts/local_windows_installer.py`,
-  `justfile`, and the Candidate procedure in `CONTRIBUTING.md`.
+  seconds before its 6.804-second test. A later eight-test gate reused its cache and
+  finished in 7.401 seconds, while Candidate recompiled the same normal-profile
+  binary for 63 seconds and spent 71.711 seconds on that boundary. Reusing the cache
+  should remove roughly 45 to 60 seconds without skipping either gate. Owner:
+  `scripts/local_windows_installer.py`, `justfile`, and the Candidate procedure in
+  `CONTRIBUTING.md`.
 
 - **Status: blocked. Exercise restored OpenCode roots in the native split
   probe.** Start the existing adaptive-split acceptance from a persisted OpenCode

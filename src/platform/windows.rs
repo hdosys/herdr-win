@@ -533,115 +533,6 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString 
         .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
 }
 
-pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
-    match super::normalized_process_name(shell_name).as_str() {
-        "nu" => super::interactive_nushell_command(argv),
-        "bash" | "sh" => super::interactive_unix_shell_command(argv, shell_name, quote_posix_arg),
-        "powershell" | "pwsh" => powershell_agent_script(argv),
-        "cmd" => cmd_agent_command(argv),
-        _ => None,
-    }
-}
-
-fn quote_posix_arg(value: &str) -> String {
-    if !value.is_empty()
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric()
-                || matches!(
-                    ch,
-                    '@' | '%' | '_' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
-                )
-        })
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn cmd_agent_command(argv: &[String]) -> Option<String> {
-    let mut parts = argv.iter();
-    let mut command = quote_cmd_arg(parts.next()?);
-    for part in parts {
-        command.push(' ');
-        command.push_str(&quote_cmd_arg(part));
-    }
-    Some(command)
-}
-
-fn quote_cmd_arg(value: &str) -> String {
-    let mut encoded = String::new();
-    let mut chunk = String::new();
-    let flush_chunk = |encoded: &mut String, chunk: &mut String| {
-        if !chunk.is_empty() {
-            encoded.push_str(&quote_windows_command_line_arg(chunk));
-            chunk.clear();
-        }
-    };
-    for ch in value.chars() {
-        if matches!(ch, '%' | '!' | '&' | '|' | '<' | '>' | '^' | '(' | ')') {
-            flush_chunk(&mut encoded, &mut chunk);
-            encoded.push('^');
-            encoded.push(ch);
-        } else {
-            chunk.push(ch);
-        }
-    }
-    flush_chunk(&mut encoded, &mut chunk);
-    if encoded.is_empty() {
-        "\"\"".to_string()
-    } else {
-        encoded
-    }
-}
-
-fn powershell_agent_script(argv: &[String]) -> Option<String> {
-    let (program, args) = argv.split_first()?;
-    let mut command = format!(
-        "& {{$herdrExtensions=if($env:PATHEXT){{@($env:PATHEXT -split ';')}}else{{@('.COM','.EXE','.BAT','.CMD')}};$herdrCommand=Get-Command -Name {} -CommandType Application -All -ErrorAction SilentlyContinue|Where-Object {{$_.Path -and $herdrExtensions -contains [IO.Path]::GetExtension($_.Path)}}|Select-Object -First 1;if($null -eq $herdrCommand){{throw 'agent executable not found'}};$p=Start-Process -FilePath $herdrCommand.Path",
-        super::quote_powershell_arg(program)
-    );
-    if !args.is_empty() {
-        let command_line = args
-            .iter()
-            .map(|arg| quote_windows_command_line_arg(arg))
-            .collect::<Vec<_>>()
-            .join(" ");
-        command.push_str(" -ArgumentList ");
-        command.push_str(&super::quote_powershell_arg(&command_line));
-    }
-    command.push_str(" -NoNewWindow -Wait -PassThru}");
-    Some(command)
-}
-
-fn quote_windows_command_line_arg(value: &str) -> String {
-    if !value.is_empty()
-        && !value
-            .chars()
-            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
-    {
-        return value.to_string();
-    }
-
-    let mut quoted = String::from("\"");
-    let mut backslashes = 0;
-    for ch in value.chars() {
-        if ch == '\\' {
-            backslashes += 1;
-            continue;
-        }
-        if ch == '"' {
-            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-        } else {
-            quoted.push_str(&"\\".repeat(backslashes));
-        }
-        backslashes = 0;
-        quoted.push(ch);
-    }
-    quoted.push_str(&"\\".repeat(backslashes * 2));
-    quoted.push('"');
-    quoted
-}
-
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
     detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
 }
@@ -976,8 +867,8 @@ impl PendingInteractiveServerBootstrap {
         let path = root.join(INTERACTIVE_SERVER_BOOTSTRAP_FILE);
         let launch_arguments = format!(
             "{} {}",
-            quote_windows_command_line_arg(INTERACTIVE_SERVER_BOOTSTRAP_ARG),
-            quote_windows_command_line_arg(&path.display().to_string())
+            super::quote_windows_command_line_arg(INTERACTIVE_SERVER_BOOTSTRAP_ARG),
+            super::quote_windows_command_line_arg(&path.display().to_string())
         );
         let pending = Self {
             root,
@@ -3302,6 +3193,8 @@ mod tests {
     };
     use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
 
+    use crate::platform::interactive_shell_command;
+
     #[test]
     fn private_remote_directory_supports_long_paths() {
         let base = std::env::temp_dir().join(format!(
@@ -3444,22 +3337,25 @@ mod tests {
     fn supported_windows_shells_keep_agent_launch_in_the_selected_shell() {
         let argv = vec!["agent-cli".into()];
 
-        let powershell = super::interactive_shell_command(&argv, "powershell.exe").unwrap();
-        assert!(powershell.contains("Start-Process"));
-        assert!(!powershell.to_ascii_lowercase().contains("cmd.exe"));
         assert_eq!(
-            super::interactive_shell_command(&argv, "cmd.exe").as_deref(),
+            interactive_shell_command(&argv, "powershell.exe").as_deref(),
+            Some(
+                "& (Get-Command -Name agent-cli -CommandType Application -TotalCount 1 -ErrorAction Stop).Path"
+            )
+        );
+        assert_eq!(
+            interactive_shell_command(&argv, "cmd.exe").as_deref(),
             Some("agent-cli")
         );
         assert_eq!(
-            super::interactive_shell_command(&argv, "nu.exe").as_deref(),
+            interactive_shell_command(&argv, "nu.exe").as_deref(),
             Some("^\"agent-cli\"")
         );
         assert_eq!(
-            super::interactive_shell_command(&argv, "bash.exe").as_deref(),
+            interactive_shell_command(&argv, "bash.exe").as_deref(),
             Some("agent-cli")
         );
-        assert_eq!(super::interactive_shell_command(&argv, "unknown.exe"), None);
+        assert_eq!(interactive_shell_command(&argv, "unknown.exe"), None);
     }
 
     #[test]
@@ -3471,7 +3367,7 @@ mod tests {
             r"C:\Workspaces\two words".into(),
         ];
 
-        let command = super::interactive_shell_command(&argv, "nu.exe").unwrap();
+        let command = interactive_shell_command(&argv, "nu.exe").unwrap();
         assert_eq!(
             command,
             r#"^"agent-cli" "resume" "--workspace" "C:\\Workspaces\\two words""#
@@ -3522,7 +3418,7 @@ mod tests {
             "a&b".into(),
             "!PATH!".into(),
         ];
-        let command = super::interactive_shell_command(&argv, "cmd.exe").unwrap();
+        let command = interactive_shell_command(&argv, "cmd.exe").unwrap();
         assert_eq!(command, r#"pi "" "two words" 100^% ^%PATH^% a^&b ^!PATH^!"#);
     }
 
@@ -3611,7 +3507,7 @@ mod tests {
         }
         for shell in shells {
             let no_args_capture = base.join(format!("{shell}-no-args.txt"));
-            let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
+            let no_args_command = interactive_shell_command(&["pi".into()], shell).unwrap();
             let status = run_command(shell, &no_args_command, &no_args_capture);
             assert!(status.success(), "{shell} argument-free command failed");
             assert_eq!(
@@ -3622,7 +3518,7 @@ mod tests {
             );
 
             let capture = base.join(format!("{shell}.txt"));
-            let command = super::interactive_shell_command(&argv, shell).unwrap();
+            let command = interactive_shell_command(&argv, shell).unwrap();
             let status = run_command(shell, &command, &capture);
             assert!(status.success(), "{shell} command failed");
             assert_eq!(

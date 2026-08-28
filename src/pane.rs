@@ -1400,6 +1400,10 @@ impl<'a> PaneShellConfig<'a> {
             mode,
         }
     }
+
+    pub(crate) fn resolved_shell(self) -> String {
+        pane_shell(self.default_shell)
+    }
 }
 
 /// Target platform for shell launch policy. Parameterized (instead of raw
@@ -1504,7 +1508,7 @@ fn pane_shell_command_builder_for_target(
     shell_config: PaneShellConfig<'_>,
     target: ShellLaunchTarget,
 ) -> io::Result<CommandBuilder> {
-    let shell = pane_shell(shell_config.default_shell);
+    let shell = shell_config.resolved_shell();
     if shell_mode_uses_login_shell(shell_config.mode, target) {
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
@@ -1539,7 +1543,7 @@ fn uses_windows_powershell_pane_shell_for_target(
 ) -> bool {
     target == ShellLaunchTarget::Windows
         && !shell_mode_uses_login_shell(shell_config.mode, target)
-        && is_powershell_shell(&pane_shell(shell_config.default_shell))
+        && is_powershell_shell(&shell_config.resolved_shell())
 }
 
 fn is_powershell_shell(shell: &str) -> bool {

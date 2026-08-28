@@ -189,8 +189,9 @@ tests remain the detailed implementation truth.
   CLI, or API. When live reload enables or changes the setting, Herdr also starts
   the selected Agent in each eligible existing tab root that is waiting at its
   shell. Restore or reattach at startup, an unchanged reload, live handoff,
-  `--no-session`, and split panes do not trigger it. Exiting or interrupting the
-  Agent returns to the tab's underlying shell, and Herdr never writes the setting.
+  `--no-session`, split panes, and the automatic default workspace that replaces
+  the last closed workspace do not trigger it. Exiting or interrupting the Agent
+  returns to the tab's underlying shell, and Herdr never writes the setting.
 - Managed Agent launch stays in the selected interactive shell and preserves
   exact arguments. Initial start, auto-start, and native session resume share
   the same selected-shell renderer. PowerShell, cmd, Nushell, and Git Bash each

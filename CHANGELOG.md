@@ -10,6 +10,10 @@ This changelog records only user-visible changes released by the `herdr-win` for
   `sh` use native command syntax instead of a PowerShell transport or a separate
   restore quoting path.
 
+### Fixed
+- Closing the final shell no longer lets its automatically created replacement
+  workspace queue the configured Agent again.
+
 ## [2026.08.27.5] - 2026-08-27
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

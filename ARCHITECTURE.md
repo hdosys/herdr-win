@@ -125,16 +125,19 @@ behavior; code and tests remain the detailed implementation truth.
   the existing managed Agent launch owner waits for shell readiness. A live reload
   that enables or changes the selected Agent also queues each eligible existing
   shell-only tab root once; an unchanged reload cannot duplicate pending work.
-  Restore or reattach at startup, live handoff, `--no-session`, pane split, and
-  existing managed-Agent terminals do not queue this path. Native Agent resume
-  remains the only Agent launch path for restored Agent terminals. Managed start,
-  auto-start, and resume resolve the same shell used by pane spawning and call one
-  shared shell-command renderer. PowerShell resolves one native application and
-  invokes its path directly, cmd uses escaped cmd syntax, Nushell uses explicit
-  external invocation, and Git Bash uses POSIX quoting. Unknown Windows shells
-  fail closed instead of routing through another shell. Linux and macOS retain
-  the same shell-native path, including Nushell. The Windows-focused Rust tests
-  and a real shell round trip own that boundary.
+  Restore or reattach at startup, live handoff, `--no-session`, pane split, the
+  automatic default workspace that replaces the last closed workspace, and
+  existing managed-Agent terminals do not queue this path. The App records only
+  whether the initial default workspace remains eligible; every successful
+  workspace creation consumes that eligibility. Native Agent resume remains the
+  only Agent launch path for restored Agent terminals. Managed start, auto-start,
+  and resume resolve the same shell used by pane spawning and call one shared
+  shell-command renderer. PowerShell resolves one native application and invokes
+  its path directly, cmd uses escaped cmd syntax, Nushell uses explicit external
+  invocation, and Git Bash uses POSIX quoting. Unknown Windows shells fail closed
+  instead of routing through another shell. Linux and macOS retain the same
+  shell-native path, including Nushell. The Windows-focused Rust tests and a real
+  shell round trip own that boundary.
 - Mailbox 0010 owns full-lifecycle hook-authority recovery after a temporary
   recognized foreground-Agent takeover. Suppression remains active during the
   conflict, then the original still-running Agent may re-anchor the same session

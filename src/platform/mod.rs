@@ -286,29 +286,12 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
     )
 }
 
-pub(crate) fn is_nushell_process_name(name: &str) -> bool {
-    normalized_process_name(name) == "nu"
-}
-
-pub(crate) fn initial_pane_shell(child_pid: u32) -> Option<String> {
-    #[cfg(target_os = "windows")]
-    {
-        windows::pane_shell_name(child_pid)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        available_pane_shell(child_pid)
-    }
-}
-
 pub(crate) fn initial_pane_shell_ready_for_input(
     shell_name: &str,
     content_seen: bool,
     cwd_reported: bool,
 ) -> bool {
-    if cfg!(windows)
-        && (is_powershell_process_name(shell_name) || is_nushell_process_name(shell_name))
-    {
+    if cfg!(windows) && is_powershell_process_name(shell_name) {
         cwd_reported
     } else {
         content_seen
@@ -320,11 +303,9 @@ mod initial_shell_readiness_tests {
     use super::initial_pane_shell_ready_for_input;
 
     #[test]
-    fn session_auto_start_waits_for_windows_prompt_readiness() {
+    fn session_auto_start_waits_for_windows_powershell_prompt() {
         assert!(!initial_pane_shell_ready_for_input("cmd.exe", false, false));
         assert!(initial_pane_shell_ready_for_input("cmd.exe", true, false));
-        assert!(!initial_pane_shell_ready_for_input("nu.exe", true, false));
-        assert!(initial_pane_shell_ready_for_input("nu.exe", true, true));
         assert_eq!(
             initial_pane_shell_ready_for_input("powershell.exe", true, false),
             !cfg!(windows)

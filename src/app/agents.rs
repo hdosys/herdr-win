@@ -279,7 +279,7 @@ impl App {
                 );
                 continue;
             };
-            let Some(shell_name) = initial_shell_name(runtime) else {
+            let Some(shell_name) = available_shell_name(runtime) else {
                 self.pending_tab_auto_start_agents
                     .push(PendingTabAutoStartAgent {
                         kind,
@@ -312,7 +312,7 @@ impl App {
                 timeout_ms: None,
             };
 
-            match self.start_agent_with_shell(params, Some(shell_name)) {
+            match self.start_agent(params) {
                 Ok((agent, _)) => {
                     tracing::info!(agent = label, pane_id = %agent.pane_id, "started configured agent in new tab");
                     changed = true;
@@ -334,14 +334,6 @@ impl App {
     pub(super) fn start_agent(
         &mut self,
         params: AgentStartParams,
-    ) -> Result<(crate::api::schema::AgentInfo, Vec<String>), AgentStartError> {
-        self.start_agent_with_shell(params, None)
-    }
-
-    fn start_agent_with_shell(
-        &mut self,
-        params: AgentStartParams,
-        initial_shell_name: Option<String>,
     ) -> Result<(crate::api::schema::AgentInfo, Vec<String>), AgentStartError> {
         let name = params.name;
         if !valid_agent_name(&name) {
@@ -386,8 +378,7 @@ impl App {
             .terminal_runtimes
             .get(&terminal_id)
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-        let shell_name = initial_shell_name
-            .or_else(|| available_shell_name(runtime))
+        let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
         let argv = agent_launch_argv(kind, params.args);
@@ -613,14 +604,6 @@ fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<St
         return Some("sh".into());
     }
     crate::platform::available_pane_shell(runtime.child_pid()?)
-}
-
-fn initial_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
-    #[cfg(test)]
-    if runtime.child_pid().is_none() {
-        return Some("sh".into());
-    }
-    crate::platform::initial_pane_shell(runtime.child_pid()?)
 }
 
 pub(super) fn runtime_hosts_agent(

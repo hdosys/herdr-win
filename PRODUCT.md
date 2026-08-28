@@ -204,10 +204,13 @@ tests remain the detailed implementation truth.
   use their native command syntax on Windows; unknown Windows shells fail
   closed. Linux and macOS use shell-native argument quoting, including explicit
   external-command invocation for Nushell.
-- OpenCode panes remain bound to the root session selected locally in that pane;
+- OpenCode roots started through Herdr's managed Agent path expose one ephemeral
+  loopback attach endpoint so direct child sessions can open in their own panes.
+  Those panes remain bound to the root session selected locally in that pane;
   server-global creation events from another attached client cannot take over that
   selection, while child prompts still report blocked and working state through the
-  root authority.
+  root authority. A bare `opencode` process has no attach endpoint and is not a
+  child-pane root.
 - A still-running full-lifecycle Agent that was temporarily superseded by another
   recognized foreground Agent regains hook authority when it returns. A real
   process exit or explicit hook clear still prevents the stale session from

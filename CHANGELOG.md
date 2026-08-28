@@ -19,7 +19,7 @@ This changelog records only user-visible changes released by the `herdr-win` for
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
 
 ### Added
-- OpenCode direct subagents now open in adaptive readable splits beside Main, stay bound to the pane-selected root session after resume, and close when the child becomes idle or is deleted.
+- OpenCode direct subagents from Herdr-managed roots now open in adaptive readable splits beside Main, stay bound to the pane-selected root session after resume, and close when the child becomes idle or is deleted.
 - New persistent sessions can start one configured interactive Agent in each new tab with `[session] auto_start_agent`, including eligible shell roots after a live configuration reload.
 - Managed Agent launches preserve configured arguments through PowerShell, cmd, Nushell, Git Bash, and `sh` on Windows, with explicit Nushell external-command support on Linux and macOS.
 - Interactive Windows remote updates report download, validation, activation, and restart progress.

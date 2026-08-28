@@ -114,7 +114,10 @@ behavior; code and tests remain the detailed implementation truth.
   root, and ignores server-global session creation as local ownership evidence.
   Local chat selection binds the root while an initial update without a preceding
   creation may recover startup selection; foreign, retired, and trailing child
-  events cannot replace it.
+  events cannot replace it. Direct child panes attach only to the ephemeral
+  loopback server supplied by Herdr's existing managed OpenCode launch argv. The
+  integration verifies that endpoint before splitting and fails closed when a bare
+  OpenCode process exposes only its internal worker transport.
 - Mailbox 0006 owns the shared runtime `curl` transfer policy. Runtime fetches ignore
   user `curl` configuration, pass URLs as option values, require TLS 1.2 or newer
   HTTPS for initial requests and redirects, disable URL globbing, and allow at most

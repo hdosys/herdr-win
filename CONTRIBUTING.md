@@ -199,8 +199,9 @@ check under the global artifact lifecycle.
 
 Before each user handoff, collect every completed topic handoff, commit the coherent
 development tree, and push `origin/candidate/development`. Candidate packaging first
-compares every changed embedded integration with the accepted queue, requires one
-migration-version advance, and requires its Rust constant to match. After a
+compares every changed embedded integration with the accepted queue, requires a
+higher migration version, and requires its Rust constant to match. This permits
+multiple cumulative Candidate generations before patch finalization. After a
 Rust-owned source change, run one exact focused behavior check while building the
 candidate:
 

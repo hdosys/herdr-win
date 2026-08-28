@@ -149,7 +149,7 @@ class DeltaWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(source)
         current[path] = f"{source}changed\n"
 
-        with self.assertRaisesRegex(DeltaWorkflowError, "advance exactly once"):
+        with self.assertRaisesRegex(DeltaWorkflowError, "advance beyond baseline"):
             validate_integration_asset_version_changes(
                 module, current, module, baseline
             )
@@ -165,11 +165,11 @@ class DeltaWorkflowTests(unittest.TestCase):
                 current_module, current, baseline_module, baseline
             )
 
-    def test_multiple_changed_assets_share_one_version_advance(self) -> None:
+    def test_cumulative_changed_assets_share_one_higher_version(self) -> None:
         baseline_module = self.integration_module("sample", 1, "one.js", "two.js")
-        current_module = self.integration_module("sample", 2, "one.js", "two.js")
+        current_module = self.integration_module("sample", 3, "one.js", "two.js")
         baseline = self.integration_assets("sample", 1, "one.js", "two.js")
-        current = self.integration_assets("sample", 2, "one.js", "two.js")
+        current = self.integration_assets("sample", 3, "one.js", "two.js")
 
         self.assertEqual(
             validate_integration_asset_version_changes(

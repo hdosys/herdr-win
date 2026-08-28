@@ -185,7 +185,7 @@ configuration repository.
   `$LASTEXITCODE`; direct and wrapped no-match runs both returned status 4. This
   prevents false-green focused gates. Owner: `justfile`.
 
-- **Status: done. Gate changed integration assets on one migration-version
+- **Status: done. Gate changed integration assets on a higher migration version
   advance.** Extend the existing delta or Candidate source check to compare each
   changed managed integration asset with the accepted queue baseline, then require
   a higher embedded marker and matching Rust constant before packaging. Evidence:
@@ -193,9 +193,11 @@ configuration repository.
   bytes still claimed version 12, so the installed stale plugin was reported as
   current. Version 13 immediately made the real installed copy detectable and
   replaceable. Candidate now compares embedded assets with the accepted replay tree,
-  requires exactly one marker advance, and checks the matching Rust constant before
-  bundle reuse or compilation. The focused control suite passed 36 tests and the
-  live candidate comparison reported `changed=opencode`. Owner:
+  requires a strictly higher marker, and checks the matching Rust constant before
+  bundle reuse or compilation. This preserves multiple cumulative Candidate
+  generations before patch finalization; the former exact-one rule rejected valid
+  OpenCode v17 after v16 was already cumulative while the accepted queue remained at
+  v15. Owner:
   `scripts/delta_workflow.py`, `scripts/local_windows_installer.py`, and their focused
   tests, without a second integration-version registry.
 

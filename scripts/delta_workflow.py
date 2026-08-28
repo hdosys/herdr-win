@@ -318,7 +318,7 @@ def validate_integration_asset_version_changes(
     baseline_module: str,
     baseline_assets: dict[str, str | None],
 ) -> tuple[str, ...]:
-    """Require one migration-version advance for each changed embedded integration."""
+    """Require a higher migration version for each changed embedded integration."""
 
     current_groups = _included_integration_assets(current_module)
     baseline_groups = _included_integration_assets(baseline_module)
@@ -357,9 +357,9 @@ def validate_integration_asset_version_changes(
                 "HERDR_INTEGRATION_VERSION marker"
             )
         baseline_version = next(iter(baseline_versions), 0)
-        if current_version != baseline_version + 1:
+        if current_version <= baseline_version:
             raise DeltaWorkflowError(
-                f"changed managed integration {integration} must advance exactly once: "
+                f"changed managed integration {integration} must advance beyond baseline: "
                 f"baseline {baseline_version}, current {current_version}"
             )
 

@@ -219,9 +219,13 @@ configuration repository.
   32 sequential asset tests first passed while a restored process exposed no
   attachable endpoint. After that fix, seven simultaneous child events all read the
   pre-split layout and repeatedly divided the Main pane because no prior child pane
-  ID had been recorded. The exact check requires stopping and reattaching a live
-  Herdr/OpenCode session plus provider-authenticated concurrent direct-child creation.
-  The repository has no credential-free native child trigger, and a synthetic event
+  ID had been recorded. A later user-run four-child probe showed only two visible
+  panes, but `herdr integration status` proved that the running OpenCode process had
+  loaded integration v15 while source owned v16. OpenCode plugins are startup-loaded,
+  so that run could not test the current implementation. The exact check requires a
+  current integration status, reinstalling any outdated integration, fully restarting
+  OpenCode, then using provider-authenticated concurrent direct-child creation. The
+  repository has no credential-free native child trigger, and a synthetic event
   driver would duplicate the Bun harness without proving restore or native pane
   placement. Resume only in a user-authorized provider session; the existing Bun suite
   remains the deterministic split-logic owner. Owner: the OpenCode native Candidate

@@ -3,9 +3,11 @@
 ## Unreleased
 
 ### Added
-- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
+- Direct OpenCode subagents now open in adaptive unfocused splits, preserving a bounded Main column on wide landscape roots and stacking on portrait roots, then close when the child session becomes idle or is deleted.
+- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
 
 ### Fixed
+- Configured Agent startup in new Windows Nushell tabs now waits for prompt readiness instead of treating earlier startup output as an interactive shell.
 - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
 
 ## [0.8.2] - 2026-08-19

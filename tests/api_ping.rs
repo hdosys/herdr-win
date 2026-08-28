@@ -303,12 +303,15 @@ fn ping_over_socket_returns_version() {
     assert_eq!(value["result"]["type"], "pong");
     let expected_version = match (
         option_env!("HERDR_RELEASE_VERSION"),
+        option_env!("HERDR_BUILD_FRESHNESS"),
         option_env!("HERDR_BUILD_ID"),
     ) {
-        (Some(release), Some(build)) => format!("{release}+{build}"),
-        (Some(release), None) => release.to_string(),
-        (None, Some(build)) => format!("local+{build}"),
-        (None, None) => "local".to_string(),
+        (Some(release), _, Some(build)) => format!("{release}+{build}"),
+        (Some(release), _, None) => release.to_string(),
+        (None, Some(freshness), Some(build)) => format!("{freshness}+{build}"),
+        (None, Some(freshness), None) => freshness.to_string(),
+        (None, None, Some(build)) => format!("local+{build}"),
+        (None, None, None) => "local".to_string(),
     };
     assert_eq!(value["result"]["version"], expected_version);
     // Intentionally hardcoded so wire protocol bumps require updating this test.

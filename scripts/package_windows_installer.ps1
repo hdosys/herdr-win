@@ -12,6 +12,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BuildId,
 
+    [string]$BuildFreshness,
+
     [Parameter(Mandatory = $true)]
     [string]$ReleaseVersion,
 
@@ -59,6 +61,7 @@ $InstallerStartGateEnvironmentVariable = "HERDR_INSTALLER_START_GATE_V1"
 $InstallerTestMarkerPrefix = "herdr"
 $ProductNamePattern = '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$'
 $BuildIdPattern = '^[0-9a-f]{12}\.[0-9a-f]{12}$'
+$BuildFreshnessPattern = '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<hour>[0-9]{2})(?<minute>[0-9]{2})Z$'
 $BaseVersionPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$'
 $ReleaseVersionPattern = '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<sequence>[1-9][0-9]*)$'
 $LauncherBuildIdArgument = "--herdr-private-launcher-build-id-v1"
@@ -275,11 +278,24 @@ function Get-VersionIdentity {
         throw "BaseVersion must be the upstream Herdr semantic version without v."
     }
     if ($ReleaseVersion -ceq "local") {
+        $freshnessMatch = [regex]::Match($BuildFreshness, $BuildFreshnessPattern)
+        $freshness = [DateTime]::MinValue
+        if (-not $freshnessMatch.Success -or -not [DateTime]::TryParseExact(
+            $BuildFreshness,
+            "yyyy.MM.dd.HHmm'Z'",
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal,
+            [ref]$freshness
+        )) {
+            throw "BuildFreshness must be a real UTC YYYY.MM.DD.HHMMZ value for local builds."
+        }
+        $timeComponent = [int]$freshnessMatch.Groups['hour'].Value * 100 + [int]$freshnessMatch.Groups['minute'].Value
         return [PSCustomObject]@{
-            Display = "local.$BuildId"
-            Numeric = "0.0.0.0"
-            Ui = "local"
-            ExpectedCli = "herdr-win local (Herdr $BaseVersion, build $BuildId)"
+            Freshness = $BuildFreshness
+            Display = "$BuildFreshness (local, build $BuildId)"
+            Numeric = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$timeComponent"
+            Ui = "$BuildFreshness ($BuildId)"
+            ExpectedCli = "herdr-win $BuildFreshness (local, Herdr $BaseVersion, build $BuildId)"
         }
     }
     $match = [regex]::Match($ReleaseVersion, $ReleaseVersionPattern)
@@ -302,6 +318,7 @@ function Get-VersionIdentity {
         throw "ReleaseVersion sequence must fit the Windows 0-65535 version component."
     }
     return [PSCustomObject]@{
+        Freshness = $ReleaseVersion
         Display = $ReleaseVersion
         Numeric = "$([int]$match.Groups['year'].Value).$([int]$match.Groups['month'].Value).$([int]$match.Groups['day'].Value).$sequence"
         Ui = $ReleaseVersion
@@ -408,6 +425,7 @@ if (-not [string]::IsNullOrWhiteSpace($TestUserProfileRoot)) {
     }
 }
 $versionIdentity = Get-VersionIdentity
+$BuildFreshness = [string]$versionIdentity.Freshness
 $DisplayVersion = [string]$versionIdentity.Display
 $NumericVersion = [string]$versionIdentity.Numeric
 $UiVersion = [string]$versionIdentity.Ui
@@ -558,7 +576,7 @@ try {
     $temporaryOutput = Join-Path $workingRoot $InstallerOriginalFilename
     $backupOutput = Join-Path $workingRoot ("previous-" + $InstallerOriginalFilename)
     $definition = [ordered]@{
-        Schema = 1
+        Schema = 2
         StageDir = $StageDir
         LauncherExe = $LauncherExe
         InstallerHelperExe = $InstallerHelperExe
@@ -567,6 +585,7 @@ try {
         ArtworkDir = $artworkDir
         InstallerScript = $installerScript
         BuildId = $BuildId
+        BuildFreshness = $BuildFreshness
         ReleaseVersion = $ReleaseVersion
         BaseVersion = $BaseVersion
         DisplayVersion = $DisplayVersion

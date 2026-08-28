@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=16
+// HERDR_INTEGRATION_VERSION=17
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -18,6 +18,7 @@ const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
 const SUBAGENT_START_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_CHARACTERS = 64 * 1024;
 const MIN_READABLE_SUBAGENT_COLUMNS = 80;
+const MAX_MAIN_SESSION_COLUMNS = 100;
 const SERVER_PROBE_TIMEOUT_MS = 500;
 
 const CHILD_EVENT_STATES = new Map([
@@ -325,8 +326,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       [...children.values()].map((child) => child.paneID).filter(Boolean),
     );
     let candidates = panes.filter((pane) => childPaneIDs.has(pane?.pane_id));
-    // The first child splits the root to establish a permanent left Main column.
-    // Later children divide only the largest area in the right child subtree.
+    // The first child establishes either a left Main column on a wide landscape
+    // root or a stacked layout. Later children divide only the child subtree.
     const splitRoot = candidates.length === 0;
     if (splitRoot) {
       candidates = panes.filter((pane) => pane?.pane_id === rootPaneID);
@@ -351,10 +352,23 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     if (!targetPaneID) {
       return undefined;
     }
+    const splitRootRight =
+      splitRoot &&
+      rect.width >= MAX_MAIN_SESSION_COLUMNS + MIN_READABLE_SUBAGENT_COLUMNS &&
+      rect.width >= rect.height * 2;
     return {
       paneID: targetPaneID,
-      direction:
-        splitRoot || rect.width >= MIN_READABLE_SUBAGENT_COLUMNS * 2 ? "right" : "down",
+      direction: splitRoot
+        ? splitRootRight
+          ? "right"
+          : "down"
+        : rect.width >= MIN_READABLE_SUBAGENT_COLUMNS * 2
+          ? "right"
+          : "down",
+      ratio:
+        splitRootRight
+          ? Math.min(0.5, MAX_MAIN_SESSION_COLUMNS / rect.width)
+          : 0.5,
     };
   }
 
@@ -507,7 +521,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           const splitResponse = await paneRequest("pane.split", {
             target_pane_id: target.paneID,
             direction: target.direction,
-            ratio: 0.5,
+            ratio: target.ratio,
             ...(directory ? { cwd: directory } : {}),
             focus: false,
             env: { [SUBAGENT_SESSION_ENV]: sessionID },

@@ -377,12 +377,15 @@ fn status_commands_report_client_and_server_versions() {
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let expected_version = match (
         option_env!("HERDR_RELEASE_VERSION"),
+        option_env!("HERDR_BUILD_FRESHNESS"),
         option_env!("HERDR_BUILD_ID"),
     ) {
-        (Some(release), Some(build)) => format!("{release}+{build}"),
-        (Some(release), None) => release.to_string(),
-        (None, Some(build)) => format!("local+{build}"),
-        (None, None) => "local".to_string(),
+        (Some(release), _, Some(build)) => format!("{release}+{build}"),
+        (Some(release), _, None) => release.to_string(),
+        (None, Some(freshness), Some(build)) => format!("{freshness}+{build}"),
+        (None, Some(freshness), None) => freshness.to_string(),
+        (None, None, Some(build)) => format!("local+{build}"),
+        (None, None, None) => "local".to_string(),
     };
 
     let full = run_cli(&socket_path, &["status"]);

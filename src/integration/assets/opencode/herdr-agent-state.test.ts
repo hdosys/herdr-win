@@ -566,7 +566,7 @@ test("opens concurrent direct child sessions in adaptive same-tab splits", async
   await Promise.all([
     openChild(
       "child-one",
-      [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
+      [{ pane_id: "test:p1", rect: { width: 400, height: 50 } }],
       "C:\\repo\\one",
     ),
     openChild("child-two", [
@@ -590,7 +590,7 @@ test("opens concurrent direct child sessions in adaptive same-tab splits", async
   expect(splits).toHaveLength(4);
   expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
   expect(requestParam(splits[0], "direction")).toBe("right");
-  expect(requestParam(splits[0], "ratio")).toBe(0.5);
+  expect(requestParam(splits[0], "ratio")).toBe(0.25);
   expect(requestParam(splits[0], "focus")).toBe(false);
   expect(requestParam(splits[0], "cwd")).toBe("C:\\repo\\one");
   expect(requestParam(splits[0], "env")).toEqual({
@@ -624,6 +624,46 @@ test("opens concurrent direct child sessions in adaptive same-tab splits", async
   await plugin.event(sessionStatusEvent("child-one", { type: "idle" }));
   expect(requests.map(requestMethod)).toEqual(["pane.close"]);
   expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+});
+
+test("stacks the first child when the root is not wide landscape", async () => {
+  const plugin = await loadPlugin({
+    directory: "C:\\repo",
+    serverUrl: new URL("http://127.0.0.1:4096"),
+  });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+
+  enqueueResult("pane.layout", {
+    type: "pane_layout",
+    layout: {
+      panes: [{ pane_id: "test:p1", rect: { width: 170, height: 100 } }],
+    },
+  });
+  enqueueResult("pane.split", {
+    type: "pane_info",
+    pane: { pane_id: "test:p2" },
+  });
+  enqueueResult("agent.start", {
+    type: "agent_started",
+    agent: { pane_id: "test:p2" },
+    argv: [],
+  });
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+
+  const split = requests.find((request) => requestMethod(request) === "pane.split");
+  expect(requestParam(split, "target_pane_id")).toBe("test:p1");
+  expect(requestParam(split, "direction")).toBe("down");
+  expect(requestParam(split, "ratio")).toBe(0.5);
 });
 
 test("does not let a pending agent start block later pane placement", async () => {

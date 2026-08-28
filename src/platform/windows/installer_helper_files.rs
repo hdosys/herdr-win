@@ -780,9 +780,53 @@ fn parse_release_calver(display: &str) -> io::Result<[u16; 4]> {
 }
 
 pub(crate) fn parse_display_version(display: &str) -> io::Result<[u16; 4]> {
-    if let Some(build) = display.strip_prefix("local.") {
+    if let Some((freshness, build)) = display
+        .strip_suffix(')')
+        .and_then(|display| display.split_once(" (local, build "))
+    {
         BuildId::parse(build)?;
-        return Ok([0, 0, 0, 0]);
+        let parts = freshness.split('.').collect::<Vec<_>>();
+        if parts.len() != 4
+            || parts[0].len() != 4
+            || parts[1].len() != 2
+            || parts[2].len() != 2
+            || parts[3].len() != 5
+            || !parts[3].is_ascii()
+            || !parts[3].ends_with('Z')
+            || parts[..3]
+                .iter()
+                .any(|part| part.bytes().any(|byte| !byte.is_ascii_digit()))
+            || parts[3][..4].bytes().any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(invalid_data("invalid local build freshness"));
+        }
+        let year = parts[0]
+            .parse::<u16>()
+            .map_err(|_| invalid_data("invalid local build year"))?;
+        let month = parts[1]
+            .parse::<u16>()
+            .map_err(|_| invalid_data("invalid local build month"))?;
+        let day = parts[2]
+            .parse::<u16>()
+            .map_err(|_| invalid_data("invalid local build day"))?;
+        let hour = parts[3][..2]
+            .parse::<u16>()
+            .map_err(|_| invalid_data("invalid local build hour"))?;
+        let minute = parts[3][2..4]
+            .parse::<u16>()
+            .map_err(|_| invalid_data("invalid local build minute"))?;
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let max_day = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if leap => 29,
+            2 => 28,
+            _ => 0,
+        };
+        if year == 0 || day == 0 || day > max_day || hour >= 24 || minute >= 60 {
+            return Err(invalid_data("invalid local build freshness"));
+        }
+        return Ok([year, month, day, hour * 100 + minute]);
     }
     if let Some((semver, build)) = display.split_once("-preview.") {
         BuildId::parse(build)?;
@@ -955,7 +999,11 @@ mod tests {
     #[test]
     fn version_identity_accepts_release_local_and_predecessor_forms() {
         validate_version_identity("2026.08.11.1", "2026.8.11.1").unwrap();
-        validate_version_identity("local.0123456789ab.cdef01234567", "0.0.0.0").unwrap();
+        validate_version_identity(
+            "2026.08.28.1045Z (local, build 0123456789ab.cdef01234567)",
+            "2026.8.28.1045",
+        )
+        .unwrap();
         validate_version_identity("0.8.0-preview.0123456789ab.cdef01234567", "0.8.0.0").unwrap();
         assert!(
             validate_version_identity("0.8.1-preview.0123456789ab.cdef01234567", "0.8.0.0")
@@ -965,7 +1013,9 @@ mod tests {
             "2026.8.11.1",
             "2026.02.29.1",
             "2026.08.11.0",
-            "local.0123456789ab.cdef01234567.extra",
+            "2026.02.29.1045Z (local, build 0123456789ab.cdef01234567)",
+            "2026.08.28.2460Z (local, build 0123456789ab.cdef01234567)",
+            "2026.08.28.1045Z (local, build 0123456789ab.cdef01234567.extra)",
             "00.8.0-preview.0123456789ab.cdef01234567",
             "0.8.0-preview.0123456789ab.cdef01234567.extra",
             "0.8-preview.0123456789ab.cdef01234567",

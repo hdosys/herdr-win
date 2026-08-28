@@ -1643,17 +1643,24 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
     available_pane_shell_from_snapshot(child_pid, &snapshot)
 }
 
+pub(super) fn pane_shell_name(child_pid: u32) -> Option<String> {
+    let snapshot = ProcessSnapshot::new(snapshot_processes());
+    pane_shell_name_from_snapshot(child_pid, &snapshot)
+}
+
+fn pane_shell_name_from_snapshot(child_pid: u32, snapshot: &ProcessSnapshot) -> Option<String> {
+    let shell = snapshot.entry(child_pid)?;
+    super::is_pane_shell_process_name(&shell.name).then(|| shell.name.clone())
+}
+
 fn available_pane_shell_from_snapshot(
     child_pid: u32,
     snapshot: &ProcessSnapshot,
 ) -> Option<String> {
-    let shell = snapshot.entry(child_pid)?;
-    if !super::is_pane_shell_process_name(&shell.name) {
-        return None;
-    }
+    let shell_name = pane_shell_name_from_snapshot(child_pid, snapshot)?;
     descendant_entries(child_pid, snapshot)
         .is_empty()
-        .then(|| shell.name.clone())
+        .then_some(shell_name)
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
@@ -4532,10 +4539,14 @@ mod tests {
         );
 
         let busy = super::ProcessSnapshot::new(vec![
-            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
-            test_entry(20, 10, "git.exe", &["git.exe", "status"]),
+            test_entry(10, 1, "nu.exe", &["nu.exe"]),
+            test_entry(20, 10, "powershell.exe", &["powershell.exe"]),
         ]);
         assert_eq!(super::available_pane_shell_from_snapshot(10, &busy), None);
+        assert_eq!(
+            super::pane_shell_name_from_snapshot(10, &busy).as_deref(),
+            Some("nu.exe")
+        );
 
         let replaced =
             super::ProcessSnapshot::new(vec![test_entry(10, 1, "vim.exe", &["vim.exe"])]);

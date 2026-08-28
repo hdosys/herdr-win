@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$LauncherExe,
     [Parameter(Mandatory = $true)][string]$InstallerHelperExe,
     [Parameter(Mandatory = $true)][string]$BuildId,
+    [string]$BuildFreshness,
     [Parameter(Mandatory = $true)][string]$ReleaseVersion,
     [Parameter(Mandatory = $true)][string]$BaseVersion,
     [Parameter(Mandatory = $true)][string]$OutputDir,
@@ -22,8 +23,22 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 if ($ReleaseVersion -ceq "local") {
-    $DisplayVersion = "local.$BuildId"
-    $NumericVersion = "0.0.0.0"
+    $freshnessMatch = [regex]::Match(
+        $BuildFreshness,
+        '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<hour>[0-9]{2})(?<minute>[0-9]{2})Z$'
+    )
+    $freshness = [DateTime]::MinValue
+    if (-not $freshnessMatch.Success -or -not [DateTime]::TryParseExact(
+        $BuildFreshness,
+        "yyyy.MM.dd.HHmm'Z'",
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal,
+        [ref]$freshness
+    )) {
+        throw "BuildFreshness must be a real UTC YYYY.MM.DD.HHMMZ value for local builds."
+    }
+    $DisplayVersion = "$BuildFreshness (local, build $BuildId)"
+    $NumericVersion = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$([int]$freshnessMatch.Groups['hour'].Value * 100 + [int]$freshnessMatch.Groups['minute'].Value)"
 } else {
     $releaseMatch = [regex]::Match(
         $ReleaseVersion,
@@ -565,6 +580,7 @@ try {
             -LauncherExe $LauncherExe `
             -InstallerHelperExe $InstallerHelperExe `
             -BuildId $BuildId `
+            -BuildFreshness $BuildFreshness `
             -ReleaseVersion $ReleaseVersion `
             -BaseVersion $BaseVersion `
             -ProductName $ProductName `
@@ -709,6 +725,7 @@ try {
             -LauncherExe $LauncherExe `
             -InstallerHelperExe $InstallerHelperExe `
             -BuildId $BuildId `
+            -BuildFreshness $BuildFreshness `
             -ReleaseVersion $ReleaseVersion `
             -BaseVersion $BaseVersion `
             -ProductName $ProductName `
@@ -787,6 +804,7 @@ try {
         -LauncherExe $LauncherExe `
         -InstallerHelperExe $InstallerHelperExe `
         -BuildId $BuildId `
+        -BuildFreshness $BuildFreshness `
         -ReleaseVersion $ReleaseVersion `
         -BaseVersion $BaseVersion `
         -ProductName $ProductName `
@@ -847,6 +865,7 @@ try {
         -LauncherExe $LauncherExe `
         -InstallerHelperExe $InstallerHelperExe `
         -BuildId $BuildId `
+        -BuildFreshness $BuildFreshness `
         -ReleaseVersion $ReleaseVersion `
         -BaseVersion $BaseVersion `
         -ProductName $ProductName `
@@ -1087,7 +1106,7 @@ try {
     $newPackage = Join-Path $pendingRoot "new-package"
     $newBuildId = "fedcba987654.3210fedcba98"
     $newDisplayVersion = if ($ReleaseVersion -ceq "local") {
-        "local.$newBuildId"
+        "$BuildFreshness (local, build $newBuildId)"
     } else {
         $DisplayVersion
     }

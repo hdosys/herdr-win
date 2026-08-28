@@ -122,15 +122,15 @@ $definitionText = (New-Object Text.UTF8Encoding($false, $true)).GetString(
 $definition = $definitionText | ConvertFrom-Json
 $properties = @(
     'Schema', 'StageDir', 'LauncherExe', 'InstallerHelperExe', 'SkillSource',
-    'SkillHashManifest', 'ArtworkDir', 'InstallerScript', 'BuildId',
+    'SkillHashManifest', 'ArtworkDir', 'InstallerScript', 'BuildId', 'BuildFreshness',
     'ReleaseVersion', 'BaseVersion', 'DisplayVersion', 'NumericVersion',
     'UiVersion', 'ExpectedCliVersion', 'OutputPath', 'OriginalFilename',
     'ProductName', 'DistributionName', 'CompanyName', 'Copyright', 'ProductUrl',
     'UpstreamUrl', 'CommandName', 'StartGateEnvironmentVariable', 'TestMarkerPrefix'
 )
 Assert-ExactProperties -Value $definition -Expected $properties
-if ([int]$definition.Schema -ne 1) {
-    throw 'Installer build definition schema must be 1.'
+if ([int]$definition.Schema -ne 2) {
+    throw 'Installer build definition schema must be 2.'
 }
 
 foreach ($name in $properties | Where-Object { $_ -ne 'Schema' }) {
@@ -158,12 +158,28 @@ foreach ($component in ([string]$definition.NumericVersion).Split('.')) {
     }
 }
 if ([string]$definition.ReleaseVersion -ceq 'local') {
-    if ([string]$definition.DisplayVersion -cne ('local.' + [string]$definition.BuildId) -or
-        [string]$definition.NumericVersion -cne '0.0.0.0' -or
-        [string]$definition.UiVersion -cne 'local') {
+    $freshnessMatch = [regex]::Match(
+        [string]$definition.BuildFreshness,
+        '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<hour>[0-9]{2})(?<minute>[0-9]{2})Z$'
+    )
+    $freshness = [DateTime]::MinValue
+    if (-not $freshnessMatch.Success -or -not [DateTime]::TryParseExact(
+        [string]$definition.BuildFreshness,
+        "yyyy.MM.dd.HHmm'Z'",
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal,
+        [ref]$freshness
+    )) {
+        throw 'Local BuildFreshness must be a real UTC YYYY.MM.DD.HHMMZ value.'
+    }
+    $expectedNumeric = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$([int]$freshnessMatch.Groups['hour'].Value * 100 + [int]$freshnessMatch.Groups['minute'].Value)"
+    if ([string]$definition.DisplayVersion -cne ("$($definition.BuildFreshness) (local, build $($definition.BuildId))") -or
+        [string]$definition.NumericVersion -cne $expectedNumeric -or
+        [string]$definition.UiVersion -cne ("$($definition.BuildFreshness) ($($definition.BuildId))")) {
         throw 'Local installer versions are inconsistent.'
     }
-} elseif ([string]$definition.DisplayVersion -cne [string]$definition.ReleaseVersion -or
+} elseif ([string]$definition.BuildFreshness -cne [string]$definition.ReleaseVersion -or
+    [string]$definition.DisplayVersion -cne [string]$definition.ReleaseVersion -or
     [string]$definition.UiVersion -cne [string]$definition.ReleaseVersion) {
     throw 'Published installer display and UI versions must equal CalVer.'
 }

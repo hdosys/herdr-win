@@ -26,7 +26,8 @@ tests remain the detailed implementation truth.
   `herdr-win <YYYY.MM.DD.HHMMZ> (local, Herdr <upstream-version>, build
   <build-id>)` when build provenance is available. The UTC label is generated once
   for the coherent local build and leads local runtime status and Windows setup
-  presentation; the build ID remains secondary exact provenance. Integrations can
+  presentation; Welcome and Finish headings omit the build ID, which remains
+  secondary exact provenance in technical metadata. Integrations can
   require the stable `herdr-win ` prefix without changing the executable, command,
   state, or protocol identity.
 - Every herdr-win snapshot is a cross-platform release for Windows x86_64, Linux
@@ -56,8 +57,9 @@ tests remain the detailed implementation truth.
   Apps without requiring administrator
   privileges. The installer interface is English-only. Its branded,
   keyboard-operable Windows setup uses the human-facing display name **Herdr Win**
-  consistently while the repository and release slug remains `herdr-win`. Welcome
-  and Finish include the current reviewed Herdr base version. Setup identifies the
+  consistently while the repository and release slug remains `herdr-win`. The
+  Welcome description derives and displays the current reviewed Herdr base version
+  from the canonical package input. Setup identifies the
   fork as an unofficial distribution built from the latest reviewed stable Herdr
   release plus the maintained Windows
   patches. The destination remains fixed without displaying a path or offering a
@@ -224,7 +226,10 @@ tests remain the detailed implementation truth.
   `%USERPROFILE%\.herdr\remote\herdr.exe`. If neither matches, an
   interactive attach offers to transfer the complete digest-verified Windows
   portable payload into that user's profile without running the managed installer
-  or changing `PATH`; an ordinary non-interactive attach never modifies the host.
+  or changing `PATH`; `--yes` explicitly approves that installation and any required
+  server restart for one normal attach, while an ordinary non-interactive attach
+  without it never modifies the host. Interactive progress presents checking, an
+  optional verified update, and opening the target as the three user-facing phases.
   Herdr validates remote configuration and the complete staged payload before an
   approved stop. It then requires the exclusive runtime lease, removes the old
   stable payload, promotes staging, and starts and verifies the exact binary,

@@ -267,8 +267,10 @@ behavior; code and tests remain the detailed implementation truth.
   metadata and Installed Apps consistently present **Herdr Win**. The NSIS presentation
   uses standard MUI2 Welcome/License/Files/Finish pages plus the existing custom
   uninstall choice. Window, Welcome, progress, and Finish presentation reuse that
-  one display name; Welcome and Finish titles reuse the same short herdr-win
-  release identity or explicit local marker.
+  one display name; Welcome and Finish titles reuse only the release CalVer or
+  sortable local UTC label. The exact build ID remains metadata and never enters
+  those headings. The Welcome description receives the upstream Herdr version from
+  the same validated packager input.
   Welcome identifies the unofficial stable-plus-patches distribution without
   displaying its fixed path. Finish exposes separate user-invoked fork and upstream
   links and never launches Herdr or a browser automatically. Root `LICENSE` is

@@ -110,9 +110,10 @@ A published build reports `herdr-win <CalVer> (Herdr <upstream-version>)`. The s
 
 Run the client and server on Windows, or use a matching Linux or macOS binary to control a Windows workstation or VM. Windows can also connect to matching Linux and macOS endpoints.
 
-Every supported client can attach to or provision an x86_64 or ARM64 Windows SSH host. Unattended provisioning is explicit:
+Every supported client can attach to or provision an x86_64 or ARM64 Windows SSH host. Use `--yes` to approve a required install or restart for one normal attach; unattended provisioning remains explicit:
 
 ```powershell
+herdr --remote workbox --yes
 herdr --remote workbox --provision --yes --json
 ```
 

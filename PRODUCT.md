@@ -228,13 +228,16 @@ tests remain the detailed implementation truth.
   portable payload into that user's profile without running the managed installer
   or changing `PATH`; `--yes` explicitly approves that installation and any required
   server restart for one normal attach, while an ordinary non-interactive attach
-  without it never modifies the host. Interactive progress presents checking, an
-  optional verified update, and opening the target as the three user-facing phases.
-  Herdr validates remote configuration and the complete staged payload before an
-  approved stop. It then requires the exclusive runtime lease, removes the old
-  stable payload, promotes staging, and starts and verifies the exact binary,
-  version, and protocol. There is no rollback, legacy discovery, migration,
-  compatibility layout, or parallel runtime version.
+  without it never modifies the host. Interactive progress reports connection and
+  candidate inspection, preparation, the one payload transfer, staging validation,
+  any approved server stop, activation, deployed-client verification, and opening.
+  The first Windows probe owns candidate and server inspection for the whole attach;
+  an update never repeats those remote queries. Herdr validates remote configuration
+  and the complete staged payload before an approved stop. One bounded remote
+  operation then stops the server when required, confirms shutdown, requires the
+  exclusive runtime lease, removes the old stable payload, promotes staging, and
+  verifies the deployed binary, version, and protocol. There is no rollback, legacy
+  discovery, migration, compatibility layout, or parallel runtime version.
   The Windows host's OpenSSH default shell must be `cmd.exe` or PowerShell 7
   (`pwsh.exe`) so the interactive binary stream remains byte-exact. Herdr rejects
   Windows PowerShell 5.1 and unrecognized default shells with a corrective action

@@ -117,7 +117,7 @@ herdr --remote workbox --yes
 herdr --remote workbox --provision --yes --json
 ```
 
-The Windows SSH user's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`), and persistent server launch requires exactly one active desktop session owned by that user. Provisioning validates the complete payload before stopping or replacing a server and verifies the exact binary, version, and protocol afterward.
+The Windows SSH user's OpenSSH default shell must be `cmd.exe` or PowerShell 7 (`pwsh.exe`), and persistent server launch requires exactly one active desktop session owned by that user. The first probe is reused for the complete decision, the portable payload transfers once, and visible progress reports every real preparation, validation, stop, activation, verification, and opening phase. Provisioning validates the complete payload before stopping or replacing a server and verifies the exact binary, version, and protocol afterward.
 
 ### Fork-specific options
 

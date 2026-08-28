@@ -68,19 +68,24 @@ behavior; code and tests remain the detailed implementation truth.
 - Mailbox 0003 owns only the remaining Windows SSH target boundary. Upstream Herdr
   owns shared remote orchestration, Windows clients attaching to Unix hosts, the
   named-pipe/SSH byte bridge, and bounded clipboard/file image transport. Every
-  supported client probes a Windows SSH host through explicit PowerShell, accepts
-  only x86_64 or ARM64, and reuses upstream exact-version, protocol, named-session,
-  status, stop, and restart owners. It prefers `herdr.exe` from the SSH user's
-  `PATH`, then one stable user-owned payload at
+  supported client uses one explicit PowerShell probe for a Windows SSH host,
+  accepts only x86_64 or ARM64, and reuses that probe's preferred valid candidate,
+  client identity, and server status through the complete attach or provision
+  decision. It never rediscovers or reprobes a mismatched candidate. Upstream owns
+  exact-version, protocol, named-session, status, stop, and restart semantics. The
+  probe prefers `herdr.exe` from the SSH user's `PATH`, then one stable user-owned payload at
   `%USERPROFILE%\.herdr\remote\herdr.exe`.
 - Published provisioning transfers the complete digest-bearing portable ZIP with
-  OpenSSH. Herdr validates remote configuration plus payload digest and layout in
-  transient staging before stopping a server. Activation then requires the one
-  exclusive runtime lease, removes the old stable payload, promotes staging, and
-  verifies the exact binary, version, and protocol after start. There is no remote
-  rollback, legacy discovery, migration, compatibility layout, extra `bin` level,
-  launcher, installer helper, Active/Pending pointer, or persistent version set.
-  Build ID remains exact manifest and status metadata, never a directory name.
+  OpenSSH exactly once. A short encoded preparation command creates only its exact
+  destination. One transferred installation bootstrap then stages and validates
+  remote configuration, payload digest, layout, runtime identity, and protocol before
+  any approved stop. The same operation owns bounded shutdown, requires the exclusive
+  runtime lease, removes the old stable payload, promotes staging, and verifies the
+  deployed client identity at its final path. The final bridge owns server start and
+  protocol readiness. There is no remote rollback, legacy discovery, migration,
+  compatibility layout, extra `bin` level, launcher, installer helper, Active/Pending
+  pointer, or persistent version set. Build ID remains exact manifest and status
+  metadata, never a directory name.
 - The finite probe reads OpenSSH's `DefaultShell`. The byte bridge invokes Herdr
   directly through `cmd.exe` or PowerShell 7; Windows PowerShell 5.1 and unknown
   shells fail before bridge creation because buffered native stdout would corrupt

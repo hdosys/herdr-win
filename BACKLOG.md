@@ -18,3 +18,6 @@ rules belong in `PRODUCT.md`; stable technical design belongs in
 - Rename the repository and distribution presentation to **Herdr X** (**Herdr
   Extended**) when the migration can be scheduled, while preserving the runtime
   command, state, and protocol identity as `herdr`.
+- Make OpenCode activity reporting keep the sidebar indicator busy whenever the
+  visible root or a direct child session is still working; currently a working child
+  can transiently appear idle until a later OpenCode event corrects the state.

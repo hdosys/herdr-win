@@ -423,19 +423,30 @@ behavior; code and tests remain the detailed implementation truth.
 - Every published binary receives that same CalVer as compile-time release identity.
   `herdr --version` renders `herdr-win <CalVer> (Herdr <upstream-version>)`, and
   Windows setup, executable resources, and Installed Apps use the CalVer as their
-  primary display version. Local builds carry no CalVer and render `herdr-win local
-  (Herdr <upstream-version>, build <build-id>)` when build provenance is available.
+  primary display version. Local builds carry one generated UTC
+  `YYYY.MM.DD.HHMMZ` freshness label and render `herdr-win <freshness> (local,
+  Herdr <upstream-version>, build <build-id>)`. The same label reaches runtime
+  status, executable resources, setup UI, and Installed Apps.
 - The runtime build ID remains two lowercase 12-hex components because it owns
   managed-runtime identity: the upstream prefix plus the candidate identity hash.
+  For local candidates that hash includes the exact source fingerprint, a
+  per-candidate nonce, and the generated freshness label, so separately built bytes
+  cannot share one immutable runtime key.
   Full upstream/control hashes and run/attempt metadata remain the exact provenance
   owners. CalVer owns the human fork release identity; the upstream Cargo version
   remains compatibility/provenance metadata and does not define the herdr-win release.
 - The compiled CalVer also owns update ordering and release-note state. Runtime
   status and handoff use `<CalVer>+<build-id>` for published candidates and
-  `local[+<build-id>]` for local builds so exact payload matching remains separate
-  from release order. Client status reports upstream Herdr SemVer and build ID as
+  `<YYYY.MM.DD.HHMMZ>+<build-id>` for provenance-bearing local builds so exact
+  payload matching remains separate from release order. Client status reports
+  upstream Herdr SemVer and build ID as
   separate fields. The fork exposes no user-selectable update channel or
   `update.channel` config path.
+- The local candidate owner keeps one fixed setup and one matching validated input
+  bundle after success. A temporary stamp preserves the same freshness and build ID
+  only across recovery of an incomplete attempt, then is removed. Successful
+  canonical publication prunes superseded bundles; successful isolated topic checks
+  remove their complete generated root.
 - `website/preview.json` is generated channel state and the promotion operation is
   its only writer. Release publication uses the exact tested candidate and fails
   closed on source drift, stale control state, missing/mutable assets, or

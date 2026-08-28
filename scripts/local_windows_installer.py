@@ -16,6 +16,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -48,7 +49,13 @@ DEFAULT_CARGO_TARGET = (
     Path(tempfile.gettempdir()) / "opencode" / "herdr-win-cargo-target"
 )
 BUILD_ID_RE = re.compile(r"^[0-9a-f]{12}\.[0-9a-f]{12}$")
+BUILD_FRESHNESS_RE = re.compile(
+    r"^(?P<year>[0-9]{4})\.(?P<month>[0-9]{2})\.(?P<day>[0-9]{2})\."
+    r"(?P<hour>[0-9]{2})(?P<minute>[0-9]{2})Z$"
+)
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+BUILD_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
 DYNAMIC_MSVC_RUNTIME_IMPORT = re.compile(
     r"(?im)^\s*((?:VCRUNTIME|MSVCP)[A-Z0-9_]*\.dll)\s*$"
 )
@@ -58,7 +65,8 @@ NEXTEST_SUMMARY_RE = re.compile(
     r"(?P<passed>[0-9]+) passed(?:,|$)"
 )
 LOCAL_VERSION_RE = re.compile(
-    r"^herdr-win local \(Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
+    r"^herdr-win (?P<freshness>[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{4}Z) "
+    r"\(local, Herdr (?P<base>[0-9]+\.[0-9]+\.[0-9]+), "
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
 )
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -72,6 +80,7 @@ class LocalInstallerError(RuntimeError):
 class InstallerIdentity:
     build_id: str
     base_version: str
+    build_freshness: str
 
 
 @dataclass(frozen=True)
@@ -88,6 +97,7 @@ DEFAULT_PATHS = InstallerPaths(
     output_path=OUTPUT_PATH,
     nsis_cache=NSIS_CACHE,
 )
+CANDIDATE_STAMP = TARGET_ROOT / ".candidate-build.json"
 
 
 def _isolated_candidate_paths(build_id: str) -> InstallerPaths:
@@ -108,6 +118,116 @@ def _candidate_paths(
     if isolated or branch != DEVELOPMENT_BRANCH:
         return _isolated_candidate_paths(build_id)
     return DEFAULT_PATHS
+
+
+def _canonical_candidate_identity(
+    source_fingerprint: str, base_commit: str
+) -> tuple[str, str]:
+    target_root = _directory(CANDIDATE_STAMP.parent, "candidate target root")
+    stamp_path = target_root / CANDIDATE_STAMP.name
+    if stamp_path.exists():
+        stamp = _safe_path(stamp_path, "candidate build stamp", directory=False)
+        try:
+            data = json.loads(stamp.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise LocalInstallerError(f"could not read candidate build stamp: {error}") from error
+        expected_fields = {
+            "schema",
+            "source_fingerprint",
+            "base_commit",
+            "build_id",
+            "build_freshness",
+            "build_nonce",
+        }
+        if (
+            not isinstance(data, dict)
+            or set(data) != expected_fields
+            or data.get("schema") != 2
+        ):
+            raise LocalInstallerError("candidate build stamp has an unsupported schema")
+        if (
+            data["source_fingerprint"] == source_fingerprint
+            and data["base_commit"] == base_commit
+        ):
+            build_freshness = _validate_build_freshness(str(data["build_freshness"]))
+            build_id = _candidate_build_id(
+                base_commit,
+                source_fingerprint,
+                build_freshness,
+                str(data["build_nonce"]),
+            )
+            if data["build_id"] != build_id:
+                raise LocalInstallerError("candidate build stamp identity is inconsistent")
+            return build_id, build_freshness
+
+    build_freshness = _new_build_freshness()
+    build_nonce = uuid.uuid4().hex
+    build_id = _candidate_build_id(
+        base_commit, source_fingerprint, build_freshness, build_nonce
+    )
+    temporary = stamp_path.with_name(
+        f".{stamp_path.name}.write-{uuid.uuid4().hex}"
+    )
+    try:
+        temporary.write_text(
+            json.dumps(
+                {
+                    "schema": 2,
+                    "source_fingerprint": source_fingerprint,
+                    "base_commit": base_commit,
+                    "build_id": build_id,
+                    "build_freshness": build_freshness,
+                    "build_nonce": build_nonce,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(temporary, stamp_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return build_id, build_freshness
+
+
+def _prune_completed_candidate_outputs(
+    paths: InstallerPaths, build_id: str, *, isolated: bool
+) -> None:
+    if isolated:
+        root = _safe_path(paths.target_root, "isolated candidate root", directory=True)
+        shutil.rmtree(root)
+        print("isolated_outputs_removed=yes")
+        return
+
+    target_root = _safe_path(paths.target_root, "candidate target root", directory=True)
+    input_root = _safe_path(paths.input_root, "candidate input root", directory=True)
+    _safe_path(
+        input_root / build_id,
+        "current candidate bundle",
+        directory=True,
+    )
+    removed = 0
+    for child in input_root.iterdir():
+        if child.name == build_id:
+            continue
+        stale = _safe_path(child, "superseded candidate bundle", directory=True)
+        shutil.rmtree(stale)
+        removed += 1
+    stamp_path = target_root / CANDIDATE_STAMP.name
+    if stamp_path.exists():
+        stamp = _safe_path(stamp_path, "candidate build stamp", directory=False)
+        stamp.unlink()
+    temporary_root = target_root / "tmp"
+    if temporary_root.exists():
+        temporary = _safe_path(temporary_root, "candidate temporary root", directory=True)
+        try:
+            temporary.rmdir()
+        except OSError:
+            pass
+    print(f"superseded_bundles_removed={removed}")
 
 
 def _run(
@@ -279,6 +399,30 @@ def _require_pushed_development_source(
         )
 
 
+def _validate_build_freshness(value: str) -> str:
+    match = BUILD_FRESHNESS_RE.fullmatch(value)
+    if match is None:
+        raise LocalInstallerError(
+            f"invalid build freshness {value!r}; expected UTC YYYY.MM.DD.HHMMZ"
+        )
+    try:
+        datetime(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            tzinfo=timezone.utc,
+        )
+    except ValueError as error:
+        raise LocalInstallerError(f"invalid build freshness {value!r}: {error}") from error
+    return value
+
+
+def _new_build_freshness() -> str:
+    return datetime.now(timezone.utc).strftime("%Y.%m.%d.%H%MZ")
+
+
 def parse_identity(version: str, launcher_build_id: str) -> InstallerIdentity:
     if BUILD_ID_RE.fullmatch(launcher_build_id) is None:
         raise LocalInstallerError(f"launcher returned invalid build ID {launcher_build_id!r}")
@@ -287,30 +431,52 @@ def parse_identity(version: str, launcher_build_id: str) -> InstallerIdentity:
         raise LocalInstallerError(f"runtime is not an exact local build: {version!r}")
     if match.group("build") != launcher_build_id:
         raise LocalInstallerError("runtime and launcher report different local build identities")
-    return InstallerIdentity(launcher_build_id, match.group("base"))
+    return InstallerIdentity(
+        launcher_build_id,
+        match.group("base"),
+        _validate_build_freshness(match.group("freshness")),
+    )
 
 
-def _candidate_build_id(
-    base_commit: str,
+def _source_fingerprint(
     source_commit: str,
     tracked_diff: str,
     untracked_files: Sequence[tuple[str, bytes]],
 ) -> str:
-    if (
-        COMMIT_RE.fullmatch(base_commit) is None
-        or COMMIT_RE.fullmatch(source_commit) is None
-    ):
-        raise LocalInstallerError("candidate identity requires full lowercase commit IDs")
+    if COMMIT_RE.fullmatch(source_commit) is None:
+        raise LocalInstallerError("candidate identity requires a full lowercase source commit")
     digest = hashlib.sha256()
     digest.update(f"source-commit\0{source_commit}\0tracked-diff\0".encode())
     digest.update(tracked_diff.encode("utf-8"))
     for name, payload in sorted(untracked_files):
         digest.update(f"\0untracked\0{name}\0{len(payload)}\0".encode())
         digest.update(payload)
-    return f"{base_commit[:12]}.{digest.hexdigest()[:12]}"
+    return digest.hexdigest()
 
 
-def _source_build_identity(source: Path) -> tuple[str, str]:
+def _candidate_build_id(
+    base_commit: str,
+    source_fingerprint: str,
+    build_freshness: str,
+    build_nonce: str,
+) -> str:
+    if COMMIT_RE.fullmatch(base_commit) is None or SOURCE_FINGERPRINT_RE.fullmatch(
+        source_fingerprint
+    ) is None or BUILD_NONCE_RE.fullmatch(build_nonce) is None:
+        raise LocalInstallerError(
+            "candidate identity requires exact source and candidate provenance"
+        )
+    _validate_build_freshness(build_freshness)
+    digest = hashlib.sha256(
+        (
+            f"source\0{source_fingerprint}\0freshness\0{build_freshness}\0"
+            f"nonce\0{build_nonce}\0"
+        ).encode()
+    ).hexdigest()
+    return f"{base_commit[:12]}.{digest[:12]}"
+
+
+def _source_build_provenance(source: Path) -> tuple[str, str]:
     base_path = _safe_path(
         PROJECT_ROOT / "patches" / "delta" / "BASE",
         "delta BASE",
@@ -342,7 +508,7 @@ def _source_build_identity(source: Path) -> tuple[str, str]:
         )
         untracked_files.append((path.as_posix(), source_file.read_bytes()))
     return (
-        _candidate_build_id(base_commit, source_commit, tracked_diff, untracked_files),
+        _source_fingerprint(source_commit, tracked_diff, untracked_files),
         base_commit,
     )
 
@@ -581,11 +747,21 @@ def _bundle_manifest(bundle: Path) -> tuple[InstallerIdentity, dict[str, str]]:
         data = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise LocalInstallerError(f"could not read bundle manifest: {error}") from error
-    if set(data) != {"schema", "build_id", "base_version", "files"}:
+    if set(data) != {
+        "schema",
+        "build_id",
+        "base_version",
+        "build_freshness",
+        "files",
+    }:
         raise LocalInstallerError("bundle manifest has unsupported fields")
-    if data["schema"] != 1 or not isinstance(data["files"], dict):
+    if data["schema"] != 2 or not isinstance(data["files"], dict):
         raise LocalInstallerError("bundle manifest has unsupported schema")
-    identity = InstallerIdentity(str(data["build_id"]), str(data["base_version"]))
+    identity = InstallerIdentity(
+        str(data["build_id"]),
+        str(data["base_version"]),
+        _validate_build_freshness(str(data["build_freshness"])),
+    )
     hashes = {str(name): str(value) for name, value in data["files"].items()}
     if BUILD_ID_RE.fullmatch(identity.build_id) is None or any(
         re.fullmatch(r"[0-9a-f]{64}", value) is None for value in hashes.values()
@@ -663,9 +839,10 @@ def prepare(
         shutil.copy2(launcher, temporary / "herdr-launcher.exe")
         shutil.copy2(helper, temporary / "herdr-installer-helper.exe")
         manifest = {
-            "schema": 1,
+            "schema": 2,
             "build_id": identity.build_id,
             "base_version": identity.base_version,
+            "build_freshness": identity.build_freshness,
             "files": _hashes(temporary),
         }
         (temporary / "bundle.json").write_text(
@@ -721,6 +898,8 @@ def build(
             str(bundle / "herdr-installer-helper.exe"),
             "-BuildId",
             identity.build_id,
+            "-BuildFreshness",
+            identity.build_freshness,
             "-ReleaseVersion",
             "local",
             "-BaseVersion",
@@ -769,6 +948,8 @@ def release_precheck(options: argparse.Namespace) -> None:
                 str(bundle / "herdr-installer-helper.exe"),
                 "-BuildId",
                 identity.build_id,
+                "-BuildFreshness",
+                identity.build_freshness,
                 "-ReleaseVersion",
                 "local",
                 "-BaseVersion",
@@ -803,10 +984,24 @@ def candidate(options: argparse.Namespace) -> None:
         "integration_version_gate="
         + (",".join(changed_integrations) if changed_integrations else "unchanged")
     )
-    build_id, base_commit = _source_build_identity(source)
+    source_fingerprint, base_commit = _source_build_provenance(source)
+    canonical = source_branch == DEVELOPMENT_BRANCH and not options.isolated
+    if canonical:
+        build_id, build_freshness = _canonical_candidate_identity(
+            source_fingerprint, base_commit
+        )
+    else:
+        build_freshness = _new_build_freshness()
+        build_id = _candidate_build_id(
+            base_commit,
+            source_fingerprint,
+            build_freshness,
+            uuid.uuid4().hex,
+        )
     paths = _candidate_paths(source_branch, build_id, isolated=options.isolated)
-    isolated = paths != DEFAULT_PATHS
+    isolated = not canonical
     print(f"build_id={build_id}")
+    print(f"build_freshness={build_freshness}")
     print(f"source_branch={source_branch}")
     if isolated:
         print(f"isolation_root={paths.target_root}")
@@ -829,6 +1024,7 @@ def candidate(options: argparse.Namespace) -> None:
             run_interactive_probe=True,
         )
         print("reused=yes")
+        _prune_completed_candidate_outputs(paths, build_id, isolated=isolated)
         print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
         return
 
@@ -840,6 +1036,7 @@ def candidate(options: argparse.Namespace) -> None:
     build_environment = {
         "HERDR_BUILD_ID": build_id,
         "HERDR_BUILD_COMMIT": base_commit,
+        "HERDR_BUILD_FRESHNESS": build_freshness,
     }
     if options.test_filter is not None:
         print(f"focused_test={options.test_filter}")
@@ -938,6 +1135,7 @@ def candidate(options: argparse.Namespace) -> None:
         paths=paths,
         run_interactive_probe=True,
     )
+    _prune_completed_candidate_outputs(paths, build_id, isolated=isolated)
     print(f"total_elapsed_seconds={time.monotonic() - total_started:.3f}")
 
 

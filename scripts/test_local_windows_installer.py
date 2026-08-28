@@ -14,6 +14,7 @@ from scripts.delta_workflow import (
     DeltaWorkflowError,
 )
 from scripts.local_windows_installer import (
+    CANDIDATE_STAMP,
     DEFAULT_PATHS,
     InstallerIdentity,
     InstallerPaths,
@@ -23,6 +24,7 @@ from scripts.local_windows_installer import (
     _bundle_manifest,
     _candidate_build_id,
     _candidate_paths,
+    _canonical_candidate_identity,
     _cargo_build_arguments,
     _cargo_test_arguments,
     _dynamic_msvc_runtime_imports,
@@ -30,9 +32,11 @@ from scripts.local_windows_installer import (
     _hashes,
     _isolated_candidate_paths,
     _just_test_arguments,
+    _prune_completed_candidate_outputs,
     _require_pushed_development_source,
     _require_one_focused_test,
     _require_one_nextest_test,
+    _source_fingerprint,
     _source_branch,
     candidate,
     parse_identity,
@@ -40,21 +44,25 @@ from scripts.local_windows_installer import (
 
 
 BUILD_ID = "0123456789ab.cdef01234567"
+BUILD_FRESHNESS = "2026.08.28.1045Z"
+SOURCE_FINGERPRINT = "b" * 64
+BUILD_NONCE = "c" * 32
 
 
 class LocalWindowsInstallerTests(unittest.TestCase):
     def test_identity_parser_accepts_only_local_candidate_contract(self) -> None:
         self.assertEqual(
             parse_identity(
-                f"herdr-win local (Herdr 0.8.0, build {BUILD_ID})", BUILD_ID
+                f"herdr-win {BUILD_FRESHNESS} (local, Herdr 0.8.0, build {BUILD_ID})",
+                BUILD_ID,
             ),
-            InstallerIdentity(BUILD_ID, "0.8.0"),
+            InstallerIdentity(BUILD_ID, "0.8.0", BUILD_FRESHNESS),
         )
         with self.assertRaisesRegex(LocalInstallerError, "not an exact local build"):
             parse_identity("herdr-win 2026.08.15.1 (Herdr 0.8.0)", BUILD_ID)
         with self.assertRaisesRegex(LocalInstallerError, "different local build"):
             parse_identity(
-                "herdr-win local (Herdr 0.8.0, build aaaaaaaaaaaa.bbbbbbbbbbbb)",
+                f"herdr-win {BUILD_FRESHNESS} (local, Herdr 0.8.0, build aaaaaaaaaaaa.bbbbbbbbbbbb)",
                 BUILD_ID,
             )
 
@@ -70,9 +78,10 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             (bundle / "bundle.json").write_text(
                 json.dumps(
                     {
-                        "schema": 1,
+                        "schema": 2,
                         "build_id": BUILD_ID,
                         "base_version": "0.8.0",
+                        "build_freshness": BUILD_FRESHNESS,
                         "files": files,
                     }
                 ),
@@ -80,7 +89,9 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             )
 
             identity, expected = _bundle_manifest(bundle)
-            self.assertEqual(identity, InstallerIdentity(BUILD_ID, "0.8.0"))
+            self.assertEqual(
+                identity, InstallerIdentity(BUILD_ID, "0.8.0", BUILD_FRESHNESS)
+            )
             self.assertEqual(_hashes(bundle), expected)
 
             (stage / "herdr.exe").write_bytes(b"changed")
@@ -181,17 +192,80 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             _isolated_candidate_paths(BUILD_ID),
         )
 
-    def test_candidate_identity_tracks_the_exact_source_snapshot(self) -> None:
+    def test_candidate_identity_tracks_source_and_build_freshness(self) -> None:
         base = "a" * 40
         source = "b" * 40
-        clean = _candidate_build_id(base, source, "", [])
+        source_fingerprint = _source_fingerprint(source, "", [])
+        clean = _candidate_build_id(
+            base, source_fingerprint, BUILD_FRESHNESS, BUILD_NONCE
+        )
 
         self.assertRegex(clean, r"^a{12}\.[0-9a-f]{12}$")
-        self.assertNotEqual(clean, _candidate_build_id(base, source, "diff", []))
+        self.assertNotEqual(source_fingerprint, _source_fingerprint(source, "diff", []))
+        self.assertNotEqual(
+            source_fingerprint,
+            _source_fingerprint(source, "", [("src/new.rs", b"content")]),
+        )
         self.assertNotEqual(
             clean,
-            _candidate_build_id(base, source, "", [("src/new.rs", b"content")]),
+            _candidate_build_id(
+                base, source_fingerprint, "2026.08.28.1046Z", BUILD_NONCE
+            ),
         )
+        self.assertNotEqual(
+            clean,
+            _candidate_build_id(
+                base, source_fingerprint, BUILD_FRESHNESS, "d" * 32
+            ),
+        )
+
+    def test_incomplete_candidate_reuses_its_exact_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stamp = Path(temporary) / CANDIDATE_STAMP.name
+            with (
+                patch("scripts.local_windows_installer.CANDIDATE_STAMP", stamp),
+                patch(
+                    "scripts.local_windows_installer._new_build_freshness",
+                    return_value=BUILD_FRESHNESS,
+                ),
+            ):
+                first = _canonical_candidate_identity(
+                    SOURCE_FINGERPRINT, "a" * 40
+                )
+                second = _canonical_candidate_identity(
+                    SOURCE_FINGERPRINT, "a" * 40
+                )
+
+            self.assertEqual(first, second)
+            data = json.loads(stamp.read_text(encoding="utf-8"))
+            self.assertEqual(data["schema"], 2)
+            self.assertRegex(data["build_nonce"], r"^[0-9a-f]{32}$")
+
+    def test_completed_candidate_keeps_only_its_current_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary) / "target"
+            input_root = target_root / "installer-inputs"
+            current = input_root / BUILD_ID
+            stale = input_root / "aaaaaaaaaaaa.bbbbbbbbbbbb"
+            current.mkdir(parents=True)
+            stale.mkdir()
+            temporary_root = target_root / "tmp"
+            temporary_root.mkdir()
+            stamp = target_root / CANDIDATE_STAMP.name
+            stamp.write_text("{}", encoding="utf-8")
+            paths = InstallerPaths(
+                target_root=target_root,
+                input_root=input_root,
+                output_path=target_root / "release" / OUTPUT_PATH.name,
+                nsis_cache=target_root / "tools" / "nsis",
+            )
+
+            _prune_completed_candidate_outputs(paths, BUILD_ID, isolated=False)
+
+            self.assertTrue(current.is_dir())
+            self.assertFalse(stale.exists())
+            self.assertFalse(stamp.exists())
+            self.assertFalse(temporary_root.exists())
 
     def test_build_only_candidate_reuses_exact_bundle_before_cargo(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -229,8 +303,12 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                     return_value=(),
                 ) as version_gate,
                 patch(
-                    "scripts.local_windows_installer._source_build_identity",
-                    return_value=(BUILD_ID, "a" * 40),
+                    "scripts.local_windows_installer._source_build_provenance",
+                    return_value=(SOURCE_FINGERPRINT, "a" * 40),
+                ),
+                patch(
+                    "scripts.local_windows_installer._canonical_candidate_identity",
+                    return_value=(BUILD_ID, BUILD_FRESHNESS),
                 ),
                 patch(
                     "scripts.local_windows_installer._candidate_paths",
@@ -238,6 +316,9 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 ),
                 patch("scripts.local_windows_installer._directory") as directory,
                 patch("scripts.local_windows_installer.build") as package,
+                patch(
+                    "scripts.local_windows_installer._prune_completed_candidate_outputs"
+                ) as prune,
             ):
                 candidate(options)
 
@@ -247,6 +328,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             self.assertEqual(package.call_args.args[0].input_bundle, bundle)
             self.assertEqual(package.call_args.kwargs["paths"], paths)
             self.assertTrue(package.call_args.kwargs["run_interactive_probe"])
+            prune.assert_called_once_with(paths, BUILD_ID, isolated=False)
 
     def test_candidate_validates_integrations_before_bundle_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

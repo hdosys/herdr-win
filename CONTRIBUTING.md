@@ -247,12 +247,13 @@ python scripts/local_windows_installer.py candidate `
   --source-worktree <development-worktree>
 ```
 
-The command derives the exact current build identity first. When its validated input
-bundle already exists, it delegates directly to the existing `build` path before
-creating a Cargo target or compiling. A missing bundle follows the ordinary candidate
-compile path. Do not omit focused verification after a source behavior change; omit
-the Rust filter only when an exact non-Rust owner already passed immediately before
-Candidate packaging.
+The command generates one UTC `YYYY.MM.DD.HHMMZ` freshness label and derives the
+exact current build identity from that label, the source fingerprint, and a
+per-candidate nonce. An incomplete attempt retains one temporary stamp so a rerun
+can reuse the exact validated input bundle before compiling. Successful publication
+removes the stamp and superseded bundles. Do not omit focused verification after a
+source behavior change; omit the Rust filter only when an exact non-Rust owner
+already passed immediately before Candidate packaging.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:
@@ -267,7 +268,8 @@ python scripts/local_windows_installer.py prepare `
 
 The command copies only regular non-reparse inputs below
 `target/x86_64-pc-windows-msvc/installer-inputs/<build-id>/`, records every file
-SHA-256, and binds the bundle to the runtime and launcher identities. It never
+SHA-256 and the UTC freshness label, and binds the bundle to the runtime and launcher
+identities. It never
 extracts a prior setup with 7-Zip. The source ConPTY validator remains the stage
 owner.
 
@@ -285,7 +287,9 @@ and launcher identity, then delegates to the materialized source's existing NSIS
 packager. The exact development branch writes the setup to the one short
 replaceable path
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe` and
-reports its new hash. A topic branch selects its isolated bundle and setup; pass
+reports its freshness label and new hash. After that publication, only its matching
+bundle remains. A topic branch selects isolated generated state that the completed
+candidate check removes; pass
 `--isolated` explicitly when forcing that behavior on the development branch. A
 tiny, clearly bounded daytime packaging-only request uses
 a soft goal of roughly two minutes from the user request to that installable
@@ -392,8 +396,8 @@ updater-facing filenames.
 The retained candidate compiles that CalVer into every platform binary.
 `herdr --version` must be `herdr-win <CalVer> (Herdr <upstream-version>)`; Windows
 setup and Installed Apps use the same CalVer as their primary display version.
-Separately built local artifacts use the literal `local` identity plus their build
-ID when one is available, and must never claim a release CalVer.
+Separately built local artifacts use one UTC `YYYY.MM.DD.HHMMZ` freshness label plus
+their secondary build ID and must never claim a release CalVer.
 That CalVer is also the fork update-order key. Promotion must reject a candidate
 whose CalVer is equal to or older than the published manifest, and the updater
 must reject an equal or older feed CalVer regardless of build ID. Build ID remains

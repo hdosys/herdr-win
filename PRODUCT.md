@@ -23,8 +23,10 @@ tests remain the detailed implementation truth.
   released upstream builds.
 - A published `herdr --version` reports `herdr-win <CalVer> (Herdr
   <upstream-version>)`. A separately built local binary instead reports
-  `herdr-win local (Herdr <upstream-version>, build <build-id>)` when build
-  provenance is available, and omits the build clause otherwise. Integrations can
+  `herdr-win <YYYY.MM.DD.HHMMZ> (local, Herdr <upstream-version>, build
+  <build-id>)` when build provenance is available. The UTC label is generated once
+  for the coherent local build and leads local runtime status and Windows setup
+  presentation; the build ID remains secondary exact provenance. Integrations can
   require the stable `herdr-win ` prefix without changing the executable, command,
   state, or protocol identity.
 - Every herdr-win snapshot is a cross-platform release for Windows x86_64, Linux
@@ -79,6 +81,10 @@ tests remain the detailed implementation truth.
   after the final managed payload exits. Every retained release candidate has a
   distinct runtime build ID, including retries or independent builds from unchanged
   source, so byte-different payloads never compete for one immutable runtime path.
+- The repository exposes one current locally installable setup at
+  `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`.
+  Successful replacement removes superseded local input bundles; topic candidate
+  outputs are temporary and never become a second user-facing installer.
 - Setup updates only an exact current managed installation. Any other existing
   install layout, including the former runtime-local launcher design, is preserved
   and rejected with instructions to uninstall the existing **Herdr** or **Herdr Win**

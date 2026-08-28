@@ -294,7 +294,7 @@ function Get-VersionIdentity {
             Freshness = $BuildFreshness
             Display = "$BuildFreshness (local, build $BuildId)"
             Numeric = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$timeComponent"
-            Ui = $BuildFreshness
+            Ui = $BuildFreshness.Substring(0, $BuildFreshness.Length - 1)
             ExpectedCli = "herdr-win $BuildFreshness (local, Herdr $BaseVersion, build $BuildId)"
         }
     }

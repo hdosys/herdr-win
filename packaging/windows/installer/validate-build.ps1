@@ -175,7 +175,7 @@ if ([string]$definition.ReleaseVersion -ceq 'local') {
     $expectedNumeric = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$([int]$freshnessMatch.Groups['hour'].Value * 100 + [int]$freshnessMatch.Groups['minute'].Value)"
     if ([string]$definition.DisplayVersion -cne ("$($definition.BuildFreshness) (local, build $($definition.BuildId))") -or
         [string]$definition.NumericVersion -cne $expectedNumeric -or
-        [string]$definition.UiVersion -cne ("$($definition.BuildFreshness) ($($definition.BuildId))")) {
+        [string]$definition.UiVersion -cne [string]$definition.BuildFreshness) {
         throw 'Local installer versions are inconsistent.'
     }
 } elseif ([string]$definition.BuildFreshness -cne [string]$definition.ReleaseVersion -or

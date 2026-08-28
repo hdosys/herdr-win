@@ -178,8 +178,8 @@ pub(crate) fn extract_remote_args(
     if remote.is_none() && live_handoff {
         cleaned.push("--handoff".to_string());
     }
-    if !provision && (yes || json) {
-        return Err("--yes and --json require --remote with --provision".to_string());
+    if !provision && json {
+        return Err("--json requires --remote with --provision".to_string());
     }
     if provision && live_handoff {
         return Err("--provision cannot be combined with --handoff".to_string());
@@ -226,10 +226,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         manage_ssh_config,
         interactive_progress,
     );
-    remote_ssh.progress(format_args!(
-        "Connecting to {} and checking remote Herdr...",
-        remote.target
-    ));
+    remote_ssh.progress(format_args!("Checking {}...", remote.target));
     let detected = detect_remote_host(&remote_ssh)?;
     if remote.provision {
         let result = provision_remote(&remote_ssh, detected, remote.yes)?;
@@ -243,12 +240,12 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let remote_command = match host {
         RemoteHostPlatform::Unix(platform) => {
             let prepared_remote =
-                prepare_remote_herdr(&remote_ssh, platform, remote.live_handoff, false)?;
+                prepare_remote_herdr(&remote_ssh, platform, remote.live_handoff, remote.yes)?;
             ensure_remote_server_ready(
                 &remote_ssh,
                 &prepared_remote.remote_herdr,
                 prepared_remote.installed_or_replaced,
-                prepared_remote.stop_after_install_approved,
+                prepared_remote.stop_after_install_approved || remote.yes,
                 remote.live_handoff,
                 None,
                 false,
@@ -277,7 +274,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
                     Some(server_status),
                 ),
                 None => (
-                    prepare_remote_windows_herdr(&remote_ssh, platform, &user_profile, false)?,
+                    prepare_remote_windows_herdr(&remote_ssh, platform, &user_profile, remote.yes)?,
                     None,
                 ),
             };
@@ -285,7 +282,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
                 &remote_ssh,
                 &prepared_remote.remote_herdr,
                 prepared_remote.installed_or_replaced,
-                prepared_remote.stop_after_install_approved,
+                prepared_remote.stop_after_install_approved || remote.yes,
                 false,
                 known_server_status,
                 true,
@@ -298,10 +295,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         }
     };
 
-    remote_ssh.progress(format_args!(
-        "Opening the remote session on {}; starting its Herdr server if needed...",
-        remote.target
-    ));
+    remote_ssh.progress(format_args!("Opening {}...", remote.target));
     let _bridge = SshStdioBridge::start(
         remote.target,
         remote_command,
@@ -885,10 +879,6 @@ impl RemoteSsh {
     ) -> io::Result<String> {
         let archive_name = windows_payload_archive_name()?;
         let temporary_archive = windows_payload_archive_path(remote_herdr, &archive_name)?;
-        self.progress(format_args!(
-            "Preparing a temporary Herdr install on {}...",
-            self.target
-        ));
         let output = self.powershell_script_output(
             remote_herdr,
             &windows_install_prepare_script(remote_herdr, &archive_name),
@@ -901,11 +891,6 @@ impl RemoteSsh {
         }
 
         let destination = windows_scp_destination(&self.target, &format!(".herdr/{archive_name}"));
-        self.progress(format_args!(
-            "Transferring Herdr {} to {}...",
-            current_version(),
-            self.target
-        ));
         let transfer = self
             .scp_command()
             .arg(source_path)
@@ -930,10 +915,6 @@ impl RemoteSsh {
             )));
         }
 
-        self.progress(format_args!(
-            "Validating the Herdr package on {}...",
-            self.target
-        ));
         let output = self.powershell_script_output(
             remote_herdr,
             &windows_install_stage_script(remote_herdr, &temporary_archive, expected_sha256),
@@ -1318,25 +1299,15 @@ fn prepare_remote_herdr(
         yes || stop_after_install_approved,
     )?;
     ssh.progress(format_args!(
-        "Preparing Herdr {} for {}...",
-        current_version(),
-        ssh.target()
+        "Updating Herdr on {} to {}...",
+        ssh.target(),
+        current_version()
     ));
     let source = resolve_install_source(&remote_herdr.platform, override_binary)?;
-    ssh.progress(format_args!(
-        "Transferring and installing Herdr {} on {}...",
-        current_version(),
-        ssh.target()
-    ));
     let install_result = ssh.install_herdr(&remote_herdr, &source.path);
     source.cleanup();
     install_result?;
 
-    ssh.progress(format_args!(
-        "Verifying Herdr {} on {}...",
-        current_version(),
-        ssh.target()
-    ));
     if !remote_binary_matches(ssh, &remote_herdr)? {
         return Err(io::Error::other(format!(
             "installed remote herdr at {}, but it did not report version {}",
@@ -1346,7 +1317,7 @@ fn prepare_remote_herdr(
     }
     warn_if_remote_bin_not_on_path(ssh)?;
     ssh.progress(format_args!(
-        "Herdr {} is installed and verified on {}.",
+        "Herdr {} is updated and verified on {}.",
         current_version(),
         ssh.target()
     ));
@@ -1415,9 +1386,9 @@ fn prepare_remote_windows_herdr(
     )?;
 
     ssh.progress(format_args!(
-        "Preparing Herdr {} for {}...",
-        current_version(),
-        ssh.target()
+        "Updating Herdr on {} to {}...",
+        ssh.target(),
+        current_version()
     ));
     let source = resolve_windows_install_source(&platform, override_payload)?;
     if source.kind != InstallSourceKind::WindowsZip {
@@ -1455,20 +1426,10 @@ fn prepare_remote_windows_herdr(
             return Err(err);
         }
     }
-    ssh.progress(format_args!(
-        "Activating Herdr {} on {}...",
-        current_version(),
-        ssh.target()
-    ));
     if let Err(err) = ssh.activate_windows_payload(&managed, &stage) {
         ssh.cleanup_windows_stage(&managed, &stage);
         return Err(err);
     }
-    ssh.progress(format_args!(
-        "Verifying Herdr {} on {}...",
-        current_version(),
-        ssh.target()
-    ));
     if !remote_binary_matches(ssh, &managed)? {
         return Err(io::Error::other(format!(
             "installed Windows remote Herdr at {}, but its binary, version, protocol, or payload did not match",
@@ -1476,7 +1437,7 @@ fn prepare_remote_windows_herdr(
         )));
     }
     ssh.progress(format_args!(
-        "Herdr {} is installed and verified on {}.",
+        "Herdr {} is updated and verified on {}.",
         current_version(),
         ssh.target()
     ));
@@ -2197,10 +2158,6 @@ fn ensure_remote_server_ready(
     known_status: Option<RemoteServerStatus>,
     restart_required: bool,
 ) -> io::Result<()> {
-    ssh.progress(format_args!(
-        "Checking the Herdr server on {}...",
-        ssh.target()
-    ));
     let status = match known_status {
         Some(status) => status,
         None => remote_server_status(ssh, remote_herdr)?,
@@ -4216,6 +4173,25 @@ mod tests {
         assert!(remote.yes);
         assert!(remote.json);
         assert!(!remote.live_handoff);
+    }
+
+    #[test]
+    fn extract_remote_args_allows_yes_for_one_attach_and_reserves_json_for_provision() {
+        let args = vec!["herdr".into(), "--remote=dev".into(), "--yes".into()];
+
+        let (cleaned, remote) = extract_remote_args(&args).unwrap();
+
+        assert_eq!(cleaned, vec!["herdr"]);
+        let remote = remote.unwrap();
+        assert!(remote.yes);
+        assert!(!remote.provision);
+        assert!(!remote.json);
+
+        let args = vec!["herdr".into(), "--remote=dev".into(), "--json".into()];
+        assert_eq!(
+            extract_remote_args(&args).unwrap_err(),
+            "--json requires --remote with --provision"
+        );
     }
 
     #[test]

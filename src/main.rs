@@ -667,7 +667,7 @@ fn main() -> io::Result<()> {
         println!();
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
-        println!("       herdr --remote <ssh-target> [--session <name>]");
+        println!("       herdr --remote <ssh-target> [--session <name>] [--yes]");
         println!("       herdr --remote <ssh-target> --provision [--yes] [--json]");
         println!("       herdr session attach <name>");
         println!("       herdr completion zsh");

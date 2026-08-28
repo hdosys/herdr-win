@@ -1509,6 +1509,11 @@ fn pane_shell_command_builder_for_target(
     target: ShellLaunchTarget,
 ) -> io::Result<CommandBuilder> {
     let shell = shell_config.resolved_shell();
+    let shell = if target == ShellLaunchTarget::Windows && shell.eq_ignore_ascii_case("nu") {
+        "nu.exe".to_string()
+    } else {
+        shell
+    };
     if shell_mode_uses_login_shell(shell_config.mode, target) {
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
@@ -3438,6 +3443,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("cmd.exe")]);
+
+        for configured in ["nu", "nu.exe"] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(configured, crate::config::ShellModeConfig::NonLogin),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+            assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("nu.exe")]);
+        }
     }
 
     #[test]

@@ -3,10 +3,11 @@
 ## Unreleased
 
 ### Added
-- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits, preserving a bounded Main column on wide landscape roots and stacking on portrait roots, then close when the child session becomes idle or is deleted.
+- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits, preserving a bounded Main column on wide landscape roots and tiling the child subtree across both axes, then close when the child session becomes idle or is deleted.
 - Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
 
 ### Fixed
+- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
 - Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
 - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
 

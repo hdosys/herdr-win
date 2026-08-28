@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=17
+// HERDR_INTEGRATION_VERSION=18
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -19,6 +19,7 @@ const SUBAGENT_START_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_CHARACTERS = 64 * 1024;
 const MIN_READABLE_SUBAGENT_COLUMNS = 80;
 const MAX_MAIN_SESSION_COLUMNS = 100;
+const PANE_WIDTH_TO_HEIGHT_RATIO = 2;
 const SERVER_PROBE_TIMEOUT_MS = 500;
 
 const CHILD_EVENT_STATES = new Map([
@@ -362,7 +363,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         ? splitRootRight
           ? "right"
           : "down"
-        : rect.width >= MIN_READABLE_SUBAGENT_COLUMNS * 2
+        : rect.width > rect.height * PANE_WIDTH_TO_HEIGHT_RATIO
           ? "right"
           : "down",
       ratio:

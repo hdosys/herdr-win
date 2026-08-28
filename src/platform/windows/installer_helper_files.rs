@@ -780,6 +780,10 @@ fn parse_release_calver(display: &str) -> io::Result<[u16; 4]> {
 }
 
 pub(crate) fn parse_display_version(display: &str) -> io::Result<[u16; 4]> {
+    if let Some(build) = display.strip_prefix("local.") {
+        BuildId::parse(build)?;
+        return Ok([0, 0, 0, 0]);
+    }
     if let Some((freshness, build)) = display
         .strip_suffix(')')
         .and_then(|display| display.split_once(" (local, build "))
@@ -999,6 +1003,7 @@ mod tests {
     #[test]
     fn version_identity_accepts_release_local_and_predecessor_forms() {
         validate_version_identity("2026.08.11.1", "2026.8.11.1").unwrap();
+        validate_version_identity("local.0123456789ab.cdef01234567", "0.0.0.0").unwrap();
         validate_version_identity(
             "2026.08.28.1045Z (local, build 0123456789ab.cdef01234567)",
             "2026.8.28.1045",

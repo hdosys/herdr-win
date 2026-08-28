@@ -223,7 +223,7 @@ impl App {
         initial_cwd: PathBuf,
         focus: bool,
     ) -> std::io::Result<usize> {
-        self.create_workspace_with_launch_env(initial_cwd, focus, Vec::new())
+        self.create_workspace_with_launch_env(initial_cwd, focus, Vec::new(), true)
     }
 
     #[cfg(test)]
@@ -242,6 +242,7 @@ impl App {
         initial_cwd: PathBuf,
         focus: bool,
         extra_env: Vec<(String, String)>,
+        queue_auto_start_agent: bool,
     ) -> std::io::Result<usize> {
         let (rows, cols) = self.state.estimate_pane_size();
         let (ws, terminal, runtime) = Workspace::new_with_extra_env(
@@ -270,7 +271,10 @@ impl App {
             self.state.switch_workspace(idx);
             self.state.mode = Mode::Terminal;
         }
-        self.queue_tab_auto_start_agent(idx, 0);
+        self.initial_default_workspace_auto_start_pending = false;
+        if queue_auto_start_agent {
+            self.queue_tab_auto_start_agent(idx, 0);
+        }
         self.schedule_session_save();
         Ok(idx)
     }
@@ -299,6 +303,7 @@ impl App {
             crate::terminal::TerminalState::new(terminal_id.clone(), initial_cwd),
         );
         self.state.workspaces.push(workspace);
+        self.initial_default_workspace_auto_start_pending = false;
         let idx = self.state.workspaces.len() - 1;
         self.state.remove_alias_shadowed_by_new_pane(pane_id);
         let workspace_id = self.state.workspaces[idx].id.clone();

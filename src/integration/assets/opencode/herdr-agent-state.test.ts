@@ -529,7 +529,7 @@ test("chat.message establishes new root ownership", async () => {
   expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
 });
 
-test("tiles five concurrent direct child sessions across both axes", async () => {
+test("tiles five concurrent direct children across the complete tab", async () => {
   const plugin = await loadPlugin({
     directory: "C:\\repo",
     serverUrl: new URL("http://127.0.0.1:4096"),
@@ -566,30 +566,30 @@ test("tiles five concurrent direct child sessions across both axes", async () =>
   await Promise.all([
     openChild(
       "child-one",
-      [{ pane_id: "test:p1", rect: { width: 240, height: 41 } }],
+      [{ pane_id: "test:p1", rect: { width: 140, height: 41 } }],
       "C:\\repo\\one",
     ),
     openChild("child-two", [
-      { pane_id: "test:p1", rect: { width: 100, height: 41 } },
-      { pane_id: "test:p2", rect: { width: 140, height: 41 } },
+      { pane_id: "test:p1", rect: { width: 70, height: 41 } },
+      { pane_id: "test:p2", rect: { width: 70, height: 41 } },
     ]),
     openChild("child-three", [
-      { pane_id: "test:p1", rect: { width: 100, height: 41 } },
+      { pane_id: "test:p1", rect: { width: 70, height: 20 } },
+      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
       { pane_id: "test:p2", rect: { width: 70, height: 41 } },
-      { pane_id: "test:p3", rect: { width: 70, height: 41 } },
     ]),
     openChild("child-four", [
-      { pane_id: "test:p1", rect: { width: 100, height: 41 } },
+      { pane_id: "test:p1", rect: { width: 70, height: 20 } },
+      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
       { pane_id: "test:p2", rect: { width: 70, height: 20 } },
       { pane_id: "test:p4", rect: { width: 70, height: 20 } },
-      { pane_id: "test:p3", rect: { width: 70, height: 41 } },
     ]),
     openChild("child-five", [
-      { pane_id: "test:p1", rect: { width: 100, height: 41 } },
+      { pane_id: "test:p1", rect: { width: 35, height: 20 } },
+      { pane_id: "test:p5", rect: { width: 35, height: 20 } },
+      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
       { pane_id: "test:p2", rect: { width: 70, height: 20 } },
       { pane_id: "test:p4", rect: { width: 70, height: 20 } },
-      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
-      { pane_id: "test:p5", rect: { width: 70, height: 20 } },
     ]),
   ]);
 
@@ -597,20 +597,20 @@ test("tiles five concurrent direct child sessions across both axes", async () =>
   expect(splits).toHaveLength(5);
   expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
   expect(requestParam(splits[0], "direction")).toBe("right");
-  expect(requestParam(splits[0], "ratio")).toBe(100 / 240);
+  expect(requestParam(splits[0], "ratio")).toBe(0.5);
   expect(requestParam(splits[0], "focus")).toBe(false);
   expect(requestParam(splits[0], "cwd")).toBe("C:\\repo\\one");
   expect(requestParam(splits[0], "env")).toEqual({
     HERDR_OPENCODE_SUBAGENT_SESSION_ID: "child-one",
   });
-  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p2");
-  expect(requestParam(splits[1], "direction")).toBe("right");
+  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p1");
+  expect(requestParam(splits[1], "direction")).toBe("down");
   expect(requestParam(splits[1], "ratio")).toBe(0.5);
   expect(requestParam(splits[2], "target_pane_id")).toBe("test:p2");
   expect(requestParam(splits[2], "direction")).toBe("down");
-  expect(requestParam(splits[3], "target_pane_id")).toBe("test:p3");
-  expect(requestParam(splits[3], "direction")).toBe("down");
-  expect(requestParam(splits[4], "target_pane_id")).toBe("test:p2");
+  expect(requestParam(splits[3], "target_pane_id")).toBe("test:p1");
+  expect(requestParam(splits[3], "direction")).toBe("right");
+  expect(requestParam(splits[4], "target_pane_id")).toBe("test:p3");
   expect(requestParam(splits[4], "direction")).toBe("right");
 
   const starts = requests.filter((request) => requestMethod(request) === "agent.start");

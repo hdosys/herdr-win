@@ -105,18 +105,15 @@ active memory owner.
   durability, and removal of its task worktree, local branch, and temporary remote
   ref after integration. This cleanup has standing user authorization when exact
   integration and ownership are proven. Never ask the user to manage these items.
-- Final local ZIP, setup, and checksum artifacts always go under the workspace's
-  ignored `target/<target-triple>/release/` directory. Temporary directories are
-  intermediates only; never report an external temporary path as the primary
-  user-testable artifact.
-- The fixed local setup path is owned only by the exact
-  `candidate/development` source stack. It contains the current replay plus every
-  completed development change. Topic worktrees use build-ID-isolated outputs and
-  never produce or replace a user-testable installer.
-- The user sees one development state and one cumulative installer. User-facing
-  handoffs contain only the path, hash, included outcomes, result, and next action.
-  Internal worktrees, branches, candidate refs, queues, and cleanup stay internal
-  unless an unresolved safety blocker requires a decision.
+- The canonical local user-testable artifact is
+  `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`.
+  Only the exact `candidate/development` source stack may replace it, and it
+  contains the current replay plus every completed development change. Topic
+  worktrees keep any required package output temporary and remove it after their
+  focused check; they never produce or replace the canonical installer.
+- User-facing handoffs add only this repository's included outcomes and result to
+  the global artifact evidence. Internal worktrees, branches, candidate refs, and
+  queues stay internal unless an unresolved safety blocker requires a decision.
 - Every committed topic-worktree head must be contained in
   `candidate/development` before its fixed installer can build. Uncommitted topic
   work remains in progress and is never represented as completed user-testable

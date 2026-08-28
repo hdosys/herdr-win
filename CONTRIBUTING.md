@@ -192,9 +192,10 @@ The control checkout owns one thin local entrypoint that reuses the materialized
 source packager. It adds no installer implementation. Only the exact
 `candidate/development` branch writes
 `target/x86_64-pc-windows-msvc/release/herdr-win_local_candidate_setup.exe`, which
-is the one artifact reported for user testing. It always contains the current replay
-plus every completed change integrated into the development branch. Topic branches
-automatically use build-ID-isolated outputs and those paths stay internal.
+is the repository's canonical path named in `AGENTS.md`. It always contains the
+current replay plus every completed change integrated into the development branch.
+Topic branches keep package output temporary and remove it after their focused
+check under the global artifact lifecycle.
 
 Before each user handoff, collect every completed topic handoff, commit the coherent
 development tree, and push `origin/candidate/development`. Candidate packaging first
@@ -220,8 +221,7 @@ runtime from `cmd.exe` through the Windows interactive Task Scheduler server-lau
 path. The probe places only that command shell in a bounded kill-on-close job, then
 verifies bootstrap consumption, user and session ownership, terminal process cleanup,
 and zero scheduled-task residue. It replaces the fixed setup only after the selected
-test, source identity, native probe, bundle, and package checks pass. Never report an
-isolated topic artifact or ask the user which topic belongs in the installer.
+test, source identity, native probe, bundle, and package checks pass.
 
 For a Bun- or Python-owned behavior change, run the exact repository command first
 and invoke Candidate packaging without a Rust filter in the same stop-on-failure

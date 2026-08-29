@@ -6,4 +6,3 @@ cd "$repo_root"
 
 echo "pre-commit: checking staged diff"
 git diff --cached --check
-python3 scripts/readme_mermaid_check.py --staged

@@ -509,13 +509,8 @@ the behavior. Root `CHANGELOG.md` records only herdr-win CalVer releases and
 user-visible fork changes; link the official upstream Herdr changelog instead of
 copying upstream release entries. Do not edit changelog, release notes, website,
 or broad docs unless changed behavior requires it, and never edit generated
-preview/version documentation directories. The repository pre-commit hook renders
-a changed staged Mermaid block through `mmdc`, requires the mirrored block to
-match, and rejects extreme aspect ratios before generated output can enter the
-worktree. Maintained Sandboxes select the runtime-only Node.js LTS stack, install
-the latest stable Mermaid CLI into their external tool root, suppress its Chromium
-download, reuse installed Microsoft Edge, and set `MERMAID_CLI` automatically.
-Set `MERMAID_CLI` manually only in a nonstandard environment.
+preview/version documentation directories. The repository pre-commit hook rejects
+invalid staged whitespace before it can enter the worktree.
 
 ## Pull requests and commits
 

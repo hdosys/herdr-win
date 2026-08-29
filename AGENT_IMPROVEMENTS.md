@@ -39,24 +39,6 @@ configuration repository.
   `scripts/delta_workflow.py`, its focused tests, and the refresh procedure in
   `CONTRIBUTING.md`.
 
-- **Status: done. Render-check changed README Mermaid diagrams before commit.** The
-  staged hook now renders the exact mirrored block and rejects invalid source or an
-  extreme aspect ratio without retaining generated output. Evidence: the revised
-  compact diagram rendered at 686.328 by 518 pixels with aspect ratio 1.325, and
-  the focused parser, mirror, renderer, and staged-change tests passed. Owner:
-  `.githooks/pre-commit`, `scripts/readme_mermaid_check.py`, and its focused tests.
-
-- **Status: done. Provision the Mermaid renderer in the maintained Sandbox
-  tool stack.** A one-label README diagram change spent 64.401 seconds acquiring
-  Mermaid CLI through `npx`, then 10.352 seconds removing its task-owned cache.
-  Reusing installed Edge with the browser download disabled rendered successfully
-  at 686.328 by 542 pixels. Provision or cache the supported CLI and configure
-  `MERMAID_CLI` to reuse installed Edge. The maintained provisioner now resolves the
-  latest stable CLI, suppresses its browser download, and writes one Edge-backed
-  command into the Sandbox environment. The idempotent path rendered the README at
-  686.328 by 542 pixels in 3.935 seconds. Owner: `.herdr-sandbox/provision.ps1`,
-  `scripts/provision_mermaid_renderer.ps1`, and `CONTRIBUTING.md`.
-
 - **Status: done. Use one validated local installer input bundle and artifact
   entrypoint.** `scripts/local_windows_installer.py` now records exact bundle
   hashes and executable identity below ignored `target/`, then delegates repeated

@@ -2377,7 +2377,10 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     let release = match check_latest()? {
         Some(r) => r,
         None => {
-            eprintln!("already up to date ({})", crate::build_info::version());
+            eprintln!(
+                "already up to date ({})",
+                crate::build_info::display_version()
+            );
             return Ok(current);
         }
     };

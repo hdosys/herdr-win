@@ -27,6 +27,22 @@ pub fn version() -> String {
     version_for(release_version(), build_freshness(), build_id())
 }
 
+/// User-facing version identity. Published builds expose only their CalVer;
+/// unpublished builds retain the detailed local runtime identity.
+pub fn display_version() -> String {
+    display_version_for(release_version(), build_freshness(), build_id())
+}
+
+fn display_version_for(
+    release_version: Option<&str>,
+    build_freshness: Option<&str>,
+    build_id: Option<&str>,
+) -> String {
+    release_version
+        .map(str::to_owned)
+        .unwrap_or_else(|| version_for(None, build_freshness, build_id))
+}
+
 fn version_for(
     release_version: Option<&str>,
     build_freshness: Option<&str>,
@@ -102,6 +118,26 @@ mod tests {
         );
         assert_eq!(
             super::version_for(
+                None,
+                Some("2026.08.28.1045Z"),
+                Some("0123456789ab.cdef01234567")
+            ),
+            "2026.08.28.1045Z+0123456789ab.cdef01234567"
+        );
+    }
+
+    #[test]
+    fn display_identity_keeps_public_calver_exact_and_local_provenance_detailed() {
+        assert_eq!(
+            super::display_version_for(
+                Some("2026.08.11.1"),
+                None,
+                Some("0123456789ab.cdef01234567")
+            ),
+            "2026.08.11.1"
+        );
+        assert_eq!(
+            super::display_version_for(
                 None,
                 Some("2026.08.28.1045Z"),
                 Some("0123456789ab.cdef01234567")

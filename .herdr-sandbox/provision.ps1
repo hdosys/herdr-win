@@ -12,6 +12,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectDirectory 'Cargo.toml') -Pat
 
 Install-PythonStack -Series '3.13'
 Install-DotNetStack
+Install-NodeRuntime
 Install-ZigStack -Version '0.15.2'
 Install-RustMSVCStack -ProjectDirectory $ProjectDirectory
 

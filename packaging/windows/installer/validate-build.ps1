@@ -173,10 +173,9 @@ if ([string]$definition.ReleaseVersion -ceq 'local') {
         throw 'Local BuildFreshness must be a real UTC YYYY.MM.DD.HHMMZ value.'
     }
     $expectedNumeric = "$([int]$freshnessMatch.Groups['year'].Value).$([int]$freshnessMatch.Groups['month'].Value).$([int]$freshnessMatch.Groups['day'].Value).$([int]$freshnessMatch.Groups['hour'].Value * 100 + [int]$freshnessMatch.Groups['minute'].Value)"
-    $expectedUi = ([string]$definition.BuildFreshness).Substring(0, ([string]$definition.BuildFreshness).Length - 1)
     if ([string]$definition.DisplayVersion -cne ("$($definition.BuildFreshness) (local, build $($definition.BuildId))") -or
         [string]$definition.NumericVersion -cne $expectedNumeric -or
-        [string]$definition.UiVersion -cne $expectedUi) {
+        [string]$definition.UiVersion -cne [string]$definition.BuildFreshness) {
         throw 'Local installer versions are inconsistent.'
     }
 } elseif ([string]$definition.BuildFreshness -cne [string]$definition.ReleaseVersion -or

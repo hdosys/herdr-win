@@ -23,6 +23,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
 
+    [string]$ProductName = "Herdr",
+
     [string]$NsisArchive,
     [string]$NsisCacheDir,
 
@@ -52,12 +54,12 @@ $NsisArchiveSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa6
 $CompanyName = "herdr-win"
 $Copyright = "Herdr contributors"
 $CommandName = "herdr"
-$ProductName = "Herdr"
 $DistributionName = "Herdr Win"
 $ProductUrl = "https://github.com/hdosys/herdr-win"
 $UpstreamUrl = "https://github.com/herdrdev/herdr"
 $InstallerStartGateEnvironmentVariable = "HERDR_INSTALLER_START_GATE_V1"
 $InstallerTestMarkerPrefix = "herdr"
+$ProductNamePattern = '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$'
 $BuildIdPattern = '^[0-9a-f]{12}\.[0-9a-f]{12}$'
 $BuildFreshnessPattern = '^(?<year>[0-9]{4})\.(?<month>[0-9]{2})\.(?<day>[0-9]{2})\.(?<hour>[0-9]{2})(?<minute>[0-9]{2})Z$'
 $BaseVersionPattern = '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$'
@@ -410,6 +412,9 @@ function Get-VerifiedNsisArchive {
 
 if ($BuildId -cnotmatch $BuildIdPattern) {
     throw "Invalid build ID '$BuildId'. Expected 12 lowercase hex characters, a dot, and 12 lowercase hex characters."
+}
+if ($ProductName -cnotmatch $ProductNamePattern) {
+    throw "Invalid product name '$ProductName'."
 }
 if (-not [string]::IsNullOrWhiteSpace($TestUserProfileRoot)) {
     $TestUserProfileRoot = (Resolve-Path -LiteralPath $TestUserProfileRoot).Path

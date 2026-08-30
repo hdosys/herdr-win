@@ -33,17 +33,6 @@ impl App {
         changed | self.set_host_terminal_theme(next_theme)
     }
 
-    pub(super) fn update_host_terminal_palette_colors(
-        &mut self,
-        colors: &[(u8, crate::terminal_theme::RgbColor)],
-    ) -> bool {
-        let mut next_theme = self.state.host_terminal_theme;
-        for &(index, color) in colors {
-            next_theme = next_theme.with_palette_color(index, color);
-        }
-        self.set_host_terminal_theme(next_theme)
-    }
-
     pub(super) fn set_host_terminal_appearance(
         &mut self,
         appearance: crate::terminal_theme::HostAppearance,

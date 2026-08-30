@@ -444,8 +444,9 @@ function rewriteRelativeDocPaths(content, extraDepth) {
 }
 
 function setGeneratedEditUrl(content, editUrl) {
-  if (!content.startsWith('---\n') || /^editUrl:/m.test(content)) return content;
-  return content.replace(/^---\n/, `---\neditUrl: ${editUrl}\n`);
+  const opening = content.match(/^---(\r?\n)/);
+  if (!opening || /^editUrl:/m.test(content)) return content;
+  return content.replace(/^---\r?\n/, `---${opening[1]}editUrl: ${editUrl}${opening[1]}`);
 }
 
 function insertPreviewNotice(content, relativePath, { buildId, commit }) {

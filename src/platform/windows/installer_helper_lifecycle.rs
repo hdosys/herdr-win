@@ -8,11 +8,10 @@ use std::{
     os::windows::{
         ffi::{OsStrExt as _, OsStringExt as _},
         fs::{MetadataExt as _, OpenOptionsExt as _},
-        io::AsRawHandle as _,
         process::CommandExt as _,
     },
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     rc::Rc,
     thread,
     time::{Duration, Instant},
@@ -34,10 +33,6 @@ use windows_sys::Win32::{
             CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
         },
-        JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-            QueryInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-        },
         Threading::{
             CreateMutexW, OpenProcess, QueryFullProcessImageNameW, ReleaseMutex,
             WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
@@ -48,9 +43,11 @@ use windows_sys::Win32::{
 
 use crate::{
     managed_install::{
-        BuildId, ManagedInstall, INSTALLER_STOP_SESSIONS_COMMAND, WINGET_PACKAGE_MANAGER_RECORD,
+        BuildId, ManagedInstall, INSTALLER_STOP_SESSIONS_COMMAND, PENDING_LAUNCHER_PREFIX,
+        PENDING_LAUNCHER_SUFFIX, UNINSTALL_PENDING_MARKER, WINGET_PACKAGE_MANAGER_RECORD,
     },
     windows_managed_install::CoordinationLease,
+    windows_process_job::ChildProcessJob,
 };
 
 use super::{
@@ -152,9 +149,6 @@ struct LeaseStatus {
 #[derive(Debug)]
 struct ProcessHandle(HANDLE);
 
-#[derive(Debug)]
-struct ProcessJob(HANDLE);
-
 #[derive(Clone, Debug)]
 struct QuietSession {
     process_id: u32,
@@ -198,92 +192,6 @@ impl Drop for LifecycleMutex {
             // SAFETY: this guard exclusively owns the non-null mutex handle.
             unsafe { CloseHandle(self.handle) };
             self.handle = std::ptr::null_mut();
-        }
-    }
-}
-
-impl ProcessJob {
-    fn new() -> io::Result<Self> {
-        // SAFETY: null security attributes and name request a private job. This
-        // guard owns the returned handle.
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self(handle))
-    }
-
-    fn assign(&self, child: &Child) -> io::Result<()> {
-        // SAFETY: the job and process handles remain valid for this call.
-        if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn terminate(&self) -> io::Result<()> {
-        // SAFETY: this guard owns a valid job handle.
-        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn active_processes(&self) -> io::Result<u32> {
-        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        // SAFETY: the job handle is valid and accounting is writable for its
-        // exact structure size during this synchronous query.
-        if unsafe {
-            QueryInformationJobObject(
-                self.0,
-                JobObjectBasicAccountingInformation,
-                (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
-                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(accounting.ActiveProcesses)
-    }
-
-    fn terminate_and_reap(&self, child: &mut Child, timeout: Duration) -> io::Result<()> {
-        self.terminate()?;
-        self.wait_for_empty(
-            child,
-            timeout,
-            "quiet-uninstall process tree did not terminate within 5 seconds",
-        )
-    }
-
-    fn wait_for_empty(
-        &self,
-        child: &mut Child,
-        timeout: Duration,
-        timeout_message: &str,
-    ) -> io::Result<()> {
-        let deadline = Instant::now() + timeout;
-        let mut root_reaped = false;
-        loop {
-            root_reaped |= child.try_wait()?.is_some();
-            if root_reaped && self.active_processes()? == 0 {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, timeout_message));
-            }
-            thread::sleep(LOCK_RETRY.min(timeout));
-        }
-    }
-}
-
-impl Drop for ProcessJob {
-    fn drop(&mut self) {
-        if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
-            // SAFETY: this guard uniquely owns the job handle. The job has no
-            // kill-on-close policy, so successful NSIS cleanup may finish.
-            unsafe { CloseHandle(self.0) };
         }
     }
 }
@@ -437,7 +345,7 @@ impl RetryOwnership {
         if let Some(path_add_pending) = &self.path_add_pending {
             path_add_pending.restore(&state.join("path-add.pending"))?;
         }
-        let marker = state.join("uninstall.pending");
+        let marker = state.join(UNINSTALL_PENDING_MARKER);
         if files::path_exists(&marker)? {
             files::assert_regular_file(&marker)?;
             if fs::read(&marker)? != files::UNINSTALL_MARKER {
@@ -687,7 +595,7 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
     files::write_durable(&result_path, files::QUIET_UNINSTALL_PENDING)?;
     let uninstaller = install_root.join("uninstall.exe");
     files::assert_regular_file(&uninstaller)?;
-    let job = ProcessJob::new()?;
+    let job = ChildProcessJob::new_kill_on_close()?;
     let mut child = Command::new(&uninstaller)
         .arg("/S")
         .arg(format!("/NATIVE_QUIET_RUNNER_PID={}", std::process::id()))
@@ -717,7 +625,7 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
                     "quiet-uninstall process tree remained active after terminal result",
                 ) {
                     if err.kind() == io::ErrorKind::TimedOut {
-                        job.terminate_and_reap(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
+                        job.terminate_and_wait(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
                     }
                     remove_file_if_exists(&result_path)?;
                     return Err(err);
@@ -739,7 +647,7 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
         if let Some(status) = child.try_wait()? {
             if !status.success() {
                 if job.active_processes()? != 0 {
-                    job.terminate_and_reap(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
+                    job.terminate_and_wait(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
                 }
                 remove_file_if_exists(&result_path)?;
                 return Err(files::invalid_data(format!(
@@ -748,7 +656,7 @@ pub(crate) fn quiet_uninstall(options: QuietUninstallOptions) -> io::Result<Stri
             }
         }
         if Instant::now() >= deadline {
-            job.terminate_and_reap(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
+            job.terminate_and_wait(&mut child, QUIET_UNINSTALL_CLEANUP_TIMEOUT)?;
             remove_file_if_exists(&result_path)?;
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -1136,7 +1044,9 @@ fn set_pending_launcher(
     if files::pending_launcher(&state)?.is_none() {
         files::copy_durable_file(
             candidate,
-            &state.join(format!("launcher.pending-{candidate_hash}.exe")),
+            &state.join(format!(
+                "{PENDING_LAUNCHER_PREFIX}{candidate_hash}{PENDING_LAUNCHER_SUFFIX}"
+            )),
         )?;
     }
     Ok(())
@@ -1389,7 +1299,7 @@ fn uninstall_layout(
     let (preserved, warning) =
         skills::remove_skill_copies_best_effort(agent_root, claude_roots, known, skill_disposition);
     let state = install_root.join("state");
-    let marker = state.join("uninstall.pending");
+    let marker = state.join(UNINSTALL_PENDING_MARKER);
     if !files::path_exists(&marker)? {
         files::write_durable(&marker, files::UNINSTALL_MARKER)?;
     } else {
@@ -1421,7 +1331,7 @@ fn stop_installed_sessions(install_root: &Path) -> io::Result<()> {
     let runtime = install.payload_path(&active);
     files::assert_regular_file(&runtime)?;
     let lease = install.open_shared_lease(&active)?;
-    let job = ProcessJob::new()?;
+    let job = ChildProcessJob::new_kill_on_close()?;
     let mut command = Command::new(&runtime);
     command
         .arg(INSTALLER_STOP_SESSIONS_COMMAND)
@@ -1607,7 +1517,8 @@ fn validate_managed_root(install_root: &Path, allow_missing_helper: bool) -> io:
         let entry = entry?;
         let name = entry.file_name();
         let name_text = name.to_string_lossy();
-        let pending = name_text.starts_with("launcher.pending-") && name_text.ends_with(".exe");
+        let pending = name_text.starts_with(PENDING_LAUNCHER_PREFIX)
+            && name_text.ends_with(PENDING_LAUNCHER_SUFFIX);
         if (!allowed.iter().any(|allowed| name == OsStr::new(allowed)) && !pending)
             || entry.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
         {
@@ -1617,7 +1528,7 @@ fn validate_managed_root(install_root: &Path, allow_missing_helper: bool) -> io:
             )));
         }
     }
-    if files::path_exists(&state.join("uninstall.pending"))? {
+    if files::path_exists(&state.join(UNINSTALL_PENDING_MARKER))? {
         return Err(files::invalid_data("managed uninstall is incomplete"));
     }
     for path in [
@@ -1742,7 +1653,7 @@ fn validate_uninstall_retry_root(install_root: &Path) -> io::Result<()> {
         "install.manifest",
         "package-manager",
         "path-add.pending",
-        "uninstall.pending",
+        UNINSTALL_PENDING_MARKER,
     ];
     for entry in fs::read_dir(&state)? {
         let entry = entry?;
@@ -1752,8 +1663,8 @@ fn validate_uninstall_retry_root(install_root: &Path) -> io::Result<()> {
             continue;
         }
         let name_text = name.to_string_lossy();
-        let pending_launcher =
-            name_text.starts_with("launcher.pending-") && name_text.ends_with(".exe");
+        let pending_launcher = name_text.starts_with(PENDING_LAUNCHER_PREFIX)
+            && name_text.ends_with(PENDING_LAUNCHER_SUFFIX);
         if !allowed_files
             .iter()
             .any(|allowed| name == OsStr::new(allowed))
@@ -1768,7 +1679,7 @@ fn validate_uninstall_retry_root(install_root: &Path) -> io::Result<()> {
     for required in [
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
-        "uninstall.pending",
+        UNINSTALL_PENDING_MARKER,
     ] {
         files::assert_regular_file(&state.join(required))?;
     }
@@ -1826,7 +1737,7 @@ fn validate_uninstall_residual(install_root: &Path) -> io::Result<()> {
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
         "path-add.pending",
-        "uninstall.pending",
+        UNINSTALL_PENDING_MARKER,
     ];
     for entry in fs::read_dir(&state)? {
         let entry = entry?;
@@ -1843,7 +1754,7 @@ fn validate_uninstall_residual(install_root: &Path) -> io::Result<()> {
     for required in [
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
-        "uninstall.pending",
+        UNINSTALL_PENDING_MARKER,
     ] {
         files::assert_regular_file(&state.join(required))?;
     }
@@ -1877,7 +1788,7 @@ fn validate_uninstall_cleanup_root(install_root: &Path) -> io::Result<()> {
         files::NATIVE_HELPER_NAME,
         "launcher.lock",
         "path-add.pending",
-        "uninstall.pending",
+        UNINSTALL_PENDING_MARKER,
     ];
     for entry in fs::read_dir(&state)? {
         let entry = entry?;
@@ -1899,7 +1810,7 @@ fn classify_root(install_root: &Path, allow_missing_helper: bool) -> io::Result<
     if !files::path_exists(install_root)? {
         return Ok(RootKind::New);
     }
-    if files::path_exists(&install_root.join("state").join("uninstall.pending"))? {
+    if files::path_exists(&install_root.join("state").join(UNINSTALL_PENDING_MARKER))? {
         validate_uninstall_retry_root(install_root)?;
         return Ok(RootKind::UninstallRetry);
     }
@@ -2294,7 +2205,7 @@ fn set_package_manager_marker(state: &Path, manager: InstallManager) -> io::Resu
     if files::path_exists(&path)? {
         validate_package_manager_marker(&path)?;
     } else if manager == InstallManager::WinGet {
-        files::write_durable(&path, files::PACKAGE_MANAGER_MARKER)?;
+        files::write_durable(&path, WINGET_PACKAGE_MANAGER_RECORD)?;
     }
     Ok(())
 }
@@ -2355,7 +2266,7 @@ fn remove_uninstall_residual(
         if files::path_exists(&state)? {
             remove_file_if_exists(&state.join("path-add.pending"))?;
             validate_uninstall_cleanup_root(install_root)?;
-            remove_file_if_exists(&state.join("uninstall.pending"))?;
+            remove_file_if_exists(&state.join(UNINSTALL_PENDING_MARKER))?;
             remove_file_if_exists(&state.join("launcher.lock"))?;
             let helper = state.join(files::NATIVE_HELPER_NAME);
             if let Some(quiet) = quiet {

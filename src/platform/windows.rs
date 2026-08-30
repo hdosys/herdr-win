@@ -13,16 +13,21 @@ use std::{
 };
 
 mod clipboard_image;
+#[path = "windows/process_job.rs"]
+mod process_job;
+pub(crate) use process_job::ChildProcessJob;
 
 use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
-            CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
-            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            CloseHandle, GlobalFree, LocalFree, ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, HWND,
+            INVALID_HANDLE_VALUE, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_FAILED,
+            WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Security::{
-            EqualSid, GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+            EqualSid, GetTokenInformation, LookupAccountNameW, SidTypeUser, TokenUser,
+            SECURITY_ATTRIBUTES, SID_NAME_USE, TOKEN_QUERY, TOKEN_USER,
         },
         Storage::FileSystem::CreateDirectoryW,
         System::{
@@ -43,10 +48,8 @@ use windows_sys::{
                 },
             },
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-                JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
@@ -54,8 +57,9 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             RemoteDesktop::{
-                ProcessIdToSessionId, WTSActive, WTSEnumerateSessionsW, WTSFreeMemory,
-                WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
+                ProcessIdToSessionId, WTSActive, WTSDomainName, WTSEnumerateSessionsW,
+                WTSFreeMemory, WTSQuerySessionInformationW, WTSUserName, WTS_CURRENT_SERVER_HANDLE,
+                WTS_SESSION_INFOW,
             },
             Threading::{
                 GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
@@ -115,6 +119,9 @@ const INTERACTIVE_LAUNCH_PROGRAM_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_PROGRAM";
 const INTERACTIVE_LAUNCH_ARGUMENTS_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_ARGUMENTS";
 const INTERACTIVE_LAUNCH_WORKING_DIRECTORY_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_WORKING_DIRECTORY";
 const INTERACTIVE_LAUNCH_SESSION_ID_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_SESSION_ID";
+const INTERACTIVE_LAUNCH_TASK_NAME_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_TASK_NAME";
+const INTERACTIVE_LAUNCH_CLEANUP_ENV: &str = "HERDR_INTERACTIVE_LAUNCH_CLEANUP_ONLY";
+const INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)
@@ -549,64 +556,22 @@ pub(crate) fn configure_status_command(process: &mut std::process::Command) {
 }
 
 pub(crate) struct StatusCommandGuard {
-    job: usize,
-}
-
-fn create_kill_on_close_job() -> std::io::Result<HANDLE> {
-    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-    if job.is_null() {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let limits_size = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
-        .map_err(|_| std::io::Error::other("job limits size exceeds u32"))?;
-    if unsafe {
-        SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            std::ptr::from_ref(&limits).cast(),
-            limits_size,
-        )
-    } == 0
-    {
-        let error = std::io::Error::last_os_error();
-        unsafe {
-            CloseHandle(job);
-        }
-        return Err(error);
-    }
-    Ok(job)
+    job: Option<ChildProcessJob>,
 }
 
 impl StatusCommandGuard {
     pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
-        let job = create_kill_on_close_job()?;
+        let job = ChildProcessJob::new_kill_on_close()?;
 
         let Some(process) = child.raw_handle() else {
-            unsafe {
-                CloseHandle(job);
-            }
             return Err(std::io::Error::other(
                 "status command has no process handle",
             ));
         };
-        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-        if let Err(error) = resume_suspended_process(child.id()) {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
+        job.assign_handle(process.cast())?;
+        resume_suspended_process(child.id())?;
 
-        Ok(Self { job: job as usize })
+        Ok(Self { job: Some(job) })
     }
 }
 
@@ -658,14 +623,9 @@ fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
 
 impl StatusCommandGuard {
     pub(crate) fn terminate(&mut self) {
-        if self.job != 0 {
-            // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
-            // the job, including on task cancellation and config reload.
-            unsafe {
-                CloseHandle(self.job as HANDLE);
-            }
-            self.job = 0;
-        }
+        // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
+        // the job, including on task cancellation and config reload.
+        self.job.take();
     }
 }
 
@@ -766,6 +726,7 @@ struct InteractiveServerEnvironmentChange {
 struct PendingInteractiveServerBootstrap {
     root: PathBuf,
     path: PathBuf,
+    task_name: String,
     program: String,
     arguments: String,
     working_directory: String,
@@ -849,12 +810,10 @@ impl PendingInteractiveServerBootstrap {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let counter = NEXT_SERVER_BOOTSTRAP.fetch_add(1, AtomicOrdering::Relaxed);
+        let launch_id = format!("{:x}-{timestamp:x}-{counter:x}", std::process::id());
         let base = interactive_server_bootstrap_base()?;
         std::fs::create_dir_all(&base)?;
-        let root = base.join(format!(
-            "herdr-server-launch-{:x}-{timestamp:x}-{counter:x}",
-            std::process::id()
-        ));
+        let root = base.join(format!("herdr-server-launch-{launch_id}"));
         create_remote_private_dir(&root).map_err(|err| {
             std::io::Error::new(
                 err.kind(),
@@ -873,6 +832,7 @@ impl PendingInteractiveServerBootstrap {
         let pending = Self {
             root,
             path,
+            task_name: format!("HerdrInteractiveServer-{launch_id}"),
             program,
             arguments: launch_arguments,
             working_directory,
@@ -1193,10 +1153,166 @@ fn launch_server_daemon_in_interactive_session(
         )
     })?;
     let mut pending = PendingInteractiveServerBootstrap::create(command)?;
-    let encoded_script = encoded_powershell_script(INTERACTIVE_LAUNCH_SCRIPT);
+    let task_name = pending.task_name.clone();
+    let launch_result = (|| {
+        let encoded_script = encoded_powershell_script(INTERACTIVE_LAUNCH_SCRIPT);
+        let mut launcher = std::process::Command::new("powershell.exe");
+        launcher
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                &encoded_script,
+            ])
+            .env(INTERACTIVE_LAUNCH_PROGRAM_ENV, &pending.program)
+            .env(INTERACTIVE_LAUNCH_ARGUMENTS_ENV, &pending.arguments)
+            .env(
+                INTERACTIVE_LAUNCH_WORKING_DIRECTORY_ENV,
+                &pending.working_directory,
+            )
+            .env(
+                INTERACTIVE_LAUNCH_SESSION_ID_ENV,
+                session_id_for_task.to_string(),
+            )
+            .env(INTERACTIVE_LAUNCH_TASK_NAME_ENV, &task_name)
+            .env_remove(INTERACTIVE_LAUNCH_CLEANUP_ENV)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let output = run_contained_command_output(
+            &mut launcher,
+            INTERACTIVE_SERVER_LAUNCH_TIMEOUT,
+            "interactive server launcher",
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(std::io::Error::other(format!(
+                "interactive server launcher failed: {}",
+                stderr.trim()
+            )));
+        }
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "interactive server launcher returned non-UTF-8 output",
+            )
+        })?;
+        let pid = parse_interactive_server_pid(&stdout)?;
+        let process = open_interactive_server_process(pid).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "interactive server process exited before validation",
+            )
+        })?;
+        let validation = (|| {
+            let actual_session = process_session_id(pid)?;
+            if actual_session != session_id {
+                return Err(std::io::Error::other(format!(
+                    "interactive server launched in session {actual_session}, expected {session_id}"
+                )));
+            }
+            if !process_user_matches_current_user(&process)? {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "interactive server did not launch as the current user",
+                ));
+            }
+            wait_for_interactive_bootstrap_consumption(&pending.path, &process)
+        })();
+        if let Err(err) = validation {
+            let cleanup = terminate_process_and_wait(&process, Duration::from_secs(5));
+            return Err(match cleanup {
+                Ok(()) => err,
+                Err(cleanup_err) => std::io::Error::other(format!(
+                    "{err}; failed to terminate rejected interactive server process: {cleanup_err}"
+                )),
+            });
+        }
+        Ok(pid)
+    })();
+    let task_cleanup = cleanup_interactive_server_task(&task_name);
+    match (launch_result, task_cleanup) {
+        (Ok(pid), Ok(())) => {
+            pending.transfer_to_server();
+            Ok(pid)
+        }
+        (Err(err), Ok(())) => Err(err),
+        (Err(err), Err(cleanup_err)) => Err(std::io::Error::other(format!(
+            "{err}; failed to remove transient interactive server task {task_name}: {cleanup_err}"
+        ))),
+        (Ok(pid), Err(cleanup_err)) => {
+            let process_cleanup = open_interactive_server_process(pid)
+                .map(|process| terminate_process_and_wait(&process, Duration::from_secs(5)))
+                .transpose();
+            match process_cleanup {
+                Ok(_) => Err(std::io::Error::other(format!(
+                    "failed to remove transient interactive server task {task_name}: {cleanup_err}"
+                ))),
+                Err(process_err) => Err(std::io::Error::other(format!(
+                    "failed to remove transient interactive server task {task_name} ({cleanup_err}); server cleanup also failed: {process_err}"
+                ))),
+            }
+        }
+    }
+}
+
+fn run_contained_command_output(
+    command: &mut std::process::Command,
+    timeout: Duration,
+    label: &str,
+) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt as _;
+
     let job = ChildProcessJob::new_kill_on_close()?;
-    let mut launcher = std::process::Command::new("powershell.exe");
-    launcher
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+    let mut child = command.spawn().map_err(|err| {
+        std::io::Error::new(err.kind(), format!("failed to start {label}: {err}"))
+    })?;
+    if let Err(err) = job.assign(&child) {
+        let _ = child.kill();
+        let _ = wait_child_bounded(&mut child, INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT);
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("failed to contain {label}: {err}"),
+        ));
+    }
+    if let Err(err) = resume_suspended_process(Some(child.id())) {
+        let cleanup = job.terminate_and_wait(&mut child, INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT);
+        return Err(match cleanup {
+            Ok(()) => std::io::Error::new(err.kind(), format!("failed to resume {label}: {err}")),
+            Err(cleanup_err) => std::io::Error::other(format!(
+                "failed to resume {label} ({err}); cleanup also failed: {cleanup_err}"
+            )),
+        });
+    }
+    match wait_for_process_handle(&child, timeout) {
+        Ok(true) => child.wait_with_output(),
+        Ok(false) => match job.terminate_and_wait(&mut child, INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT) {
+            Ok(()) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("{label} exceeded {} seconds", timeout.as_secs()),
+            )),
+            Err(err) => Err(std::io::Error::other(format!(
+                "{label} timed out and cleanup failed: {err}"
+            ))),
+        },
+        Err(err) => {
+            let cleanup = job.terminate_and_wait(&mut child, INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT);
+            Err(match cleanup {
+                Ok(()) => err,
+                Err(cleanup_err) => std::io::Error::other(format!(
+                    "{label} wait failed ({err}); cleanup also failed: {cleanup_err}"
+                )),
+            })
+        }
+    }
+}
+
+fn cleanup_interactive_server_task(task_name: &str) -> std::io::Result<()> {
+    let encoded_script = encoded_powershell_script(INTERACTIVE_LAUNCH_SCRIPT);
+    let mut cleanup = std::process::Command::new("powershell.exe");
+    cleanup
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1204,108 +1320,24 @@ fn launch_server_daemon_in_interactive_session(
             "-EncodedCommand",
             &encoded_script,
         ])
-        .env(INTERACTIVE_LAUNCH_PROGRAM_ENV, &pending.program)
-        .env(INTERACTIVE_LAUNCH_ARGUMENTS_ENV, &pending.arguments)
-        .env(
-            INTERACTIVE_LAUNCH_WORKING_DIRECTORY_ENV,
-            &pending.working_directory,
-        )
-        .env(
-            INTERACTIVE_LAUNCH_SESSION_ID_ENV,
-            session_id_for_task.to_string(),
-        )
+        .env(INTERACTIVE_LAUNCH_TASK_NAME_ENV, task_name)
+        .env(INTERACTIVE_LAUNCH_CLEANUP_ENV, "1")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
-    use std::os::windows::process::CommandExt as _;
-    launcher.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
-    let mut launcher = launcher.spawn().map_err(|err| {
-        std::io::Error::new(
-            err.kind(),
-            format!("failed to start interactive server launcher: {err}"),
-        )
-    })?;
-    if let Err(err) = job.assign(&launcher) {
-        let _ = launcher.kill();
-        let _ = wait_child_bounded(&mut launcher, Duration::from_secs(5));
-        return Err(std::io::Error::new(
-            err.kind(),
-            format!("failed to contain interactive server launcher: {err}"),
-        ));
+    let output = run_contained_command_output(
+        &mut cleanup,
+        INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT,
+        "interactive server task cleanup",
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "interactive server task cleanup failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
     }
-    if let Err(err) = resume_suspended_process(Some(launcher.id())) {
-        let cleanup = job.terminate_and_wait(&mut launcher, Duration::from_secs(5));
-        return Err(match cleanup {
-            Ok(()) => std::io::Error::new(
-                err.kind(),
-                format!("failed to resume interactive server launcher: {err}"),
-            ),
-            Err(cleanup_err) => std::io::Error::other(format!(
-                "failed to resume interactive server launcher ({err}); cleanup also failed: {cleanup_err}"
-            )),
-        });
-    }
-    match wait_for_process_handle(&launcher, INTERACTIVE_SERVER_LAUNCH_TIMEOUT)? {
-        true => {}
-        false => {
-            return match job.terminate_and_wait(&mut launcher, Duration::from_secs(5)) {
-                Ok(()) => Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "interactive server launcher exceeded 20 seconds",
-                )),
-                Err(err) => Err(std::io::Error::other(format!(
-                    "interactive server launcher timed out and cleanup failed: {err}"
-                ))),
-            };
-        }
-    }
-    let output = launcher.wait_with_output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(format!(
-            "interactive server launcher failed: {}",
-            stderr.trim()
-        )));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "interactive server launcher returned non-UTF-8 output",
-        )
-    })?;
-    let pid = parse_interactive_server_pid(&stdout)?;
-    let process = open_interactive_server_process(pid).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "interactive server process exited before validation",
-        )
-    })?;
-    let validation = (|| {
-        let actual_session = process_session_id(pid)?;
-        if actual_session != session_id {
-            return Err(std::io::Error::other(format!(
-                "interactive server launched in session {actual_session}, expected {session_id}"
-            )));
-        }
-        if !process_user_matches_current_user(&process)? {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "interactive server did not launch as the current user",
-            ));
-        }
-        wait_for_interactive_bootstrap_consumption(&pending.path, &process)
-    })();
-    if let Err(err) = validation {
-        let cleanup = terminate_process_and_wait(&process, Duration::from_secs(5));
-        return Err(match cleanup {
-            Ok(()) => err,
-            Err(cleanup_err) => std::io::Error::other(format!(
-                "{err}; failed to terminate rejected interactive server process: {cleanup_err}"
-            )),
-        });
-    }
-    pending.transfer_to_server();
-    Ok(pid)
 }
 
 fn active_interactive_session_id() -> std::io::Result<u32> {
@@ -1338,22 +1370,163 @@ fn active_interactive_session_id() -> std::io::Result<u32> {
     } else {
         unsafe { std::slice::from_raw_parts(sessions.0, count as usize) }
     };
-    let active = entries
-        .iter()
-        .filter(|entry| entry.State == WTSActive && entry.SessionId != 0)
-        .map(|entry| entry.SessionId)
-        .collect::<Vec<_>>();
+    let current_token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let current_user = TokenUserBuffer::read(current_token.as_raw_handle().cast())?;
+    let mut active = Vec::new();
+    for entry in entries {
+        if entry.State == WTSActive
+            && entry.SessionId != 0
+            && session_user_matches(entry.SessionId, current_user.sid())?
+        {
+            active.push(entry.SessionId);
+        }
+    }
     let [session_id] = active.as_slice() else {
         let message = if active.is_empty() {
-            "no active interactive desktop session is available".to_string()
+            "no active interactive desktop session owned by the current user is available"
+                .to_string()
         } else {
             format!(
-                "multiple active interactive desktop sessions are available ({active:?}); refusing to guess"
+                "multiple active interactive desktop sessions owned by the current user are available ({active:?}); refusing to guess"
             )
         };
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, message));
     };
     Ok(*session_id)
+}
+
+struct WtsStringBuffer(*mut u16);
+
+impl Drop for WtsStringBuffer {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                WTSFreeMemory(self.0.cast());
+            }
+        }
+    }
+}
+
+fn wts_session_string(session_id: u32, information_class: i32) -> std::io::Result<String> {
+    let mut buffer = null_mut();
+    let mut bytes = 0;
+    if unsafe {
+        WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            session_id,
+            information_class,
+            &mut buffer,
+            &mut bytes,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let buffer = WtsStringBuffer(buffer);
+    if bytes == 0 {
+        return Ok(String::new());
+    }
+    if buffer.0.is_null() || !bytes.is_multiple_of(2) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Windows returned an invalid session identity buffer",
+        ));
+    }
+    let units = unsafe { std::slice::from_raw_parts(buffer.0, bytes as usize / 2) };
+    let end = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(units.len());
+    if units[end..].iter().any(|unit| *unit != 0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Windows returned a session identity with trailing data",
+        ));
+    }
+    String::from_utf16(&units[..end]).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Windows returned a session identity that is not valid UTF-16",
+        )
+    })
+}
+
+struct AccountSidBuffer(Vec<usize>);
+
+impl AccountSidBuffer {
+    fn lookup(account: &str) -> std::io::Result<Self> {
+        if account.is_empty() || account.contains('\0') {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Windows returned an empty or invalid session account name",
+            ));
+        }
+        let account = account
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut sid_bytes = 0;
+        let mut domain_units = 0;
+        let mut use_type: SID_NAME_USE = 0;
+        unsafe {
+            LookupAccountNameW(
+                null_mut(),
+                account.as_ptr(),
+                null_mut(),
+                &mut sid_bytes,
+                null_mut(),
+                &mut domain_units,
+                &mut use_type,
+            );
+        }
+        let required_error = std::io::Error::last_os_error();
+        if sid_bytes == 0 || required_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+        {
+            return Err(required_error);
+        }
+        let mut sid = vec![0usize; (sid_bytes as usize).div_ceil(size_of::<usize>())];
+        let mut referenced_domain = vec![0u16; domain_units.max(1) as usize];
+        if unsafe {
+            LookupAccountNameW(
+                null_mut(),
+                account.as_ptr(),
+                sid.as_mut_ptr().cast(),
+                &mut sid_bytes,
+                referenced_domain.as_mut_ptr(),
+                &mut domain_units,
+                &mut use_type,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if use_type != SidTypeUser {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "active desktop session identity is not a Windows user account",
+            ));
+        }
+        Ok(Self(sid))
+    }
+
+    fn sid(&self) -> *mut c_void {
+        self.0.as_ptr().cast_mut().cast()
+    }
+}
+
+fn session_user_matches(session_id: u32, current_user: *mut c_void) -> std::io::Result<bool> {
+    let user = wts_session_string(session_id, WTSUserName)?;
+    if user.is_empty() {
+        return Ok(false);
+    }
+    let domain = wts_session_string(session_id, WTSDomainName)?;
+    let account = if domain.is_empty() {
+        user
+    } else {
+        format!(r"{domain}\{user}")
+    };
+    let session_user = AccountSidBuffer::lookup(&account)?;
+    Ok(unsafe { EqualSid(current_user, session_user.sid()) } != 0)
 }
 
 fn process_session_id(pid: u32) -> std::io::Result<u32> {
@@ -1523,50 +1696,6 @@ pub(crate) fn wait_child_bounded(
         child.wait().map(Some)
     } else {
         Ok(None)
-    }
-}
-
-pub(crate) struct ChildProcessJob(HANDLE);
-
-impl ChildProcessJob {
-    pub(crate) fn new_kill_on_close() -> std::io::Result<Self> {
-        create_kill_on_close_job().map(Self)
-    }
-
-    pub(crate) fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
-        if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle().cast()) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    pub(crate) fn terminate_and_wait(
-        &self,
-        child: &mut std::process::Child,
-        timeout: Duration,
-    ) -> std::io::Result<()> {
-        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
-            let error = std::io::Error::last_os_error();
-            if child.try_wait()?.is_none() {
-                return Err(error);
-            }
-            return Ok(());
-        }
-        match wait_child_bounded(child, timeout)? {
-            Some(_) => Ok(()),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out waiting for contained process cleanup",
-            )),
-        }
-    }
-}
-
-impl Drop for ChildProcessJob {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.0);
-        }
     }
 }
 

@@ -1090,20 +1090,6 @@ impl GhosttyPaneTerminal {
                 core.transient_default_color_owner_pgid = None;
             }
 
-            let mut palette = crate::ghostty::default_palette();
-            for (index, color) in theme.palette.iter().enumerate() {
-                if let Some(color) = color {
-                    palette[index] = crate::ghostty::RgbColor {
-                        r: color.r,
-                        g: color.g,
-                        b: color.b,
-                    };
-                }
-            }
-            if let Err(err) = core.terminal.set_default_palette(&palette) {
-                debug!(err = %err, "failed to apply host terminal palette");
-            }
-
             write_host_terminal_theme_selective(
                 &mut core.terminal,
                 theme,
@@ -6116,110 +6102,6 @@ mod tests {
         );
         assert!(String::from_utf8_lossy(&result.terminal_responses[1]).contains('c'));
         assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn process_pty_bytes_returns_host_palette_color_without_queuing_input() {
-        let (tx, mut rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
-        let pane_id = PaneId::from_raw(1);
-        pane.apply_host_terminal_theme(
-            crate::terminal_theme::TerminalTheme::default().with_palette_color(
-                0,
-                crate::terminal_theme::RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                },
-            ),
-        );
-
-        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]4;0;?\x07", &tx);
-
-        assert_eq!(
-            result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]4;0;rgb:1111/2222/3333\x1b\\")]
-        );
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn opentui_256_palette_query_burst_uses_host_snapshot() {
-        use std::fmt::Write as _;
-
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
-        let pane_id = PaneId::from_raw(1);
-        let mut theme = crate::terminal_theme::TerminalTheme::default();
-        let mut queries = String::new();
-        for index in 0..=u8::MAX {
-            theme = theme.with_palette_color(
-                index,
-                crate::terminal_theme::RgbColor {
-                    r: index,
-                    g: 0x22,
-                    b: 0x33,
-                },
-            );
-            let _ = write!(queries, "\x1b]4;{index};?\x07");
-        }
-        pane.apply_host_terminal_theme(theme);
-
-        let result = pane.process_pty_bytes(pane_id, 0, queries.as_bytes(), &tx);
-
-        assert_eq!(result.terminal_responses.len(), 256);
-        assert_eq!(
-            result.terminal_responses[0],
-            Bytes::from_static(b"\x1b]4;0;rgb:0000/2222/3333\x1b\\")
-        );
-        assert_eq!(
-            result.terminal_responses[255],
-            Bytes::from_static(b"\x1b]4;255;rgb:ffff/2222/3333\x1b\\")
-        );
-    }
-
-    #[test]
-    fn child_palette_override_survives_host_refresh_until_reset() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
-        let pane_id = PaneId::from_raw(1);
-        pane.apply_host_terminal_theme(
-            crate::terminal_theme::TerminalTheme::default().with_palette_color(
-                7,
-                crate::terminal_theme::RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                },
-            ),
-        );
-        pane.process_pty_bytes(pane_id, 0, b"\x1b]4;7;rgb:aa/bb/cc\x1b\\", &tx);
-
-        pane.apply_host_terminal_theme(
-            crate::terminal_theme::TerminalTheme::default().with_palette_color(
-                7,
-                crate::terminal_theme::RgbColor {
-                    r: 0x44,
-                    g: 0x55,
-                    b: 0x66,
-                },
-            ),
-        );
-        let overridden = pane.process_pty_bytes(pane_id, 0, b"\x1b]4;7;?\x1b\\", &tx);
-        assert_eq!(
-            overridden.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]4;7;rgb:aaaa/bbbb/cccc\x1b\\")]
-        );
-
-        pane.process_pty_bytes(pane_id, 0, b"\x1b]104;7\x1b\\", &tx);
-        let reset = pane.process_pty_bytes(pane_id, 0, b"\x1b]4;7;?\x1b\\", &tx);
-        assert_eq!(
-            reset.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]4;7;rgb:4444/5555/6666\x1b\\")]
-        );
     }
 
     #[test]

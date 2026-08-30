@@ -1181,7 +1181,7 @@ mod tests {
 
         app.handle_api_worktree_add_finished(WorktreeAddResult {
             path: checkout.clone(),
-            api_request: Some(ApiWorktreeAddRequest {
+            api_request: ApiWorktreeAddRequest {
                 id: "req".into(),
                 operation_id: 9,
                 checkout_key,
@@ -1194,7 +1194,7 @@ mod tests {
                 label: None,
                 focus: false,
                 respond_to,
-            }),
+            },
             result: Ok(()),
         });
 
@@ -2218,12 +2218,12 @@ mod tests {
             workspace: Some(Box::new(workspace_snapshot)),
             worktree: Some(Box::new(worktree_snapshot)),
             forced: false,
-            api_request: Some(ApiWorktreeRemoveRequest {
+            api_request: ApiWorktreeRemoveRequest {
                 id: "req".into(),
                 operation_id: 7,
                 checkout_key: crate::worktree::canonical_or_original(&checkout),
                 respond_to,
-            }),
+            },
             result: Ok(()),
         });
 
@@ -2279,12 +2279,12 @@ mod tests {
             workspace: Some(Box::new(workspace_snapshot)),
             worktree: Some(Box::new(worktree_snapshot)),
             forced: true,
-            api_request: Some(ApiWorktreeRemoveRequest {
+            api_request: ApiWorktreeRemoveRequest {
                 id: "req".into(),
                 operation_id: 7,
                 checkout_key: crate::worktree::canonical_or_original(&checkout),
                 respond_to,
-            }),
+            },
             result: Ok(()),
         });
 

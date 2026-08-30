@@ -89,10 +89,6 @@ fn cli_version_for(
     }
 }
 
-pub fn is_preview() -> bool {
-    channel() == "preview"
-}
-
 fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
     value.and_then(|value| {
         let trimmed = value.trim();

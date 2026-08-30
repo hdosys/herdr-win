@@ -1913,11 +1913,6 @@ impl App {
                         self.update_host_terminal_theme(kind, color);
                     }
                 }
-                crate::raw_input::RawInputEvent::HostPaletteColors { colors } => {
-                    if apply_host_terminal_theme {
-                        self.update_host_terminal_palette_colors(&colors);
-                    }
-                }
                 crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => {
                     if apply_host_terminal_theme {
                         self.set_host_terminal_appearance(appearance, true);
@@ -2412,14 +2407,6 @@ mod tests {
                 .as_nanos()
         );
         std::env::temp_dir().join(unique).join("config.toml")
-    }
-
-    fn restore_xdg_state_home(original: Option<std::ffi::OsString>) {
-        if let Some(value) = original {
-            std::env::set_var("XDG_STATE_HOME", value);
-        } else {
-            std::env::remove_var("XDG_STATE_HOME");
-        }
     }
 
     #[test]
@@ -3091,50 +3078,6 @@ mod tests {
         assert!(app.state.latest_release_notes_available);
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn startup_still_auto_opens_unseen_product_announcement() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-product-announcement-auto-open");
-        let state_home = path.parent().unwrap().join("state");
-        let original_xdg_state_home = std::env::var_os("XDG_STATE_HOME");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        std::env::set_var("XDG_STATE_HOME", &state_home);
-
-        crate::release_notes::save_pending(env!("CARGO_PKG_VERSION"), "### Changed\n- One")
-            .unwrap();
-        crate::product_announcements::save_manifest_announcement(
-            env!("CARGO_PKG_VERSION"),
-            Some(&crate::product_announcements::ManifestAnnouncement {
-                id: "startup-announcement".into(),
-                title: Some("Startup announcement".into()),
-                body: "### Announcement\n- One".into(),
-            }),
-        )
-        .unwrap();
-
-        let config = Config {
-            onboarding: Some(false),
-            ..Default::default()
-        };
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
-
-        assert_eq!(app.state.mode, Mode::ProductAnnouncement);
-        assert_eq!(
-            app.state
-                .product_announcement
-                .as_ref()
-                .map(|announcement| announcement.id.as_str()),
-            Some("startup-announcement")
-        );
-        assert!(app.state.release_notes.is_none());
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        restore_xdg_state_home(original_xdg_state_home);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -6619,7 +6562,7 @@ last_pane = "prefix+tab"
     }
 
     #[test]
-    fn route_client_input_updates_host_terminal_theme_from_osc_response() {
+    fn route_client_input_updates_host_terminal_theme_from_default_color_response() {
         let mut app = test_app();
 
         app.route_client_input(b"\x1b]11;#123456\x07\x1b]4;7;rgb:aaaa/bbbb/cccc\x1b\\".to_vec());
@@ -6632,33 +6575,10 @@ last_pane = "prefix+tab"
                 b: 0x56,
             })
         );
-        assert_eq!(
-            app.state.host_terminal_theme.palette[7],
-            Some(crate::terminal_theme::RgbColor {
-                r: 0xaa,
-                g: 0xbb,
-                b: 0xcc,
-            })
-        );
-
         app.route_client_input(crate::raw_input::GHOSTTY_COLOR_SCHEME_DARK_REPORT.to_vec());
         assert_eq!(
-            app.state.host_terminal_theme.palette[7],
-            Some(crate::terminal_theme::RgbColor {
-                r: 0xaa,
-                g: 0xbb,
-                b: 0xcc,
-            })
-        );
-
-        app.route_client_input(b"\x1b]4;7;rgb:dddd/eeee/ffff\x1b\\".to_vec());
-        assert_eq!(
-            app.state.host_terminal_theme.palette[7],
-            Some(crate::terminal_theme::RgbColor {
-                r: 0xdd,
-                g: 0xee,
-                b: 0xff,
-            })
+            app.state.host_terminal_appearance,
+            Some(crate::terminal_theme::HostAppearance::Dark)
         );
     }
 

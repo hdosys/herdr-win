@@ -8,8 +8,6 @@ param(
     [Parameter(Mandatory = $true)][string]$ReleaseVersion,
     [Parameter(Mandatory = $true)][string]$BaseVersion,
     [Parameter(Mandatory = $true)][string]$OutputDir,
-    [string]$ProductName = "Herdr",
-    [string]$PackageName = "Herdr Win",
     [string]$AgentUserProfileRoot,
     [string[]]$Faults = @(
         "after-bin-directory",
@@ -21,6 +19,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProductName = "Herdr"
+$PackageName = "Herdr Win"
 
 if ($ReleaseVersion -ceq "local") {
     $freshnessMatch = [regex]::Match(
@@ -248,10 +248,6 @@ $allowedFaults = @(
 )
 $hardTerminationFault = "terminate-after-installer-helper"
 $cleanupFaults = @($allowedFaults) + @($hardTerminationFault)
-if ($ProductName -cnotmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9_-])?$') {
-    throw "Invalid product name '$ProductName'."
-}
-
 function Wait-TestCondition {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$Condition,
@@ -583,7 +579,6 @@ try {
             -BuildFreshness $BuildFreshness `
             -ReleaseVersion $ReleaseVersion `
             -BaseVersion $BaseVersion `
-            -ProductName $ProductName `
             -OutputPath $installer `
             -TestUninstallFault $fault `
             -TestUserProfileRoot $AgentUserProfileRoot
@@ -728,7 +723,6 @@ try {
             -BuildFreshness $BuildFreshness `
             -ReleaseVersion $ReleaseVersion `
             -BaseVersion $BaseVersion `
-            -ProductName $ProductName `
             -OutputPath $installFaultInstaller `
             -TestInstallFault $installFault `
             -TestUserProfileRoot $AgentUserProfileRoot
@@ -807,7 +801,6 @@ try {
         -BuildFreshness $BuildFreshness `
         -ReleaseVersion $ReleaseVersion `
         -BaseVersion $BaseVersion `
-        -ProductName $ProductName `
         -OutputPath $hardTerminationInstaller `
         -TestUninstallFault $hardTerminationFault `
         -TestUserProfileRoot $AgentUserProfileRoot
@@ -868,7 +861,6 @@ try {
         -BuildFreshness $BuildFreshness `
         -ReleaseVersion $ReleaseVersion `
         -BaseVersion $BaseVersion `
-        -ProductName $ProductName `
         -OutputPath $modifiedInstaller `
         -TestUserProfileRoot $AgentUserProfileRoot
     $invalidSetupExit = Start-TestProcess -FilePath $modifiedInstaller -Arguments @("/S", "/WINGETjunk")

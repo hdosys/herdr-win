@@ -1629,7 +1629,7 @@ impl PaneRuntime {
                 "PTY master did not close before the shutdown deadline"
             );
         }
-        self.preserve_processes_on_drop = true;
+        self.preserve_processes_on_drop = io_shutdown_complete;
         io_shutdown_complete
     }
 

@@ -228,9 +228,10 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         "Connecting to {} and checking remote Herdr...",
         remote.target
     ));
-    let detected = detect_remote_host(&remote_ssh)?;
+    let override_binary = remote_binary_override_path()?;
+    let detected = detect_remote_host(&remote_ssh, override_binary.as_deref())?;
     if remote.provision {
-        let result = provision_remote(&remote_ssh, detected, remote.yes)?;
+        let result = provision_remote(&remote_ssh, detected, remote.yes, override_binary)?;
         print_remote_provision_result(&result, remote.json)?;
         return Ok(());
     }
@@ -240,8 +241,13 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     } = detected;
     let remote_command = match host {
         RemoteHostPlatform::Unix(platform) => {
-            let prepared_remote =
-                prepare_remote_herdr(&remote_ssh, platform, remote.live_handoff, remote.yes)?;
+            let prepared_remote = prepare_remote_herdr(
+                &remote_ssh,
+                platform,
+                remote.live_handoff,
+                remote.yes,
+                override_binary,
+            )?;
             ensure_remote_server_ready(
                 &remote_ssh,
                 &prepared_remote.remote_herdr,
@@ -266,14 +272,18 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
             }
             super::windows::validate_streaming_shell(&ssh_shell)?;
             let (prepared_remote, known_server_status) = match windows_herdr {
-                Some(detected) if detected.matches_current => (
-                    PreparedRemoteHerdr {
-                        remote_herdr: detected.remote_herdr,
-                        installed_or_replaced: false,
-                        stop_after_install_approved: false,
-                    },
-                    Some(detected.server_status),
-                ),
+                Some(detected)
+                    if can_reuse_detected_windows_herdr(&detected, override_binary.as_deref()) =>
+                {
+                    (
+                        PreparedRemoteHerdr {
+                            remote_herdr: detected.remote_herdr,
+                            installed_or_replaced: false,
+                            stop_after_install_approved: false,
+                        },
+                        Some(detected.server_status),
+                    )
+                }
                 detected => (
                     prepare_remote_windows_herdr(
                         &remote_ssh,
@@ -281,6 +291,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
                         &user_profile,
                         remote.yes,
                         detected,
+                        override_binary,
                     )?,
                     Some(RemoteServerStatus::NotRunning),
                 ),
@@ -503,26 +514,6 @@ impl RemoteAssetRef {
 }
 
 #[derive(Deserialize)]
-struct RemoteUpdateManifest {
-    version: String,
-    protocol: Option<u32>,
-    assets: BTreeMap<String, RemoteAssetRef>,
-    #[serde(default)]
-    sha256: BTreeMap<String, String>,
-    #[serde(default, deserialize_with = "deserialize_remote_manifest_releases")]
-    releases: BTreeMap<String, RemoteReleaseMetadata>,
-}
-
-#[derive(Deserialize)]
-struct RemoteReleaseMetadata {
-    protocol: Option<u32>,
-    #[serde(default)]
-    assets: BTreeMap<String, RemoteAssetRef>,
-    #[serde(default)]
-    sha256: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize)]
 struct RemotePreviewManifest {
     prerelease: bool,
     build_id: String,
@@ -536,53 +527,6 @@ struct RemotePreviewManifest {
 struct RemotePreviewBuildMetadata {
     protocol: u32,
     assets: BTreeMap<String, RemoteAssetRef>,
-}
-
-fn deserialize_remote_manifest_releases<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, RemoteReleaseMetadata>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Object(object)) => object
-            .into_iter()
-            .filter_map(|(version, release)| {
-                serde_json::from_value::<RemoteReleaseMetadata>(release)
-                    .ok()
-                    .map(|metadata| (version, metadata))
-            })
-            .collect(),
-        _ => BTreeMap::new(),
-    })
-}
-
-impl RemoteUpdateManifest {
-    fn release_for_version(&self, version: &str) -> Option<RemoteManifestReleaseRef<'_>> {
-        if self.version.trim_start_matches('v') == version {
-            return Some(RemoteManifestReleaseRef {
-                protocol: self.protocol,
-                assets: &self.assets,
-                sha256: &self.sha256,
-            });
-        }
-
-        self.releases.get(version).and_then(|release| {
-            (!release.assets.is_empty()).then_some(RemoteManifestReleaseRef {
-                protocol: release.protocol,
-                assets: &release.assets,
-                sha256: &release.sha256,
-            })
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-struct RemoteManifestReleaseRef<'a> {
-    protocol: Option<u32>,
-    assets: &'a BTreeMap<String, RemoteAssetRef>,
-    sha256: &'a BTreeMap<String, String>,
 }
 
 fn current_version() -> String {
@@ -1236,9 +1180,9 @@ fn prepare_remote_herdr(
     platform: RemotePlatform,
     live_handoff_enabled: bool,
     yes: bool,
+    override_binary: Option<PathBuf>,
 ) -> io::Result<PreparedRemoteHerdr> {
     let remote_herdr = RemoteHerdr::for_platform(platform);
-    let override_binary = remote_binary_override_path()?;
     let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
 
     if override_binary.is_none() {
@@ -1332,8 +1276,8 @@ fn prepare_remote_windows_herdr(
     user_profile: &str,
     yes: bool,
     detected: Option<DetectedWindowsHerdr>,
+    override_payload: Option<PathBuf>,
 ) -> io::Result<PreparedRemoteHerdr> {
-    let override_payload = remote_binary_override_path()?;
     let (expected_executable_sha256, _) = if override_payload.is_some() {
         (None, false)
     } else {
@@ -1341,10 +1285,9 @@ fn prepare_remote_windows_herdr(
     };
     let managed =
         RemoteHerdr::for_windows(platform.clone(), user_profile, expected_executable_sha256);
-    if detected
-        .as_ref()
-        .is_some_and(|detected| detected.matches_current)
-    {
+    if detected.as_ref().is_some_and(|detected| {
+        can_reuse_detected_windows_herdr(detected, override_payload.as_deref())
+    }) {
         return Err(io::Error::other(
             "matching Windows Herdr reached the installation path",
         ));
@@ -1422,6 +1365,13 @@ fn prepare_remote_windows_herdr(
     })
 }
 
+fn can_reuse_detected_windows_herdr(
+    detected: &DetectedWindowsHerdr,
+    override_payload: Option<&Path>,
+) -> bool {
+    override_payload.is_none() && detected.matches_current
+}
+
 fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
     let output = ssh.sh_output("uname -s\nuname -m\n")?;
     if !output.status.success() {
@@ -1441,8 +1391,11 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
     })
 }
 
-fn detect_remote_host(ssh: &RemoteSsh) -> io::Result<DetectedRemoteHost> {
-    if let Some(detected) = detect_remote_windows_attach(ssh)? {
+fn detect_remote_host(
+    ssh: &RemoteSsh,
+    override_binary: Option<&Path>,
+) -> io::Result<DetectedRemoteHost> {
+    if let Some(detected) = detect_remote_windows_attach(ssh, override_binary.is_some())? {
         return Ok(detected);
     }
     detect_remote_platform(ssh).map(|platform| DetectedRemoteHost {
@@ -1451,8 +1404,15 @@ fn detect_remote_host(ssh: &RemoteSsh) -> io::Result<DetectedRemoteHost> {
     })
 }
 
-fn detect_remote_windows_attach(ssh: &RemoteSsh) -> io::Result<Option<DetectedRemoteHost>> {
-    let (expected_payload_sha256, allow_path_candidate) = local_windows_attach_identity()?;
+fn detect_remote_windows_attach(
+    ssh: &RemoteSsh,
+    override_present: bool,
+) -> io::Result<Option<DetectedRemoteHost>> {
+    let (expected_payload_sha256, allow_path_candidate) = if override_present {
+        (None, true)
+    } else {
+        local_windows_attach_identity()?
+    };
     let session_name =
         crate::session::active_name().filter(|name| name != crate::session::DEFAULT_SESSION_NAME);
     let command = super::windows::powershell_attach_probe_command(
@@ -2344,6 +2304,7 @@ fn provision_remote(
     ssh: &RemoteSsh,
     detected: DetectedRemoteHost,
     yes: bool,
+    override_binary: Option<PathBuf>,
 ) -> io::Result<RemoteProvisionResult> {
     if !yes && !io::stdin().is_terminal() {
         return Err(io::Error::other(
@@ -2356,7 +2317,8 @@ fn provision_remote(
     } = detected;
     let (platform, prepared, known_server_status, config_validated) = match host {
         RemoteHostPlatform::Unix(platform) => {
-            let prepared = prepare_remote_herdr(ssh, platform.clone(), false, yes)?;
+            let prepared =
+                prepare_remote_herdr(ssh, platform.clone(), false, yes, override_binary)?;
             (platform, prepared, None, false)
         }
         RemoteHostPlatform::Windows {
@@ -2365,15 +2327,19 @@ fn provision_remote(
             ..
         } => {
             let (prepared, known_server_status, config_validated) = match windows_herdr {
-                Some(detected) if detected.matches_current => (
-                    PreparedRemoteHerdr {
-                        remote_herdr: detected.remote_herdr,
-                        installed_or_replaced: false,
-                        stop_after_install_approved: false,
-                    },
-                    Some(detected.server_status),
-                    false,
-                ),
+                Some(detected)
+                    if can_reuse_detected_windows_herdr(&detected, override_binary.as_deref()) =>
+                {
+                    (
+                        PreparedRemoteHerdr {
+                            remote_herdr: detected.remote_herdr,
+                            installed_or_replaced: false,
+                            stop_after_install_approved: false,
+                        },
+                        Some(detected.server_status),
+                        false,
+                    )
+                }
                 detected => (
                     prepare_remote_windows_herdr(
                         ssh,
@@ -2381,6 +2347,7 @@ fn provision_remote(
                         &user_profile,
                         yes,
                         detected,
+                        override_binary,
                     )?,
                     Some(RemoteServerStatus::NotRunning),
                     true,
@@ -2994,60 +2961,23 @@ fn preview_assets_for_build<'a>(
 }
 
 fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
-    if crate::build_info::is_preview() {
-        let build_id = crate::build_info::build_id().ok_or_else(|| {
-            io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
-        })?;
-        let manifest_bytes = fetch_remote_manifest(preview_update_manifest_url())?;
-        let manifest: RemotePreviewManifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|err| {
-                io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
-            })?;
-        let (protocol, assets) = preview_assets_for_build(&manifest, build_id)?;
-        if protocol != CURRENT_PROTOCOL {
-            return Err(io::Error::other(format!(
-                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching Herdr on the remote host manually"
-            )));
-        }
-        return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
-            io::Error::other(format!(
-                "no {asset_key} binary in the preview manifest for build {build_id}"
-            ))
-        });
-    }
-
-    let current_version = current_version();
-    let manifest_bytes = fetch_remote_manifest(crate::distribution::STABLE_MANIFEST_URL)?;
-    let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
-    let release = manifest.release_for_version(&current_version).ok_or_else(|| {
-        io::Error::other(format!(
-            "release manifest does not include herdr {current_version}; build herdr for {} or install it there manually",
-            asset_key
-        ))
+    let build_id = crate::build_info::build_id().ok_or_else(|| {
+        io::Error::other("herdr-win client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
     })?;
-    if let Some(protocol) = release.protocol {
-        if protocol != CURRENT_PROTOCOL {
-            return Err(io::Error::other(format!(
-                "release manifest has herdr {current_version} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching herdr on the remote host manually"
-            )));
-        }
-    }
-    let asset = release.assets.get(asset_key).ok_or_else(|| {
-        io::Error::other(format!(
-            "no {asset_key} binary in the release manifest for herdr {current_version}"
-        ))
-    })?;
-    let mut asset = remote_asset_info(asset);
-    asset.sha256 = asset
-        .sha256
-        .or_else(|| release.sha256.get(asset_key).cloned());
-    if asset.sha256.is_none() {
+    let manifest_bytes = fetch_remote_manifest(preview_update_manifest_url())?;
+    let manifest: RemotePreviewManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|err| io::Error::other(format!("failed to parse preview manifest JSON: {err}")))?;
+    let (protocol, assets) = preview_assets_for_build(&manifest, build_id)?;
+    if protocol != CURRENT_PROTOCOL {
         return Err(io::Error::other(format!(
-            "release manifest asset {asset_key} is missing a SHA-256 checksum"
+            "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching Herdr on the remote host manually"
         )));
     }
-    Ok(asset)
+    assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
+        io::Error::other(format!(
+            "no {asset_key} binary in the preview manifest for build {build_id}"
+        ))
+    })
 }
 
 fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
@@ -4575,127 +4505,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_update_manifest_uses_root_assets_for_latest_version() {
-        let manifest: RemoteUpdateManifest = serde_json::from_str(
-            r#"{
-                "version": "1.2.3",
-                "assets": {
-                    "linux-x86_64": "https://example.com/latest"
-                },
-                "sha256": {
-                    "linux-x86_64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                },
-                "releases": {
-                    "1.2.3": {
-                        "assets": {
-                            "linux-x86_64": "https://example.com/archive"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let release = manifest.release_for_version("1.2.3").unwrap();
-        assert_eq!(
-            release.assets.get("linux-x86_64").map(RemoteAssetRef::url),
-            Some("https://example.com/latest")
-        );
-        assert_eq!(
-            release.sha256.get("linux-x86_64").map(String::as_str),
-            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        );
-    }
-
-    #[test]
-    fn remote_update_manifest_reads_archived_release_assets() {
-        let manifest: RemoteUpdateManifest = serde_json::from_str(
-            r#"{
-                "version": "1.2.4",
-                "assets": {
-                    "linux-x86_64": "https://example.com/latest"
-                },
-                "releases": {
-                    "1.2.3": {
-                        "notes": "ignored",
-                        "assets": {
-                            "linux-x86_64": "https://example.com/archive"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            manifest
-                .release_for_version("1.2.3")
-                .and_then(|release| release.assets.get("linux-x86_64"))
-                .map(RemoteAssetRef::url),
-            Some("https://example.com/archive")
-        );
-    }
-
-    #[test]
-    fn remote_update_manifest_uses_archived_release_protocol() {
-        let manifest: RemoteUpdateManifest = serde_json::from_str(
-            r#"{
-                "version": "1.2.4",
-                "protocol": 42,
-                "assets": {
-                    "linux-x86_64": "https://example.com/latest"
-                },
-                "releases": {
-                    "1.2.3": {
-                        "notes": "ignored",
-                        "protocol": 41,
-                        "assets": {
-                            "linux-x86_64": "https://example.com/archive"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            manifest
-                .release_for_version("1.2.3")
-                .and_then(|release| release.protocol),
-            Some(41)
-        );
-    }
-
-    #[test]
-    fn remote_update_manifest_does_not_inherit_latest_protocol_for_archived_assets() {
-        let manifest: RemoteUpdateManifest = serde_json::from_str(
-            r#"{
-                "version": "1.2.4",
-                "protocol": 42,
-                "assets": {
-                    "linux-x86_64": "https://example.com/latest"
-                },
-                "releases": {
-                    "1.2.3": {
-                        "notes": "ignored",
-                        "assets": {
-                            "linux-x86_64": "https://example.com/archive"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            manifest
-                .release_for_version("1.2.3")
-                .and_then(|release| release.protocol),
-            None
-        );
-    }
-
-    #[test]
     fn remote_preview_manifest_falls_back_to_archived_exact_build_assets() {
         let mut manifest: RemotePreviewManifest = serde_json::from_str(
             r#"{
@@ -4922,6 +4731,28 @@ mod tests {
             install_source_description_for(&platform, Some(Path::new("/tmp/herdr-aarch64")), false),
             "HERDR_REMOTE_BINARY (/tmp/herdr-aarch64)"
         );
+    }
+
+    #[test]
+    fn explicit_windows_payload_prevents_reusing_a_matching_remote_binary() {
+        let detected = DetectedWindowsHerdr {
+            remote_herdr: RemoteHerdr::for_windows(
+                RemotePlatform {
+                    os: "windows",
+                    arch: "x86_64",
+                },
+                r"C:\Users\dev",
+                None,
+            ),
+            server_status: RemoteServerStatus::NotRunning,
+            matches_current: true,
+        };
+
+        assert!(can_reuse_detected_windows_herdr(&detected, None));
+        assert!(!can_reuse_detected_windows_herdr(
+            &detected,
+            Some(Path::new("payload.zip"))
+        ));
     }
 
     #[test]

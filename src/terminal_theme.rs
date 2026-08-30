@@ -31,21 +31,10 @@ impl RgbColor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerminalTheme {
     pub foreground: Option<RgbColor>,
     pub background: Option<RgbColor>,
-    pub palette: [Option<RgbColor>; 256],
-}
-
-impl Default for TerminalTheme {
-    fn default() -> Self {
-        Self {
-            foreground: None,
-            background: None,
-            palette: [None; 256],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -71,11 +60,6 @@ impl TerminalTheme {
         self
     }
 
-    pub fn with_palette_color(mut self, index: u8, color: RgbColor) -> Self {
-        self.palette[usize::from(index)] = Some(color);
-        self
-    }
-
     pub fn is_empty(self) -> bool {
         self.foreground.is_none() && self.background.is_none()
     }
@@ -98,15 +82,6 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
         _ => return None,
     };
     Some((kind, parse_rgb_color(value)?))
-}
-
-pub fn parse_palette_color_response(sequence: &str) -> Option<(u8, RgbColor)> {
-    let body = sequence.strip_prefix("\x1b]4;")?;
-    let body = body
-        .strip_suffix("\x1b\\")
-        .or_else(|| body.strip_suffix('\u{7}'))?;
-    let (index, value) = body.split_once(';')?;
-    Some((index.parse().ok()?, parse_rgb_color(value)?))
 }
 
 pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -> String {
@@ -204,19 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_palette_responses_without_querying_host_palette() {
-        assert_eq!(
-            parse_palette_color_response("\x1b]4;255;rgb:1111/2222/3333\x1b\\"),
-            Some((
-                255,
-                RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                }
-            ))
-        );
-
+    fn host_theme_query_omits_indexed_palette() {
         let query = host_terminal_theme_query_sequence();
         assert!(query.starts_with(HOST_COLOR_QUERY_SEQUENCE));
         assert_eq!(query.matches("\x1b]").count(), 3);

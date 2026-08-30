@@ -278,7 +278,9 @@ fn update_host_cursor_color(
         .flatten();
     state.host_cursor_color = Some(color);
     if let Ok(mut restore_color) = restore_color.lock() {
-        *restore_color = Some(color);
+        if restore_color.is_none() {
+            *restore_color = Some(color);
+        }
     }
     if let Some(frame) = cached_frame {
         state.request_repaint();

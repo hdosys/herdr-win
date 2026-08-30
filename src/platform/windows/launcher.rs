@@ -17,18 +17,17 @@ use windows_sys::Win32::System::{
 };
 
 use crate::{
-    managed_install::{BuildId, ManagedInstall},
+    managed_install::{
+        BuildId, ManagedInstall, LAUNCHER_BUILD_ID_QUERY_ARG, PENDING_LAUNCHER_PREFIX,
+        PENDING_LAUNCHER_SUFFIX, UNINSTALL_PENDING_MARKER,
+    },
     windows_managed_install::{CoordinationLease, Runtime, SharedLease, MANAGED_LEASE_HANDLE_ENV},
 };
 
 const PENDING_POINTER: &str = "pending";
-const UNINSTALL_PENDING_MARKER: &str = "uninstall.pending";
 const COORDINATION_TIMEOUT: Duration = Duration::from_secs(5);
 const COORDINATION_RETRY_INTERVAL: Duration = Duration::from_millis(10);
-const BUILD_ID_QUERY_ARG: &str = "--herdr-private-launcher-build-id-v1";
 const DEVELOPMENT_BUILD_ID: &str = "development";
-const PENDING_LAUNCHER_PREFIX: &str = "launcher.pending-";
-const PENDING_LAUNCHER_SUFFIX: &str = ".exe";
 
 pub(crate) fn run() -> io::Result<i32> {
     let current = std::env::current_exe().map_err(|err| {
@@ -46,7 +45,7 @@ pub(crate) fn run() -> io::Result<i32> {
 }
 
 fn maybe_run_build_id_query(current: &Path, args: &[OsString]) -> io::Result<Option<i32>> {
-    if !allows_build_id_query(current) || args != [OsString::from(BUILD_ID_QUERY_ARG)] {
+    if !allows_build_id_query(current) || args != [OsString::from(LAUNCHER_BUILD_ID_QUERY_ARG)] {
         return Ok(None);
     }
     std::env::remove_var(MANAGED_LEASE_HANDLE_ENV);
@@ -668,7 +667,7 @@ mod tests {
     #[test]
     fn build_id_query_is_available_only_from_valid_staged_launcher_names() {
         let _env = PROCESS_ENV_LOCK.lock().expect("process env lock");
-        let args = [OsString::from(BUILD_ID_QUERY_ARG)];
+        let args = [OsString::from(LAUNCHER_BUILD_ID_QUERY_ARG)];
         std::env::set_var(MANAGED_LEASE_HANDLE_ENV, "1234");
         let staged = PathBuf::from(r"C:\stage\herdr-launcher.exe");
         assert_eq!(

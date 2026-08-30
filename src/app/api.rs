@@ -198,12 +198,12 @@ impl App {
         }
 
         if let AppEvent::WorktreeAddFinished(result) = ev {
-            self.handle_worktree_add_finished(*result);
+            self.handle_api_worktree_add_finished(*result);
             return Vec::new();
         }
 
         if let AppEvent::WorktreeRemoveFinished(result) = ev {
-            self.handle_worktree_remove_finished(*result);
+            self.handle_api_worktree_remove_finished(*result);
             return Vec::new();
         }
 

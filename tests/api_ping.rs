@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use support::{
-    cleanup_test_base, register_runtime_dir, register_spawned_herdr_pid,
+    cleanup_test_base, expected_runtime_version, register_runtime_dir, register_spawned_herdr_pid,
     unregister_spawned_herdr_pid,
 };
 
@@ -301,22 +301,11 @@ fn ping_over_socket_returns_version() {
     );
     assert_eq!(value["id"], "req_1");
     assert_eq!(value["result"]["type"], "pong");
-    let expected_version = match (
-        option_env!("HERDR_RELEASE_VERSION"),
-        option_env!("HERDR_BUILD_FRESHNESS"),
-        option_env!("HERDR_BUILD_ID"),
-    ) {
-        (Some(release), _, Some(build)) => format!("{release}+{build}"),
-        (Some(release), _, None) => release.to_string(),
-        (None, Some(freshness), Some(build)) => format!("{freshness}+{build}"),
-        (None, Some(freshness), None) => freshness.to_string(),
-        (None, None, Some(build)) => format!("local+{build}"),
-        (None, None, None) => "local".to_string(),
-    };
+    let expected_version = expected_runtime_version();
     assert_eq!(value["result"]["version"], expected_version);
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
-    assert_eq!(value["result"]["protocol"], 20);
+    assert_eq!(value["result"]["protocol"], 21);
 
     cleanup_spawned_herdr(child, base);
 }

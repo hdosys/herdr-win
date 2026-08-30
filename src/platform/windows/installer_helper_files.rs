@@ -28,23 +28,26 @@ use windows_sys::Win32::{
     System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION},
 };
 
-use crate::managed_install::{BuildId, POINTER_RECORD_HEADER, RUNTIME_RECORD_HEADER};
+pub(crate) use crate::managed_install::{MANAGED_BIN_MARKER, NATIVE_HELPER_NAME};
+use crate::{
+    managed_install::{
+        BuildId, LAUNCHER_BUILD_ID_QUERY_ARG, PENDING_LAUNCHER_PREFIX, PENDING_LAUNCHER_SUFFIX,
+        POINTER_RECORD_HEADER, RUNTIME_RECORD_HEADER,
+    },
+    windows_process_job::ChildProcessJob,
+};
 
 pub(crate) const INSTALL_MANIFEST_HEADER: &str = "herdr-install-manifest-v1";
 pub(crate) const RUNTIME_MANIFEST_HEADER: &str = "herdr-runtime-manifest-v1";
-pub(crate) const MANAGED_BIN_MARKER: &[u8] = b"herdr-managed-bin-v1\n";
-pub(crate) const PACKAGE_MANAGER_MARKER: &[u8] = b"herdr-package-manager-v1\nmanager=winget\n";
 pub(crate) const PATH_ADD_PENDING_EXISTING_VALUE: &[u8] =
     b"herdr-path-add-pending-v1\nvalue_created=0\n";
 pub(crate) const PATH_ADD_PENDING_CREATED_VALUE: &[u8] =
     b"herdr-path-add-pending-v1\nvalue_created=1\n";
 pub(crate) const UNINSTALL_MARKER: &[u8] = b"herdr-uninstall-v1\n";
-pub(crate) const NATIVE_HELPER_NAME: &str = "installer-helper.exe";
 pub(crate) const QUIET_UNINSTALL_PENDING: &[u8] = b"herdr-quiet-uninstall-v1\nstatus=pending\n";
 pub(crate) const QUIET_UNINSTALL_SUCCESS: &[u8] = b"herdr-quiet-uninstall-v1\nexit_code=0\n";
 pub(crate) const QUIET_UNINSTALL_FAILURE: &[u8] = b"herdr-quiet-uninstall-v1\nexit_code=1\n";
 pub(crate) const LAUNCHER_REPLACEMENT_NAME: &str = "herdr.exe.new";
-pub(crate) const LAUNCHER_QUERY_ARG: &str = "--herdr-private-launcher-build-id-v1";
 
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -853,21 +856,29 @@ pub(crate) fn validate_version_identity(display: &str, numeric: &str) -> io::Res
 
 pub(crate) fn query_launcher_build_id(path: &Path, timeout: Duration) -> io::Result<BuildId> {
     assert_regular_file(path)?;
+    let job = ChildProcessJob::new_kill_on_close()?;
     let mut child = Command::new(path)
-        .arg(LAUNCHER_QUERY_ARG)
+        .arg(LAUNCHER_BUILD_ID_QUERY_ARG)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| contextual(err, format!("failed to query launcher {}", path.display())))?;
+    if let Err(err) = job.assign(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(contextual(
+            err,
+            format!("failed to contain launcher query {}", path.display()),
+        ));
+    }
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            job.terminate_and_wait(&mut child, Duration::from_secs(5))?;
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("launcher build-ID query timed out: {}", path.display()),
@@ -906,10 +917,11 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
         let name = name
             .to_str()
             .ok_or_else(|| invalid_data("managed state entry name is not UTF-8"))?;
-        let Some(hash) = name
-            .strip_prefix("launcher.pending-")
-            .and_then(|value| value.strip_suffix(".exe"))
-        else {
+        let Some(candidate) = name.strip_prefix(PENDING_LAUNCHER_PREFIX) else {
+            continue;
+        };
+        let Some(hash) = candidate.strip_suffix(PENDING_LAUNCHER_SUFFIX) else {
+            remove_invalid_pending_launcher(&entry.path())?;
             continue;
         };
         if hash.len() != 64
@@ -917,10 +929,8 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
-            return Err(invalid_data(format!(
-                "invalid pending launcher filename: {}",
-                entry.path().display()
-            )));
+            remove_invalid_pending_launcher(&entry.path())?;
+            continue;
         }
         if found.is_some() {
             return Err(invalid_data(
@@ -929,10 +939,8 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
         }
         assert_regular_file(&entry.path())?;
         if sha256(&entry.path())? != hash {
-            return Err(invalid_data(format!(
-                "pending launcher hash does not match filename: {}",
-                entry.path().display()
-            )));
+            remove_invalid_pending_launcher(&entry.path())?;
+            continue;
         }
         found = Some(PendingLauncher {
             path: entry.path(),
@@ -940,6 +948,19 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
         });
     }
     Ok(found)
+}
+
+fn remove_invalid_pending_launcher(path: &Path) -> io::Result<()> {
+    assert_regular_file(path)?;
+    fs::remove_file(path).map_err(|err| {
+        contextual(
+            err,
+            format!(
+                "failed to remove invalid pending launcher {}",
+                path.display()
+            ),
+        )
+    })
 }
 
 pub(crate) fn wait_for_process(pid: u32, timeout: Duration) -> io::Result<bool> {
@@ -1038,15 +1059,15 @@ mod tests {
     }
 
     #[test]
-    fn malformed_pending_launcher_name_is_not_ignored() {
+    fn malformed_private_pending_launcher_is_removed() {
         let state = std::env::temp_dir().join(format!("herdr-pending-name-{}", unique_hex()));
         fs::create_dir(&state).unwrap();
         let malformed = state.join("launcher.pending-not-a-hash.exe");
         fs::write(&malformed, b"fixture").unwrap();
-        let result = pending_launcher(&state);
-        fs::remove_file(malformed).unwrap();
+        let result = pending_launcher(&state).unwrap();
+        assert!(result.is_none());
+        assert!(!malformed.exists());
         fs::remove_dir(state).unwrap();
-        assert!(result.is_err());
     }
 
     #[test]

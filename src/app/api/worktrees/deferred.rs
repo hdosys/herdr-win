@@ -204,7 +204,7 @@ impl App {
             let _ = event_tx.blocking_send(AppEvent::WorktreeAddFinished(Box::new(
                 crate::events::WorktreeAddResult {
                     path,
-                    api_request: Some(api_request),
+                    api_request,
                     result,
                 },
             )));
@@ -344,7 +344,7 @@ impl App {
                     workspace: Some(Box::new(workspace_snapshot)),
                     worktree: Some(Box::new(worktree)),
                     forced: force,
-                    api_request: Some(api_request),
+                    api_request,
                     result,
                 },
             )));
@@ -353,11 +353,9 @@ impl App {
 
     pub(crate) fn handle_api_worktree_add_finished(
         &mut self,
-        mut result: crate::events::WorktreeAddResult,
+        result: crate::events::WorktreeAddResult,
     ) {
-        let Some(api) = result.api_request.take() else {
-            return;
-        };
+        let api = result.api_request;
         let checkout_key = api.checkout_key.clone();
         let operation_matches = self
             .pending_api_worktree_creates
@@ -484,11 +482,9 @@ impl App {
 
     pub(crate) fn handle_api_worktree_remove_finished(
         &mut self,
-        mut result: crate::events::WorktreeRemoveResult,
+        result: crate::events::WorktreeRemoveResult,
     ) {
-        let Some(api) = result.api_request.take() else {
-            return;
-        };
+        let api = result.api_request;
         let operation_matches = self
             .pending_api_worktree_removes
             .get(&result.workspace_id)

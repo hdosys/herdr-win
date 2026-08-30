@@ -9,6 +9,16 @@ pub(crate) const RUNTIME_RECORD_HEADER: &str = "herdr-runtime-v1";
 #[allow(dead_code)]
 pub(crate) const POINTER_RECORD_HEADER: &str = "herdr-pointer-v1";
 pub(crate) const MANAGED_BIN_MARKER: &[u8] = b"herdr-managed-bin-v1\n";
+pub(crate) const NATIVE_HELPER_NAME: &str = "installer-helper.exe";
+// These names are consumed by the dedicated launcher and installer-helper binaries.
+#[allow(dead_code)]
+pub(crate) const LAUNCHER_BUILD_ID_QUERY_ARG: &str = "--herdr-private-launcher-build-id-v1";
+#[allow(dead_code)]
+pub(crate) const PENDING_LAUNCHER_PREFIX: &str = "launcher.pending-";
+#[allow(dead_code)]
+pub(crate) const PENDING_LAUNCHER_SUFFIX: &str = ".exe";
+#[allow(dead_code)]
+pub(crate) const UNINSTALL_PENDING_MARKER: &str = "uninstall.pending";
 #[cfg(windows)]
 // Shared with the launcher binary, which never inspects updater ownership.
 #[allow(dead_code)]
@@ -148,7 +158,7 @@ impl ManagedInstall {
     }
 
     pub(crate) fn installer_helper_path(&self) -> PathBuf {
-        self.state_dir().join("installer-helper.exe")
+        self.state_dir().join(NATIVE_HELPER_NAME)
     }
 
     #[cfg(windows)]

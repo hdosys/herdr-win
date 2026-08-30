@@ -9,6 +9,31 @@ function Get-RequiredEnvironmentValue([string] $Name) {
     return $value
 }
 
+$taskName = Get-RequiredEnvironmentValue 'HERDR_INTERACTIVE_LAUNCH_TASK_NAME'
+if ($taskName -cnotmatch '^HerdrInteractiveServer-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$') {
+    throw 'interactive launch task name is invalid'
+}
+$cleanupOnly = [Environment]::GetEnvironmentVariable(
+    'HERDR_INTERACTIVE_LAUNCH_CLEANUP_ONLY',
+    'Process'
+)
+$service = New-Object -ComObject 'Schedule.Service'
+$service.Connect()
+$root = $service.GetFolder('\')
+if ($cleanupOnly -eq '1') {
+    try {
+        $root.DeleteTask($taskName, 0)
+    } catch {
+        if ($_.Exception.HResult -ne -2147024894) {
+            throw
+        }
+    }
+    return
+}
+if (-not [string]::IsNullOrEmpty($cleanupOnly)) {
+    throw 'interactive launch cleanup mode is invalid'
+}
+
 $program = Get-RequiredEnvironmentValue 'HERDR_INTERACTIVE_LAUNCH_PROGRAM'
 $arguments = Get-RequiredEnvironmentValue 'HERDR_INTERACTIVE_LAUNCH_ARGUMENTS'
 $workingDirectory = Get-RequiredEnvironmentValue 'HERDR_INTERACTIVE_LAUNCH_WORKING_DIRECTORY'
@@ -23,10 +48,6 @@ if (-not [int]::TryParse(
     throw 'interactive launch session id is invalid'
 }
 
-$service = New-Object -ComObject 'Schedule.Service'
-$service.Connect()
-$root = $service.GetFolder('\')
-$taskName = 'HerdrInteractiveServer-' + [Guid]::NewGuid().ToString('N')
 $registered = $null
 $running = $null
 $deleted = $false

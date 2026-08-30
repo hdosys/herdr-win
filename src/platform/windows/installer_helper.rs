@@ -32,58 +32,97 @@ pub(crate) fn run() -> io::Result<String> {
         })?;
     let values = parse_named_arguments(args.collect())?;
     match action.as_str() {
-        "install" => installer_helper_lifecycle::install(InstallOptions {
-            install_root: required_path(&values, "--install-root")?,
-            user_profile_root: required_path(&values, "--user-profile-root")?,
-            package_root: required_path(&values, "--package-root")?,
-            build_id: BuildId::parse(&required_utf8(&values, "--build-id")?)?,
-            display_version: required_utf8(&values, "--display-version")?,
-            numeric_version: required_utf8(&values, "--numeric-version")?,
-            install_manager: match required_utf8(&values, "--install-manager")?.as_str() {
-                "Direct" => InstallManager::Direct,
-                "WinGet" => InstallManager::WinGet,
-                value => {
-                    return Err(invalid_data(format!(
-                        "invalid --install-manager value {value:?}"
-                    )))
-                }
-            },
-            fault: optional_utf8(&values, "--install-fault")?,
-            fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
-                .unwrap_or_else(|| "herdr".to_string()),
-        }),
-        "uninstall" => installer_helper_lifecycle::uninstall(UninstallOptions {
-            install_root: required_path(&values, "--install-root")?,
-            user_profile_root: required_path(&values, "--user-profile-root")?,
-            skill_hash_manifest: required_path(&values, "--skill-hash-manifest")?,
-            settings_disposition: match required_utf8(&values, "--settings-disposition")?.as_str() {
-                "Keep" => SettingsDisposition::Keep,
-                "Remove" => SettingsDisposition::Remove,
-                value => {
-                    return Err(invalid_data(format!(
-                        "invalid --settings-disposition value {value:?}"
-                    )))
-                }
-            },
-            skill_disposition: parse_skill_disposition(&required_utf8(
+        "install" => {
+            require_only(
                 &values,
-                "--skill-disposition",
-            )?)?,
-            fault: optional_utf8(&values, "--uninstall-fault")?,
-            fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
-                .unwrap_or_else(|| "herdr".to_string()),
-            quiet_runner: parse_quiet_runner(&values)?,
-        }),
-        "quiet-uninstall" => installer_helper_lifecycle::quiet_uninstall(QuietUninstallOptions {
-            install_root: required_path(&values, "--install-root")?,
-        }),
+                &[
+                    "--install-root",
+                    "--user-profile-root",
+                    "--package-root",
+                    "--build-id",
+                    "--display-version",
+                    "--numeric-version",
+                    "--install-manager",
+                    "--install-fault",
+                    "--fault-marker-prefix",
+                ],
+            )?;
+            installer_helper_lifecycle::install(InstallOptions {
+                install_root: required_path(&values, "--install-root")?,
+                user_profile_root: required_path(&values, "--user-profile-root")?,
+                package_root: required_path(&values, "--package-root")?,
+                build_id: BuildId::parse(&required_utf8(&values, "--build-id")?)?,
+                display_version: required_utf8(&values, "--display-version")?,
+                numeric_version: required_utf8(&values, "--numeric-version")?,
+                install_manager: match required_utf8(&values, "--install-manager")?.as_str() {
+                    "Direct" => InstallManager::Direct,
+                    "WinGet" => InstallManager::WinGet,
+                    value => {
+                        return Err(invalid_data(format!(
+                            "invalid --install-manager value {value:?}"
+                        )))
+                    }
+                },
+                fault: optional_utf8(&values, "--install-fault")?,
+                fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
+                    .unwrap_or_else(|| "herdr".to_string()),
+            })
+        }
+        "uninstall" => {
+            require_only(
+                &values,
+                &[
+                    "--install-root",
+                    "--user-profile-root",
+                    "--skill-hash-manifest",
+                    "--settings-disposition",
+                    "--skill-disposition",
+                    "--uninstall-fault",
+                    "--fault-marker-prefix",
+                    "--quiet-runner-process-id",
+                    "--quiet-token",
+                ],
+            )?;
+            installer_helper_lifecycle::uninstall(UninstallOptions {
+                install_root: required_path(&values, "--install-root")?,
+                user_profile_root: required_path(&values, "--user-profile-root")?,
+                skill_hash_manifest: required_path(&values, "--skill-hash-manifest")?,
+                settings_disposition: match required_utf8(&values, "--settings-disposition")?
+                    .as_str()
+                {
+                    "Keep" => SettingsDisposition::Keep,
+                    "Remove" => SettingsDisposition::Remove,
+                    value => {
+                        return Err(invalid_data(format!(
+                            "invalid --settings-disposition value {value:?}"
+                        )))
+                    }
+                },
+                skill_disposition: parse_skill_disposition(&required_utf8(
+                    &values,
+                    "--skill-disposition",
+                )?)?,
+                fault: optional_utf8(&values, "--uninstall-fault")?,
+                fault_marker_prefix: optional_utf8(&values, "--fault-marker-prefix")?
+                    .unwrap_or_else(|| "herdr".to_string()),
+                quiet_runner: parse_quiet_runner(&values)?,
+            })
+        }
+        "quiet-uninstall" => {
+            require_only(&values, &["--install-root"])?;
+            installer_helper_lifecycle::quiet_uninstall(QuietUninstallOptions {
+                install_root: required_path(&values, "--install-root")?,
+            })
+        }
         "skill-removal-default" => {
+            require_only(&values, &["--user-profile-root", "--skill-hash-manifest"])?;
             installer_helper_lifecycle::skill_removal_default(SkillDefaultOptions {
                 user_profile_root: required_path(&values, "--user-profile-root")?,
                 skill_hash_manifest: required_path(&values, "--skill-hash-manifest")?,
             })
         }
         "complete-maintenance" => {
+            require_only(&values, &["--install-root", "--parent-process-id"])?;
             installer_helper_lifecycle::complete_maintenance(MaintenanceOptions {
                 install_root: required_path(&values, "--install-root")?,
                 parent_process_id: optional_utf8(&values, "--parent-process-id")?
@@ -144,6 +183,15 @@ fn parse_named_arguments(args: Vec<OsString>) -> io::Result<BTreeMap<String, OsS
         }
     }
     Ok(output)
+}
+
+fn require_only(values: &BTreeMap<String, OsString>, allowed: &[&str]) -> io::Result<()> {
+    if let Some(name) = values.keys().find(|name| !allowed.contains(&name.as_str())) {
+        return Err(invalid_data(format!(
+            "installer helper action does not accept option {name}"
+        )));
+    }
+    Ok(())
 }
 
 fn required_path(values: &BTreeMap<String, OsString>, name: &str) -> io::Result<PathBuf> {
@@ -211,5 +259,13 @@ mod tests {
         let parsed = parse_quiet_runner(&values).unwrap().unwrap();
         assert_eq!(parsed.process_id, 42);
         assert_eq!(parsed.token, "a".repeat(32));
+    }
+
+    #[test]
+    fn action_options_are_exact() {
+        let mut values = BTreeMap::new();
+        values.insert("--install-root".to_string(), OsString::from(r"C:\Herdr"));
+        values.insert("--quiet-token".to_string(), OsString::from("token"));
+        assert!(require_only(&values, &["--install-root"]).is_err());
     }
 }

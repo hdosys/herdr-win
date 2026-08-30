@@ -25,7 +25,6 @@ use std::time::Instant;
 use interprocess::local_socket::traits::Stream as _;
 use serde::{Deserialize, Deserializer};
 
-const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
 const HERDR_UPDATE_COMMAND: &str = "herdr update";
 #[cfg(windows)]
 const WINGET_PACKAGE_ID: &str = "hdosys.herdr-win";
@@ -185,28 +184,6 @@ impl std::fmt::Display for ReleaseVersion {
 // Update manifest
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UpdateChannel {
-    Stable,
-    Preview,
-}
-
-impl UpdateChannel {
-    fn configured() -> Self {
-        match crate::distribution::UPDATE_CHANNEL {
-            "preview" => Self::Preview,
-            _ => Self::Stable,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Stable => "stable",
-            Self::Preview => "preview",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct AssetRef {
     url: String,
@@ -254,40 +231,6 @@ impl<'de> Deserialize<'de> for AssetRef {
 }
 
 #[derive(Deserialize)]
-struct UpdateManifest {
-    version: String,
-    /// Thin-client protocol spoken by this release, when advertised by the manifest.
-    #[cfg(not(windows))]
-    protocol: Option<u32>,
-    notes: String,
-    assets: BTreeMap<String, AssetRef>,
-    #[serde(default)]
-    sha256: BTreeMap<String, String>,
-    announcement: Option<serde_json::Value>,
-    #[serde(default, deserialize_with = "deserialize_manifest_releases")]
-    releases: BTreeMap<String, serde_json::Value>,
-}
-
-fn deserialize_manifest_releases<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, serde_json::Value>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Object(object)) => object.into_iter().collect(),
-        _ => BTreeMap::new(),
-    })
-}
-
-#[derive(Deserialize)]
-struct ManifestReleaseMetadata {
-    notes: String,
-    announcement: Option<serde_json::Value>,
-}
-
-#[derive(Deserialize)]
 struct PreviewManifest {
     channel: String,
     prerelease: bool,
@@ -295,62 +238,11 @@ struct PreviewManifest {
     build_id: String,
     release_version: String,
     commit: String,
-    built_at: String,
+    // Windows installs the complete setup; Unix compares this field before activation.
+    #[cfg_attr(windows, allow(dead_code))]
     protocol: u32,
     notes: String,
     assets: BTreeMap<String, AssetRef>,
-    #[serde(default)]
-    builds: BTreeMap<String, PreviewBuildMetadata>,
-}
-
-#[derive(Deserialize)]
-struct PreviewBuildMetadata {
-    base_version: String,
-    commit: String,
-    built_at: String,
-    protocol: u32,
-    assets: BTreeMap<String, AssetRef>,
-}
-
-#[derive(Deserialize)]
-struct HomebrewFormula {
-    versions: HomebrewFormulaVersions,
-}
-
-#[derive(Deserialize)]
-struct HomebrewFormulaVersions {
-    stable: String,
-}
-
-impl UpdateManifest {
-    #[cfg(all(test, unix))]
-    fn download_url_for(&self, os: &str, arch: &str) -> Option<String> {
-        self.assets
-            .get(&format!("{os}-{arch}"))
-            .map(|asset| asset.url.clone())
-    }
-
-    fn metadata_for_version(&self, version: &Version) -> Option<ManifestReleaseMetadata> {
-        let version = version.to_string();
-        if self.version.trim_start_matches('v') == version {
-            return Some(ManifestReleaseMetadata {
-                notes: self.notes.clone(),
-                announcement: self.announcement.clone(),
-            });
-        }
-
-        self.releases.get(&version).and_then(|release| {
-            let metadata =
-                serde_json::from_value::<ManifestReleaseMetadata>(release.clone()).ok()?;
-            (!metadata.notes_body().is_empty()).then_some(metadata)
-        })
-    }
-}
-
-impl ManifestReleaseMetadata {
-    fn notes_body(&self) -> String {
-        self.notes.trim().to_string()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +258,6 @@ struct ReleaseInfo {
     identity: String,
     runtime_identity: String,
     release_version: Option<ReleaseVersion>,
-    channel: UpdateChannel,
     build_id: Option<String>,
     commit: Option<String>,
     #[cfg(not(windows))]
@@ -386,10 +277,6 @@ impl ReleaseInfo {
     fn runtime_identity(&self) -> &str {
         &self.runtime_identity
     }
-}
-
-fn fetch_update_manifest() -> Result<UpdateManifest, String> {
-    fetch_json_manifest(crate::distribution::STABLE_MANIFEST_URL)
 }
 
 fn fetch_preview_manifest() -> Result<PreviewManifest, String> {
@@ -422,28 +309,6 @@ where
         .map_err(|e| format!("failed to parse update manifest JSON: {e}"))
 }
 
-fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>) {
-    let announcement = match value {
-        Some(value) => match serde_json::from_value::<
-            crate::product_announcements::ManifestAnnouncement,
-        >(value.clone())
-        {
-            Ok(announcement) => Some(announcement),
-            Err(err) => {
-                tracing::warn!("skipping invalid product announcement in update manifest: {err}");
-                None
-            }
-        },
-        None => None,
-    };
-
-    if let Err(err) =
-        crate::product_announcements::save_manifest_announcement(version, announcement.as_ref())
-    {
-        tracing::warn!("failed to save product announcement: {err}");
-    }
-}
-
 fn update_asset_key(os: &str, arch: &str) -> String {
     if os == "windows" {
         format!("{os}-{arch}-installer")
@@ -452,107 +317,52 @@ fn update_asset_key(os: &str, arch: &str) -> String {
     }
 }
 
-#[cfg(windows)]
-fn is_herdr_win_setup_asset_name(name: &str) -> bool {
-    let Some(version) = name
-        .strip_prefix("herdr-win_v")
-        .and_then(|value| value.strip_suffix("_windows_amd64_setup.exe"))
-    else {
-        return false;
+fn expected_release_asset_name(asset_key: &str, release_version: ReleaseVersion) -> Option<String> {
+    let suffix = match asset_key {
+        "linux-x86_64" => "linux_amd64",
+        "linux-aarch64" => "linux_arm64",
+        "macos-x86_64" => "macos_amd64",
+        "macos-aarch64" => "macos_arm64",
+        "windows-x86_64" => "windows_amd64.zip",
+        "windows-x86_64-installer" => "windows_amd64_setup.exe",
+        _ => return None,
     };
-    ReleaseVersion::parse(version).is_some()
+    Some(format!("herdr-win_v{release_version}_{suffix}"))
 }
 
-#[cfg(windows)]
-fn validate_windows_installer_asset(asset_key: &str, asset: &AssetRef) -> Result<(), String> {
-    if asset.format.as_deref() != Some("nsis") {
-        return Err(format!(
-            "Windows update asset {asset_key} must declare format nsis"
-        ));
+fn validate_preview_release_asset(
+    asset_key: &str,
+    asset: &AssetRef,
+    release_version: ReleaseVersion,
+) -> Result<(), String> {
+    let expected_name = expected_release_asset_name(asset_key, release_version)
+        .ok_or_else(|| format!("unsupported preview asset target {asset_key}"))?;
+    let expected_url = format!(
+        "{}v{release_version}/{expected_name}",
+        crate::distribution::RELEASE_DOWNLOAD_PREFIX
+    );
+    if asset.url != expected_url {
+        return Err(format!("preview asset {asset_key} must use {expected_url}"));
     }
     let sha256 = asset
         .sha256
         .as_deref()
-        .ok_or_else(|| format!("Windows update asset {asset_key} is missing sha256"))?;
+        .ok_or_else(|| format!("preview asset {asset_key} is missing sha256"))?;
     if sha256.len() != 64
         || !sha256
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(format!(
-            "Windows update asset {asset_key} has an invalid lowercase SHA-256 digest"
+            "preview asset {asset_key} has an invalid lowercase SHA-256 digest"
         ));
     }
-    let asset_name = asset.url.rsplit('/').next().unwrap_or_default();
-    if !asset
-        .url
-        .starts_with(crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX)
-        || !is_herdr_win_setup_asset_name(asset_name)
-    {
+    if asset_key == "windows-x86_64-installer" && asset.format.as_deref() != Some("nsis") {
         return Err(format!(
-            "Windows update asset {asset_key} must use the immutable herdr-win NSIS release URL"
+            "preview asset {asset_key} must declare format nsis"
         ));
     }
     Ok(())
-}
-
-fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<ReleaseInfo>, String> {
-    let current = Version::current();
-    let latest = Version::parse(&manifest.version)
-        .ok_or_else(|| format!("invalid version in update manifest: {}", manifest.version))?;
-
-    if !stable_channel_should_install(&latest, &current, crate::build_info::is_preview()) {
-        return Ok(None); // up to date
-    }
-
-    let metadata = manifest
-        .metadata_for_version(&latest)
-        .ok_or_else(|| format!("missing release metadata for v{latest}"))?;
-    let notes_body = metadata.notes_body();
-    if notes_body.is_empty() {
-        return Err("update manifest notes are empty".into());
-    }
-
-    let (os, arch) = platform_target();
-    let asset_key = update_asset_key(os, arch);
-    let asset = manifest
-        .assets
-        .get(&asset_key)
-        .ok_or_else(|| format!("no binary for {asset_key} in update manifest"))?;
-    #[cfg(windows)]
-    validate_windows_installer_asset(&asset_key, asset)?;
-    let download_url = asset.url.clone();
-    let sha256 = asset
-        .sha256
-        .clone()
-        .or_else(|| manifest.sha256.get(&asset_key).cloned())
-        .ok_or_else(|| {
-            format!("update manifest asset {asset_key} is missing a SHA-256 checksum")
-        })?;
-
-    Ok(Some(ReleaseInfo {
-        identity: latest.to_string(),
-        runtime_identity: latest.to_string(),
-        version: latest,
-        release_version: None,
-        channel: UpdateChannel::Stable,
-        build_id: None,
-        commit: None,
-        #[cfg(not(windows))]
-        target_protocol: manifest.protocol,
-        download_url,
-        sha256: Some(sha256),
-        asset_format: asset.format.clone(),
-        notes_body,
-    }))
-}
-
-fn stable_channel_should_install(
-    latest: &Version,
-    current: &Version,
-    installed_is_preview: bool,
-) -> bool {
-    installed_is_preview || latest > current
 }
 
 fn is_fork_build_id(value: &str) -> bool {
@@ -630,30 +440,11 @@ fn release_info_from_preview_manifest(
     }
     let (os, arch) = platform_target();
     let asset_key = update_asset_key(os, arch);
-    if let Some(archived) = manifest.builds.get(build_id) {
-        if archived.base_version != manifest.base_version
-            || archived.commit != manifest.commit
-            || archived.built_at != manifest.built_at
-            || archived.protocol != manifest.protocol
-        {
-            tracing::warn!(
-                build_id,
-                "preview manifest archived build metadata differs from top-level metadata"
-            );
-        }
-    }
     let asset = manifest
         .assets
         .get(&asset_key)
-        .or_else(|| {
-            manifest
-                .builds
-                .get(build_id)
-                .and_then(|build| build.assets.get(&asset_key))
-        })
         .ok_or_else(|| format!("no binary for {asset_key} in preview manifest"))?;
-    #[cfg(windows)]
-    validate_windows_installer_asset(&asset_key, asset)?;
+    validate_preview_release_asset(&asset_key, asset, release_version)?;
     let download_url = asset.url.clone();
 
     Ok(Some(ReleaseInfo {
@@ -661,7 +452,6 @@ fn release_info_from_preview_manifest(
         runtime_identity: format!("{release_version}+{build_id}"),
         version,
         release_version: Some(release_version),
-        channel: UpdateChannel::Preview,
         build_id: Some(build_id.to_string()),
         commit: Some(manifest.commit.clone()),
         #[cfg(not(windows))]
@@ -674,73 +464,8 @@ fn release_info_from_preview_manifest(
 }
 
 /// Check the hosted update manifest for the latest release. Returns release info if newer.
-fn first_windows_stable_is_pending(
-    manifest: &UpdateManifest,
-    is_windows: bool,
-    installed_is_preview: bool,
-) -> bool {
-    is_windows && installed_is_preview && !manifest.assets.contains_key("windows-x86_64")
-}
-
 fn check_latest() -> Result<Option<ReleaseInfo>, String> {
-    let channel = UpdateChannel::configured();
-    if channel == UpdateChannel::Preview {
-        return release_info_from_preview_manifest(&fetch_preview_manifest()?);
-    }
-
-    let manifest = fetch_update_manifest()?;
-    if first_windows_stable_is_pending(&manifest, cfg!(windows), crate::build_info::is_preview()) {
-        tracing::info!("waiting for the first stable Windows release");
-        return Ok(None);
-    }
-    let release = release_info_from_manifest(&manifest)?;
-    if let Some(release) = &release {
-        if let Some(metadata) = manifest.metadata_for_version(&release.version) {
-            handle_manifest_announcement(
-                &release.version.to_string(),
-                metadata.announcement.as_ref(),
-            );
-        }
-    }
-    Ok(release)
-}
-
-fn parse_homebrew_formula_stable_version(input: &[u8]) -> Result<Version, String> {
-    let formula: HomebrewFormula = serde_json::from_slice(input)
-        .map_err(|e| format!("failed to parse Homebrew formula JSON: {e}"))?;
-    Version::parse(&formula.versions.stable).ok_or_else(|| {
-        format!(
-            "invalid stable version in Homebrew formula JSON: {}",
-            formula.versions.stable
-        )
-    })
-}
-
-fn homebrew_update_from_formula_json(
-    input: &[u8],
-    current: &Version,
-) -> Result<Option<Version>, String> {
-    let latest = parse_homebrew_formula_stable_version(input)?;
-    if &latest <= current {
-        return Ok(None);
-    }
-
-    Ok(Some(latest))
-}
-
-fn check_homebrew_latest() -> Result<Option<Version>, String> {
-    let current = Version::current();
-
-    let output = crate::noninteractive_process::curl_command(HOMEBREW_FORMULA_API_URL)
-        .args(["--retry", "2", "--connect-timeout", "5", "--max-time", "10"])
-        .output()
-        .map_err(|e| format!("curl failed: {e}"))?;
-
-    if !output.status.success() {
-        return Err("failed to fetch Homebrew formula JSON".into());
-    }
-
-    homebrew_update_from_formula_json(&output.stdout, &current)
+    release_info_from_preview_manifest(&fetch_preview_manifest()?)
 }
 
 #[cfg(any(windows, test))]
@@ -975,12 +700,11 @@ fn download_windows_installer(release: &ReleaseInfo) -> Result<DownloadedWindows
         .as_deref()
         .ok_or("selected Windows update asset has no SHA-256 digest")?;
     let root = create_windows_update_temp_root()?;
-    let asset_name = release
-        .download_url
-        .rsplit('/')
-        .next()
-        .filter(|name| is_herdr_win_setup_asset_name(name))
-        .ok_or("selected Windows update asset has an invalid setup filename")?;
+    let release_version = release
+        .release_version
+        .ok_or("selected Windows update has no release version")?;
+    let asset_name = expected_release_asset_name("windows-x86_64-installer", release_version)
+        .ok_or("selected Windows update has no installer asset name")?;
     let path = root.join(asset_name);
     let download = DownloadedWindowsInstaller { root, path };
 
@@ -2489,19 +2213,14 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
         return;
     }
 
-    let configured_channel = UpdateChannel::configured();
     if is_homebrew_managed_install() {
-        if configured_channel == UpdateChannel::Preview {
-            crate::logging::update_check_failed(
-                "herdr-win self-update is not available for Homebrew installs",
-            );
-            return;
-        }
-        auto_update_homebrew(events);
+        crate::logging::update_check_failed(
+            "herdr-win self-update is not available for Homebrew installs",
+        );
         return;
     }
 
-    if is_mise_managed_install() && configured_channel == UpdateChannel::Preview {
+    if is_mise_managed_install() {
         crate::logging::update_check_failed(
             "herdr-win self-update is not available for mise installs",
         );
@@ -2509,7 +2228,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
     }
 
     let nix_managed_install = is_nix_managed_install();
-    if nix_managed_install && configured_channel == UpdateChannel::Preview {
+    if nix_managed_install {
         crate::logging::update_check_failed(
             "herdr-win self-update is not available for Nix installs",
         );
@@ -2568,8 +2287,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
     crate::logging::update_available(release.label());
     tracing::info!(
         release_version = ?release.release_version,
-        "new {} build available at {}",
-        release.channel.as_str(),
+        "new herdr-win build available at {}",
         release.download_url
     );
 
@@ -2595,53 +2313,6 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
         version: release.label().to_string(),
         install_command: install_command.to_string(),
     });
-}
-
-fn auto_update_homebrew(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
-    let version = match check_homebrew_latest() {
-        Ok(Some(version)) => version,
-        Ok(None) => return,
-        Err(err) => {
-            crate::logging::update_check_failed(&err);
-            return;
-        }
-    };
-
-    crate::logging::update_available(&version.to_string());
-    let notes_body = homebrew_release_notes_body(&version);
-    if let Err(e) = crate::release_notes::save_pending(&version.to_string(), &notes_body) {
-        tracing::warn!("failed to save pending release notes: {e}");
-    }
-
-    tracing::info!(
-        "auto-update check: v{} available through Homebrew, waiting for explicit install",
-        version
-    );
-
-    let _ = events.blocking_send(crate::events::AppEvent::UpdateReady {
-        version: version.to_string(),
-        install_command: HOMEBREW_UPDATE_COMMAND.to_string(),
-    });
-}
-
-fn homebrew_release_notes_body(version: &Version) -> String {
-    let manifest = fetch_update_manifest().ok();
-    homebrew_release_notes_body_from_manifest(version, manifest.as_ref())
-}
-
-fn homebrew_release_notes_body_from_manifest(
-    version: &Version,
-    manifest: Option<&UpdateManifest>,
-) -> String {
-    if let Some(metadata) = manifest.and_then(|manifest| manifest.metadata_for_version(version)) {
-        let notes_body = metadata.notes_body();
-        if !notes_body.is_empty() {
-            handle_manifest_announcement(&version.to_string(), metadata.announcement.as_ref());
-            return notes_body;
-        }
-    }
-
-    format!("### Changed\n- v{version} is available through Homebrew.")
 }
 
 // ---------------------------------------------------------------------------
@@ -2798,48 +2469,68 @@ mod cross_platform_tests {
     #[cfg(windows)]
     #[test]
     fn windows_manifest_requires_fork_nsis_asset_and_sha256() {
-        assert!(is_herdr_win_setup_asset_name(
-            "herdr-win_v2026.07.31.65535_windows_amd64_setup.exe"
-        ));
-        assert!(!is_herdr_win_setup_asset_name(
-            "herdr-win_v2026.07.31.65536_windows_amd64_setup.exe"
-        ));
-        assert!(!is_herdr_win_setup_asset_name(
-            "herdr-win_v2026.07.31.+1_windows_amd64_setup.exe"
-        ));
+        let release_version = ReleaseVersion::parse("2026.07.31.1").unwrap();
+        assert_eq!(
+            expected_release_asset_name("windows-x86_64-installer", release_version).as_deref(),
+            Some("herdr-win_v2026.07.31.1_windows_amd64_setup.exe")
+        );
         let valid = AssetRef {
             url: format!(
                 "{}v2026.07.31.1/herdr-win_v2026.07.31.1_windows_amd64_setup.exe",
-                crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
+                crate::distribution::RELEASE_DOWNLOAD_PREFIX
             ),
             sha256: Some("a".repeat(64)),
             format: Some("nsis".to_string()),
         };
-        assert!(validate_windows_installer_asset("windows-x86_64-installer", &valid).is_ok());
+        assert!(validate_preview_release_asset(
+            "windows-x86_64-installer",
+            &valid,
+            release_version
+        )
+        .is_ok());
 
         let mut invalid = valid.clone();
         invalid.format = Some("zip".to_string());
-        assert!(validate_windows_installer_asset("windows-x86_64-installer", &invalid).is_err());
+        assert!(validate_preview_release_asset(
+            "windows-x86_64-installer",
+            &invalid,
+            release_version
+        )
+        .is_err());
         invalid = valid.clone();
         invalid.sha256 = None;
-        assert!(validate_windows_installer_asset("windows-x86_64-installer", &invalid).is_err());
+        assert!(validate_preview_release_asset(
+            "windows-x86_64-installer",
+            &invalid,
+            release_version
+        )
+        .is_err());
         invalid = valid.clone();
         invalid.url =
             "https://example.com/herdr-win_v2026.07.31.1_windows_amd64_setup.exe".to_string();
-        assert!(validate_windows_installer_asset("windows-x86_64-installer", &invalid).is_err());
+        assert!(validate_preview_release_asset(
+            "windows-x86_64-installer",
+            &invalid,
+            release_version
+        )
+        .is_err());
         invalid = valid.clone();
         invalid.url = format!(
-            "{}v2026.02.30.1/herdr-win_v2026.02.30.1_windows_amd64_setup.exe",
-            crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
+            "{}v2026.07.31.2/herdr-win_v2026.07.31.2_windows_amd64_setup.exe",
+            crate::distribution::RELEASE_DOWNLOAD_PREFIX
         );
-        assert!(validate_windows_installer_asset("windows-x86_64-installer", &invalid).is_err());
+        assert!(validate_preview_release_asset(
+            "windows-x86_64-installer",
+            &invalid,
+            release_version
+        )
+        .is_err());
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_preview_selects_installer_without_removing_legacy_zip() {
-        let current_build_id = crate::build_info::build_id().unwrap_or("111111111111.aaaaaaaaaaaa");
-        let build_id = if current_build_id == "bbbbbbbbbbbb.222222222222" {
+        let build_id = if crate::build_info::build_id() == Some("bbbbbbbbbbbb.222222222222") {
             "cccccccccccc.333333333333"
         } else {
             "bbbbbbbbbbbb.222222222222"
@@ -2847,7 +2538,7 @@ mod cross_platform_tests {
         let installer = AssetRef {
             url: format!(
                 "{}v2026.07.31.1/herdr-win_v2026.07.31.1_windows_amd64_setup.exe",
-                crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
+                crate::distribution::RELEASE_DOWNLOAD_PREFIX
             ),
             sha256: Some("b".repeat(64)),
             format: Some("nsis".to_string()),
@@ -2855,7 +2546,7 @@ mod cross_platform_tests {
         let legacy_zip = AssetRef {
             url: format!(
                 "{}preview-test/herdr-windows-x86_64.zip",
-                crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
+                crate::distribution::RELEASE_DOWNLOAD_PREFIX
             ),
             sha256: Some("a".repeat(64)),
             format: Some("zip".to_string()),
@@ -2867,23 +2558,12 @@ mod cross_platform_tests {
             build_id: build_id.to_string(),
             release_version: "2026.07.31.1".to_string(),
             commit: "b".repeat(40),
-            built_at: "2026-07-28T00:00:00Z".to_string(),
             protocol: 77,
             notes: "### Changed\n- Managed installer".to_string(),
             assets: BTreeMap::from([
                 ("windows-x86_64".to_string(), legacy_zip),
                 ("windows-x86_64-installer".to_string(), installer),
             ]),
-            builds: BTreeMap::from([(
-                current_build_id.to_string(),
-                PreviewBuildMetadata {
-                    base_version: "9.9.8".to_string(),
-                    commit: "a".repeat(40),
-                    built_at: "2026-07-27T00:00:00Z".to_string(),
-                    protocol: 76,
-                    assets: BTreeMap::new(),
-                },
-            )]),
         };
 
         let release = release_info_from_preview_manifest(&manifest)
@@ -2911,17 +2591,16 @@ mod cross_platform_tests {
         } else {
             "bbbbbbbbbbbb.222222222222"
         };
+        let release_version = ReleaseVersion::parse("2026.08.12.2").unwrap();
+        let asset_key = update_asset_key(platform_target().0, platform_target().1);
+        let asset_name = expected_release_asset_name(&asset_key, release_version).unwrap();
         let assets = BTreeMap::from([(
-            update_asset_key(platform_target().0, platform_target().1),
+            asset_key,
             AssetRef {
-                url: if cfg!(windows) {
-                    format!(
-                        "{}v2026.08.12.2/herdr-win_v2026.08.12.2_windows_amd64_setup.exe",
-                        crate::distribution::WINDOWS_RELEASE_DOWNLOAD_PREFIX
-                    )
-                } else {
-                    "https://example.com/herdr".to_string()
-                },
+                url: format!(
+                    "{}v{release_version}/{asset_name}",
+                    crate::distribution::RELEASE_DOWNLOAD_PREFIX
+                ),
                 sha256: Some("a".repeat(64)),
                 format: cfg!(windows).then(|| "nsis".to_string()),
             },
@@ -2933,11 +2612,9 @@ mod cross_platform_tests {
             build_id: build_id.to_string(),
             release_version: "2026.08.12.2".to_string(),
             commit: "b".repeat(40),
-            built_at: "2026-08-12T00:00:00Z".to_string(),
             protocol: crate::protocol::PROTOCOL_VERSION,
             notes: "### Changed\n- CalVer update".to_string(),
             assets,
-            builds: BTreeMap::new(),
         };
 
         let release = release_info_from_preview_manifest(&manifest)
@@ -2951,6 +2628,11 @@ mod cross_platform_tests {
         );
         assert_eq!(release.build_id.as_deref(), Some(build_id));
         assert_eq!(release.version, Version::parse("9.9.9").unwrap());
+        #[cfg(not(windows))]
+        assert_eq!(
+            release.target_protocol,
+            Some(crate::protocol::PROTOCOL_VERSION)
+        );
     }
 
     #[test]
@@ -3049,7 +2731,6 @@ mod tests {
             identity: version.to_string(),
             runtime_identity: version.to_string(),
             release_version: None,
-            channel: UpdateChannel::Stable,
             build_id: None,
             commit: None,
             target_protocol,
@@ -3251,69 +2932,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_homebrew_formula_stable_version_reads_versions_stable() {
-        let version = parse_homebrew_formula_stable_version(
-            br#"{"versions":{"stable":"0.5.10","head":"HEAD","bottle":true}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(version, Version::parse("0.5.10").unwrap());
-    }
-
-    #[test]
-    fn homebrew_formula_update_uses_formula_stable_not_manifest_latest() {
-        let current = Version::parse("0.6.1").unwrap();
-        let update = homebrew_update_from_formula_json(
-            br#"{"versions":{"stable":"0.6.2","head":"HEAD","bottle":true}}"#,
-            &current,
-        )
-        .unwrap();
-
-        assert_eq!(update, Some(Version::parse("0.6.2").unwrap()));
-    }
-
-    #[test]
-    fn homebrew_formula_update_ignores_versions_that_are_not_newer() {
-        let current = Version::parse("0.6.2").unwrap();
-        let update = homebrew_update_from_formula_json(
-            br#"{"versions":{"stable":"0.6.2","head":"HEAD","bottle":true}}"#,
-            &current,
-        )
-        .unwrap();
-
-        assert_eq!(update, None);
-    }
-
-    #[test]
-    fn homebrew_release_notes_use_package_manager_guidance() {
-        let body =
-            homebrew_release_notes_body_from_manifest(&Version::parse("0.6.3").unwrap(), None);
-
-        assert_eq!(body, "### Changed\n- v0.6.3 is available through Homebrew.");
-    }
-
-    #[test]
-    fn homebrew_release_notes_can_use_manifest_metadata() {
-        let manifest: UpdateManifest = serde_json::from_str(
-            r####"{
-                "version": "0.6.3",
-                "protocol": 10,
-                "notes": "### Fixed\n- Brew notes",
-                "assets": {
-                    "linux-x86_64": "https://example.com/herdr-linux-x86_64"
-                }
-            }"####,
-        )
-        .unwrap();
-        let body = homebrew_release_notes_body_from_manifest(
-            &Version::parse("0.6.3").unwrap(),
-            Some(&manifest),
-        );
-
-        assert_eq!(body, "### Fixed\n- Brew notes");
-    }
-
-    #[test]
     fn fake_release_notes_default_to_real_large_changelog_section() {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var(FAKE_UPDATE_NOTES_VERSION_ENV);
@@ -3398,7 +3016,6 @@ mod tests {
             identity: "0.5.6".to_string(),
             runtime_identity: "0.5.6".to_string(),
             release_version: None,
-            channel: UpdateChannel::Stable,
             build_id: None,
             commit: None,
             target_protocol: Some(2),
@@ -3645,7 +3262,6 @@ mod tests {
             identity: "0.5.6".to_string(),
             runtime_identity: "0.5.6".to_string(),
             release_version: None,
-            channel: UpdateChannel::Stable,
             build_id: None,
             commit: None,
             target_protocol: Some(3),
@@ -3783,7 +3399,6 @@ mod tests {
             identity: "9.8.7".to_string(),
             runtime_identity: "9.8.7".to_string(),
             release_version: None,
-            channel: UpdateChannel::Stable,
             build_id: None,
             commit: None,
             target_protocol: Some(77),
@@ -3891,415 +3506,5 @@ mod tests {
         let (os, arch) = platform_target();
         assert!(os == "linux" || os == "macos", "os: {os}");
         assert!(arch == "x86_64" || arch == "aarch64", "arch: {arch}");
-    }
-
-    #[test]
-    fn update_manifest_deserializes() {
-        let json = "{\n\
-            \"version\": \"0.2.0\",\n\
-            \"protocol\": 4,\n\
-            \"notes\": \"### Changed\\n- One\",\n\
-            \"announcement\": {\n\
-                \"id\": \"keymap-v2\",\n\
-                \"title\": \"Keymap changes\",\n\
-                \"body\": \"### Heads up\\n- Defaults changed\"\n\
-            },\n\
-            \"assets\": {\n\
-                \"linux-x86_64\": \"https://example.com/herdr-linux-x86_64\",\n\
-                \"macos-aarch64\": \"https://example.com/herdr-macos-aarch64\"\n\
-            }\n\
-        }";
-        let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.version, "0.2.0");
-        assert_eq!(manifest.protocol, Some(4));
-        assert_eq!(manifest.assets.len(), 2);
-        assert_eq!(
-            manifest
-                .metadata_for_version(&Version::parse("0.2.0").unwrap())
-                .expect("metadata")
-                .notes_body(),
-            "### Changed\n- One"
-        );
-        assert_eq!(
-            manifest
-                .announcement
-                .as_ref()
-                .and_then(|announcement| announcement.get("id"))
-                .and_then(serde_json::Value::as_str),
-            Some("keymap-v2")
-        );
-        assert_eq!(
-            manifest.download_url_for("linux", "x86_64").as_deref(),
-            Some("https://example.com/herdr-linux-x86_64")
-        );
-    }
-
-    #[test]
-    fn update_manifest_reads_archived_release_metadata() {
-        let json = r####"{
-            "version": "0.3.0",
-            "protocol": 4,
-            "notes": "### Changed\n- Three",
-            "assets": {
-                "linux_x86_64": "https://example.com/unused"
-            },
-            "releases": {
-                "0.2.0": {
-                    "notes": "### Changed\n- Two",
-                    "announcement": {
-                        "id": "two",
-                        "title": "Two",
-                        "body": "### Two"
-                    }
-                }
-            }
-        }"####;
-        let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
-        let version = Version::parse("0.2.0").unwrap();
-        let metadata = manifest.metadata_for_version(&version).expect("metadata");
-
-        assert_eq!(metadata.notes_body(), "### Changed\n- Two");
-        assert_eq!(
-            metadata
-                .announcement
-                .as_ref()
-                .and_then(|announcement| announcement.get("id"))
-                .and_then(serde_json::Value::as_str),
-            Some("two")
-        );
-    }
-
-    #[test]
-    fn update_manifest_root_metadata_wins_for_latest_version() {
-        let json = r####"{
-            "version": "0.3.0",
-            "protocol": 4,
-            "notes": "### Changed\n- Root",
-            "announcement": {
-                "id": "root",
-                "title": "Root",
-                "body": "### Root"
-            },
-            "assets": {
-                "linux_x86_64": "https://example.com/unused"
-            },
-            "releases": {
-                "0.3.0": {
-                    "notes": "### Changed\n- Stale",
-                    "announcement": {
-                        "id": "stale",
-                        "title": "Stale",
-                        "body": "### Stale"
-                    }
-                }
-            }
-        }"####;
-        let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
-        let version = Version::parse("0.3.0").unwrap();
-        let metadata = manifest.metadata_for_version(&version).expect("metadata");
-
-        assert_eq!(metadata.notes_body(), "### Changed\n- Root");
-        assert_eq!(
-            metadata
-                .announcement
-                .as_ref()
-                .and_then(|announcement| announcement.get("id"))
-                .and_then(serde_json::Value::as_str),
-            Some("root")
-        );
-    }
-
-    #[test]
-    fn update_manifest_ignores_malformed_releases_container() {
-        let json = r####"{
-            "version": "0.3.0",
-            "protocol": 4,
-            "notes": "### Changed\n- Root",
-            "assets": {
-                "linux_x86_64": "https://example.com/unused"
-            },
-            "releases": []
-        }"####;
-        let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
-
-        assert!(manifest.releases.is_empty());
-        assert_eq!(
-            manifest
-                .metadata_for_version(&Version::parse("0.3.0").unwrap())
-                .expect("metadata")
-                .notes_body(),
-            "### Changed\n- Root"
-        );
-    }
-
-    #[test]
-    fn update_manifest_requires_notes_field() {
-        let json = r#"{
-            "version": "0.2.0",
-            "assets": {
-                "linux-x86_64": "https://example.com/herdr-linux-x86_64"
-            }
-        }"#;
-
-        assert!(serde_json::from_str::<UpdateManifest>(json).is_err());
-    }
-
-    #[test]
-    fn stable_update_requires_asset_checksum() {
-        let (os, arch) = platform_target();
-        let asset_key = format!("{os}-{arch}");
-        let json = format!(
-            r####"{{
-                "version": "99.99.99",
-                "notes": "### Changed\n- One",
-                "assets": {{
-                    "{asset_key}": "https://example.com/herdr"
-                }}
-            }}"####
-        );
-        let manifest: UpdateManifest = serde_json::from_str(&json).unwrap();
-
-        assert!(release_info_from_manifest(&manifest)
-            .unwrap_err()
-            .contains("missing a SHA-256 checksum"));
-    }
-
-    #[test]
-    fn invalid_manifest_announcement_does_not_block_release_info() {
-        let (os, arch) = platform_target();
-        let asset_key = format!("{os}-{arch}");
-        let json = format!(
-            r####"{{
-                "version": "99.99.99",
-                "protocol": 4,
-                "notes": "### Changed\n- One",
-                "announcement": {{
-                    "id": 123,
-                    "title": "Keymap changes",
-                    "body": "### Heads up\n- Defaults changed"
-                }},
-                "assets": {{
-                    "{asset_key}": {{
-                        "url": "https://example.com/herdr",
-                        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    }}
-                }}
-            }}"####
-        );
-
-        let manifest: UpdateManifest = serde_json::from_str(&json).unwrap();
-        handle_manifest_announcement(&manifest.version, manifest.announcement.as_ref());
-        let release = release_info_from_manifest(&manifest)
-            .unwrap()
-            .expect("release info");
-
-        assert_eq!(release.version, Version::parse("99.99.99").unwrap());
-        assert_eq!(release.download_url, "https://example.com/herdr");
-    }
-
-    #[test]
-    fn stable_channel_installs_stable_asset_when_current_binary_is_preview() {
-        let latest_stable = Version::parse("0.6.6").unwrap();
-        let installed_base = Version::parse("0.6.6").unwrap();
-        assert!(stable_channel_should_install(
-            &latest_stable,
-            &installed_base,
-            true
-        ));
-        assert!(!stable_channel_should_install(
-            &latest_stable,
-            &installed_base,
-            false
-        ));
-    }
-
-    #[test]
-    fn preview_manifest_reports_release_calver() {
-        let (os, arch) = platform_target();
-        let asset_key = format!("{os}-{arch}");
-        let json = format!(
-            r####"{{
-                "channel": "preview",
-                "base_version": "9.9.9",
-                "build_id": "abcdef123456.7890abcdef12",
-                "release_version": "2026.08.04.3",
-                "commit": "abcdef1234567890",
-                "built_at": "2026-06-02T03:00:00Z",
-                "protocol": 77,
-                "notes": "### Fixed\n- One",
-                "assets": {{
-                    "{asset_key}": {{
-                        "url": "https://example.com/herdr-linux-x86_64",
-                        "sha256": "deadbeef"
-                    }}
-                }},
-                "builds": {{
-                    "abcdef123456.7890abcdef12": {{
-                        "base_version": "9.9.9",
-                        "commit": "abcdef1234567890",
-                        "built_at": "2026-06-02T03:00:00Z",
-                        "protocol": 77,
-                        "assets": {{
-                            "{asset_key}": {{
-                                "url": "https://example.com/herdr-linux_x86_64",
-                                "sha256": "deadbeef"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"####
-        );
-        let manifest: PreviewManifest = serde_json::from_str(&json).unwrap();
-
-        let release = release_info_from_preview_manifest(&manifest)
-            .unwrap()
-            .expect("preview update");
-
-        assert_eq!(release.channel, UpdateChannel::Preview);
-        assert_eq!(release.identity, "2026.08.04.3");
-        assert_eq!(
-            release.runtime_identity,
-            "2026.08.04.3+abcdef123456.7890abcdef12"
-        );
-        assert_eq!(
-            release.release_version,
-            ReleaseVersion::parse("2026.08.04.3")
-        );
-        assert_eq!(release.target_protocol, Some(77));
-        assert_eq!(release.sha256.as_deref(), Some("deadbeef"));
-    }
-
-    #[test]
-    fn preview_windows_build_waits_for_first_stable_asset() {
-        let without_windows: UpdateManifest = serde_json::from_str(
-            r#"{"version":"9.9.9","notes":"notes","assets":{},"announcement":null}"#,
-        )
-        .unwrap();
-        assert!(first_windows_stable_is_pending(
-            &without_windows,
-            true,
-            true
-        ));
-        assert!(!first_windows_stable_is_pending(
-            &without_windows,
-            true,
-            false
-        ));
-        assert!(!first_windows_stable_is_pending(
-            &without_windows,
-            false,
-            true
-        ));
-
-        let with_windows: UpdateManifest = serde_json::from_str(
-            r#"{"version":"9.9.9","notes":"notes","assets":{"windows-x86_64":"https://example.com/herdr-windows-x86_64.zip"},"announcement":null}"#,
-        )
-        .unwrap();
-        assert!(!first_windows_stable_is_pending(&with_windows, true, true));
-    }
-
-    #[test]
-    fn checked_in_website_manifest_matches_update_schema() {
-        #[derive(Deserialize)]
-        struct LegacyUpdateManifest {
-            assets: BTreeMap<String, String>,
-        }
-
-        let json = include_str!("../website/latest.json");
-        let legacy: LegacyUpdateManifest = serde_json::from_str(json)
-            .expect("website/latest.json should keep legacy string asset URLs");
-        assert!(legacy.assets.len() >= 4);
-
-        let manifest: UpdateManifest =
-            serde_json::from_str(json).expect("website/latest.json should match updater schema");
-
-        assert!(!manifest
-            .metadata_for_version(&Version::parse(&manifest.version).unwrap())
-            .expect("metadata")
-            .notes_body()
-            .is_empty());
-        // website/latest.json describes the latest released binaries, not the
-        // current unreleased checkout. Its protocol is updated by the release
-        // flow together with the release assets.
-        assert!(manifest.protocol.is_some());
-        assert!(manifest.assets.len() >= 4);
-        assert!(manifest.releases.contains_key(&manifest.version));
-
-        for target in [
-            "linux-x86_64",
-            "linux-aarch64",
-            "macos-x86_64",
-            "macos-aarch64",
-        ] {
-            let asset = manifest
-                .assets
-                .get(target)
-                .unwrap_or_else(|| panic!("missing asset URL for {target}"));
-            let url = &asset.url;
-            assert_eq!(
-                manifest.sha256.get(target).map(String::len),
-                Some(64),
-                "missing SHA-256 checksum for {target}"
-            );
-            assert!(
-                url.contains(&format!("/releases/download/v{}/", manifest.version)),
-                "unexpected release URL for {target}: {url}"
-            );
-            assert!(
-                url.ends_with(&format!("herdr-{target}")),
-                "unexpected asset name for {target}: {url}"
-            );
-        }
-
-        if let Some(windows) = manifest.assets.get("windows-x86_64") {
-            assert!(windows.url.ends_with("/herdr-windows-x86_64.zip"));
-            assert_eq!(
-                manifest.sha256.get("windows-x86_64").map(String::len),
-                Some(64),
-                "missing SHA-256 checksum for windows-x86_64"
-            );
-        }
-
-        for (version, release) in &manifest.releases {
-            let assets = release
-                .get("assets")
-                .and_then(serde_json::Value::as_object)
-                .unwrap_or_else(|| panic!("missing assets for release {version}"));
-            for target in [
-                "linux-x86_64",
-                "linux-aarch64",
-                "macos-x86_64",
-                "macos-aarch64",
-            ] {
-                let asset = assets
-                    .get(target)
-                    .cloned()
-                    .unwrap_or_else(|| panic!("missing asset URL for {version} {target}"));
-                let asset: AssetRef = serde_json::from_value(asset)
-                    .unwrap_or_else(|_| panic!("invalid asset for {version} {target}"));
-                let url = &asset.url;
-                assert!(
-                    url.contains(&format!("/releases/download/v{version}/")),
-                    "unexpected release URL for {version} {target}: {url}"
-                );
-                assert!(
-                    url.ends_with(&format!("herdr-{target}")),
-                    "unexpected asset name for {version} {target}: {url}"
-                );
-            }
-            if let Some(windows) = assets.get("windows-x86_64") {
-                let windows: AssetRef = serde_json::from_value(windows.clone())
-                    .unwrap_or_else(|_| panic!("invalid Windows asset for release {version}"));
-                assert!(windows.url.ends_with("/herdr-windows-x86_64.zip"));
-                let checksums = release
-                    .get("sha256")
-                    .and_then(serde_json::Value::as_object)
-                    .unwrap_or_else(|| panic!("missing checksums for release {version}"));
-                assert!(checksums
-                    .get("windows-x86_64")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| value.len() == 64));
-            }
-        }
     }
 }

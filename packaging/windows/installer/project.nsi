@@ -356,9 +356,12 @@ Function .onInit
   Push "The current Windows user profile is unavailable; setup did not change this computer."
   Call FailInstall
 installer_profile_ready:
-  StrCmp $LOCALAPPDATA "" installer_local_appdata_fallback installer_local_appdata_ready
+  StrCmp $LOCALAPPDATA "" installer_local_appdata_fallback installer_local_appdata_set
 installer_local_appdata_fallback:
   StrCpy $INSTDIR "$PROFILE\AppData\Local\Programs\${INFO_PRODUCTNAME}"
+  Goto installer_local_appdata_ready
+installer_local_appdata_set:
+  StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}"
 installer_local_appdata_ready:
   !endif
   ${GetParameters} $0

@@ -375,18 +375,7 @@ fn status_commands_report_client_and_server_versions() {
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
-    let expected_version = match (
-        option_env!("HERDR_RELEASE_VERSION"),
-        option_env!("HERDR_BUILD_FRESHNESS"),
-        option_env!("HERDR_BUILD_ID"),
-    ) {
-        (Some(release), _, Some(build)) => format!("{release}+{build}"),
-        (Some(release), _, None) => release.to_string(),
-        (None, Some(freshness), Some(build)) => format!("{freshness}+{build}"),
-        (None, Some(freshness), None) => freshness.to_string(),
-        (None, None, Some(build)) => format!("local+{build}"),
-        (None, None, None) => "local".to_string(),
-    };
+    let expected_version = expected_runtime_version();
 
     let full = run_cli(&socket_path, &["status"]);
     assert!(
@@ -401,7 +390,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  protocol: 20"),
+        full_stdout.contains("  protocol: 21"),
         "stdout: {full_stdout}"
     );
     assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
@@ -434,7 +423,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {server_stdout}"
     );
     assert!(
-        server_stdout.contains("protocol: 20"),
+        server_stdout.contains("protocol: 21"),
         "stdout: {server_stdout}"
     );
 
@@ -446,7 +435,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("protocol: 20"),
+        client_stdout.contains("protocol: 21"),
         "stdout: {client_stdout}"
     );
     assert!(

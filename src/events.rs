@@ -28,7 +28,7 @@ pub struct ApiWorktreeAddRequest {
 #[derive(Debug)]
 pub struct WorktreeAddResult {
     pub path: std::path::PathBuf,
-    pub api_request: Option<ApiWorktreeAddRequest>,
+    pub api_request: ApiWorktreeAddRequest,
     pub result: Result<(), String>,
 }
 
@@ -47,7 +47,7 @@ pub struct WorktreeRemoveResult {
     pub workspace: Option<Box<crate::api::schema::WorkspaceInfo>>,
     pub worktree: Option<Box<crate::api::schema::WorktreeInfo>>,
     pub forced: bool,
-    pub api_request: Option<ApiWorktreeRemoveRequest>,
+    pub api_request: ApiWorktreeRemoveRequest,
     pub result: Result<(), String>,
 }
 

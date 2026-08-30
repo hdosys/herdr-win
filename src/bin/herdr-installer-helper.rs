@@ -9,6 +9,9 @@ mod managed_install;
 #[allow(dead_code)]
 #[path = "../platform/windows/managed_install.rs"]
 mod windows_managed_install;
+#[cfg(windows)]
+#[path = "../platform/windows/process_job.rs"]
+mod windows_process_job;
 
 #[cfg(windows)]
 mod platform {

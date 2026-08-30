@@ -208,15 +208,18 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 .add_modifier(Modifier::BOLD),
         );
 
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        let mut navigation_hints = Vec::new();
+        if app.settings.section != SettingsSection::Integrations {
+            navigation_hints.extend([
                 Span::styled(" ↑↓", Style::default().fg(p.overlay0)),
                 Span::styled(" select  ", Style::default().fg(p.overlay1)),
-                Span::styled("tab", Style::default().fg(p.overlay0)),
-                Span::styled(" section", Style::default().fg(p.overlay1)),
-            ])),
-            footer_rows[0],
-        );
+            ]);
+        }
+        navigation_hints.extend([
+            Span::styled("tab", Style::default().fg(p.overlay0)),
+            Span::styled(" section", Style::default().fg(p.overlay1)),
+        ]);
+        frame.render_widget(Paragraph::new(Line::from(navigation_hints)), footer_rows[0]);
     }
 }
 

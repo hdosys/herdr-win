@@ -112,8 +112,6 @@ When the current pull request head is green and both bot reviews are complete, r
 
 If the current session is already inside an isolated task worktree, keep using it. Do not create nested worktrees.
 
-Before committing, propose the commit message and get alignment.
-
 After Can confirms the change is integrated, update the shared checkout, remove the task worktree, and delete the task branch locally and remotely.
 
 ## Testing
@@ -202,8 +200,6 @@ Put local PRDs, planning notes, and exploratory specs under `.local/prd/`; `.loc
 ## Commit Style
 
 Use lowercase conventional commits, no emojis, and no AI co-author lines. Commit subjects feed preview release notes, so keep them descriptive.
-
-Before committing, propose the commit message and get alignment.
 
 When a normal feature or fix commit relates to a GitHub issue, add a commit body line `refs #<issue-number>` after the subject:
 

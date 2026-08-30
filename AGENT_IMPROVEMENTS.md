@@ -227,3 +227,17 @@ configuration repository.
   the same 16-job release build then succeeded in 114.792 seconds. Owner:
   `scripts/local_windows_installer.py`, focused preflight tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Expose validated packaging identity inputs through the
+  canonical local installer owner.** Let `local_windows_installer.py` pass an
+  explicit product name to the existing packager and record that input in its
+  validated build invocation, so changing only packaging presentation can reuse an
+  exact current runtime bundle without classifying source files or changing runtime
+  provenance. Evidence: the restored packager parameter produced a real custom-name
+  NSIS installer from the current bundle in 25.642 seconds, while committing that
+  packaging-only correction changed the source fingerprint and forced a 143.767-second
+  Cargo rebuild plus 194.754 seconds total to replace the canonical installer. This
+  is an explicit build input, not the previously declined source-exclusion
+  classifier. Owner: `scripts/local_windows_installer.py`,
+  `scripts/package_windows_installer.ps1`, focused identity tests, and the Candidate
+  procedure in `CONTRIBUTING.md`.

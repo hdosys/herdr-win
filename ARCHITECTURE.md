@@ -268,6 +268,8 @@ behavior; code and tests remain the detailed implementation truth.
   one runtime product name, one title-cased human distribution display name, the
   release CalVer or explicit local identity, the upstream Herdr version, and the
   fork and official-upstream URLs into NSIS. The
+  runtime product name remains a validated packager input, with `Herdr` only as the
+  current default; packaging code must not hard-code it.
   runtime/install-root identity remains Herdr, while executable
   metadata and Installed Apps consistently present **Herdr Win**. The NSIS presentation
   uses standard MUI2 Welcome/License/Files/Finish pages plus the existing custom

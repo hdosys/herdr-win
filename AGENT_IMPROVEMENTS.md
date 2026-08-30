@@ -214,3 +214,16 @@ configuration repository.
   placement. Resume only in a user-authorized provider session; the existing Bun suite
   remains the deterministic split-logic owner. Owner: the OpenCode native Candidate
   acceptance boundary, reusing its current split probe rather than a second harness.
+
+- **Status: proposed. Fail local Candidate builds before Cargo when Windows
+  commit headroom is exhausted.** Read the Windows committed-bytes and commit-limit
+  counters before starting the nested all-core Cargo and Zig build. When commit
+  charge is already at a measured unsafe threshold, stop with the current headroom
+  and aggregate largest-process classes instead of launching the compiler; never
+  terminate processes automatically. Evidence: four attempts spent about 176
+  seconds failing across unrelated Zig 0.15.2 units and its readable standard
+  library while the Sandbox was at 35.71/38.65 GiB committed with a full pagefile.
+  Closing only user-authorized idle workspaces lowered charge to 18.85/36 GiB, and
+  the same 16-job release build then succeeded in 114.792 seconds. Owner:
+  `scripts/local_windows_installer.py`, focused preflight tests, and the Candidate
+  procedure in `CONTRIBUTING.md`.

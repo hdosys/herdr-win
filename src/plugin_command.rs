@@ -11,6 +11,14 @@ pub(crate) fn command_for_argv_in_dir(program: &str, args: &[String], cwd: &Path
     command
 }
 
+pub(crate) fn argv_for_dir(argv: &[String], cwd: &Path) -> Vec<String> {
+    let mut argv = argv.to_vec();
+    if let Some(program) = argv.first_mut() {
+        *program = program_for_cwd(program, cwd).to_string_lossy().into_owned();
+    }
+    argv
+}
+
 fn program_for_cwd(program: &str, cwd: &Path) -> OsString {
     let path = Path::new(program);
     let has_separator = program.contains('/') || (cfg!(windows) && program.contains('\\'));

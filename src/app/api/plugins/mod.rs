@@ -364,7 +364,7 @@ impl App {
         let Some(entrypoint) = normalize_action_id(&params.entrypoint) else {
             return encode_error(id, "invalid_plugin_entrypoint", "invalid entrypoint id");
         };
-        let Some(pane) = plugin
+        let Some(mut pane) = plugin
             .panes
             .iter()
             .find(|pane| pane.id == entrypoint)
@@ -382,6 +382,10 @@ impl App {
         ) {
             return encode_error(id, code, message);
         }
+        pane.command = crate::plugin_command::argv_for_dir(
+            &pane.command,
+            std::path::Path::new(&plugin.plugin_root),
+        );
         let placement = params.placement.unwrap_or(pane.placement);
         if placement != PluginPanePlacement::Popup
             && (params.width.is_some() || params.height.is_some())
@@ -1364,6 +1368,68 @@ platforms = ["linux", "macos"]
         });
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["error"]["code"], "plugin_not_found");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn plugin_pane_open_resolves_relative_executable_from_plugin_root() {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new(
+            "plugin-relative-pane",
+        )];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+
+        let root = unique_temp_path("plugin-pane-relative-command");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("where.exe");
+        std::fs::copy(source, root.join("tool.exe")).unwrap();
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.relative-pane"
+name = "Relative Pane"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["windows"]
+
+[[panes]]
+id = "tool"
+title = "Relative Tool"
+placement = "split"
+command = ["./tool.exe", "/?"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+
+        let open = app.handle_api_request(Request {
+            id: "pane-open-relative".into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.relative-pane".into(),
+                entrypoint: "tool".into(),
+                placement: None,
+                width: None,
+                height: None,
+                workspace_id: None,
+                target_pane_id: None,
+                direction: None,
+                cwd: None,
+                focus: false,
+                env: std::collections::HashMap::new(),
+            }),
+        });
+        let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
+            panic!("expected plugin pane opened response: {open}");
+        };
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

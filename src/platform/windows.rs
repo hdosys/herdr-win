@@ -1231,29 +1231,17 @@ fn launch_server_daemon_in_interactive_session(
         }
         Ok(pid)
     })();
-    let task_cleanup = cleanup_interactive_server_task(&task_name);
-    match (launch_result, task_cleanup) {
-        (Ok(pid), Ok(())) => {
+    match launch_result {
+        Ok(pid) => {
             pending.transfer_to_server();
             Ok(pid)
         }
-        (Err(err), Ok(())) => Err(err),
-        (Err(err), Err(cleanup_err)) => Err(std::io::Error::other(format!(
-            "{err}; failed to remove transient interactive server task {task_name}: {cleanup_err}"
-        ))),
-        (Ok(pid), Err(cleanup_err)) => {
-            let process_cleanup = open_interactive_server_process(pid)
-                .map(|process| terminate_process_and_wait(&process, Duration::from_secs(5)))
-                .transpose();
-            match process_cleanup {
-                Ok(_) => Err(std::io::Error::other(format!(
-                    "failed to remove transient interactive server task {task_name}: {cleanup_err}"
-                ))),
-                Err(process_err) => Err(std::io::Error::other(format!(
-                    "failed to remove transient interactive server task {task_name} ({cleanup_err}); server cleanup also failed: {process_err}"
-                ))),
-            }
-        }
+        Err(err) => match cleanup_interactive_server_task(&task_name) {
+            Ok(()) => Err(err),
+            Err(cleanup_err) => Err(std::io::Error::other(format!(
+                "{err}; failed to remove transient interactive server task {task_name}: {cleanup_err}"
+            ))),
+        },
     }
 }
 

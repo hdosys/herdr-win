@@ -70,6 +70,8 @@ LOCAL_VERSION_RE = re.compile(
     r"build (?P<build>[0-9a-f]{12}\.[0-9a-f]{12})\)$"
 )
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+GIBIBYTE = 1024**3
+MINIMUM_CARGO_COMMIT_HEADROOM_BYTES = 3 * GIBIBYTE
 
 
 class LocalInstallerError(RuntimeError):
@@ -627,6 +629,59 @@ def _windows_powershell() -> Path:
     )
 
 
+def _require_cargo_commit_headroom() -> None:
+    script = _safe_path(
+        PROJECT_ROOT / "scripts" / "windows_commit_headroom.ps1",
+        "Windows commit-headroom helper",
+        directory=False,
+    )
+    result = _run(
+        _windows_powershell(),
+        [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-MinimumHeadroomBytes",
+            str(MINIMUM_CARGO_COMMIT_HEADROOM_BYTES),
+        ],
+        cwd=PROJECT_ROOT,
+        timeout=15,
+    )
+    _print_process_output(result)
+
+
+def _run_normal_focused_test(
+    source: Path, cargo_target: Path, jobs: int, test_filter: str
+) -> None:
+    _require_cargo_commit_headroom()
+    print(f"focused_test={test_filter}")
+    print("focused_test_profile=normal")
+    test_started = time.monotonic()
+    test_result = _run(
+        "just",
+        _just_test_arguments(test_filter),
+        cwd=source,
+        timeout=1200,
+        environment_overrides={
+            "CARGO_BUILD_JOBS": str(jobs),
+            "CARGO_TARGET_DIR": str(cargo_target),
+        },
+        removed_environment=(
+            "HERDR_BUILD_ID",
+            "HERDR_BUILD_COMMIT",
+            "HERDR_BUILD_FRESHNESS",
+            "HERDR_RELEASE_VERSION",
+        ),
+    )
+    _print_process_output(test_result)
+    _require_one_nextest_test(f"{test_result.stdout}\n{test_result.stderr}")
+    print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
+
+
 def _run_interactive_server_launch_probe(source: Path, runtime: Path) -> None:
     script = _safe_path(
         source / "scripts" / "windows_interactive_server_launch_probe.ps1",
@@ -879,36 +934,43 @@ def build(
         _run_interactive_server_launch_probe(source, bundle / "stage" / "herdr.exe")
     paths.output_path.parent.mkdir(parents=True, exist_ok=True)
     powershell = _windows_powershell()
-    started = time.monotonic()
-    result = _run(
-        powershell,
+    packager_arguments = [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(source / "scripts/package_windows_installer.ps1"),
+        "-StageDir",
+        str(bundle / "stage"),
+        "-LauncherExe",
+        str(bundle / "herdr-launcher.exe"),
+        "-InstallerHelperExe",
+        str(bundle / "herdr-installer-helper.exe"),
+        "-BuildId",
+        identity.build_id,
+        "-BuildFreshness",
+        identity.build_freshness,
+        "-ReleaseVersion",
+        "local",
+        "-BaseVersion",
+        identity.base_version,
+    ]
+    if options.product_name is not None:
+        packager_arguments.extend(["-ProductName", options.product_name])
+    packager_arguments.extend(
         [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(source / "scripts/package_windows_installer.ps1"),
-            "-StageDir",
-            str(bundle / "stage"),
-            "-LauncherExe",
-            str(bundle / "herdr-launcher.exe"),
-            "-InstallerHelperExe",
-            str(bundle / "herdr-installer-helper.exe"),
-            "-BuildId",
-            identity.build_id,
-            "-BuildFreshness",
-            identity.build_freshness,
-            "-ReleaseVersion",
-            "local",
-            "-BaseVersion",
-            identity.base_version,
             "-OutputPath",
             str(paths.output_path),
             "-NsisCacheDir",
             str(paths.nsis_cache),
-        ],
+        ]
+    )
+    started = time.monotonic()
+    result = _run(
+        powershell,
+        packager_arguments,
         cwd=source,
         timeout=300,
     )
@@ -920,6 +982,12 @@ def build(
             file=sys.stderr,
             end="" if result.stderr.endswith("\n") else "\n",
         )
+    selected_product_name = (
+        json.dumps(options.product_name)
+        if options.product_name is not None
+        else "packager-default"
+    )
+    print(f"product_name={selected_product_name}")
     print(f"elapsed_seconds={time.monotonic() - started:.3f}")
 
 
@@ -928,35 +996,37 @@ def release_precheck(options: argparse.Namespace) -> None:
     bundle = _safe_path(options.input_bundle, "--input-bundle", directory=True)
     identity = validate_bundle(source, bundle)
     output_root = _directory(FAULT_OUTPUT_ROOT, "installer fault output root")
+    precheck_arguments = [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(source / "scripts/windows_installer_fault_test.ps1"),
+        "-StageDir",
+        str(bundle / "stage"),
+        "-LauncherExe",
+        str(bundle / "herdr-launcher.exe"),
+        "-InstallerHelperExe",
+        str(bundle / "herdr-installer-helper.exe"),
+        "-BuildId",
+        identity.build_id,
+        "-BuildFreshness",
+        identity.build_freshness,
+        "-ReleaseVersion",
+        "local",
+        "-BaseVersion",
+        identity.base_version,
+    ]
+    if options.product_name is not None:
+        precheck_arguments.extend(["-ProductName", options.product_name])
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="run-", dir=output_root) as temporary:
+        precheck_arguments.extend(["-OutputDir", temporary])
         result = _run(
             _windows_powershell(),
-            [
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(source / "scripts/windows_installer_fault_test.ps1"),
-                "-StageDir",
-                str(bundle / "stage"),
-                "-LauncherExe",
-                str(bundle / "herdr-launcher.exe"),
-                "-InstallerHelperExe",
-                str(bundle / "herdr-installer-helper.exe"),
-                "-BuildId",
-                identity.build_id,
-                "-BuildFreshness",
-                identity.build_freshness,
-                "-ReleaseVersion",
-                "local",
-                "-BaseVersion",
-                identity.base_version,
-                "-OutputDir",
-                temporary,
-            ],
+            precheck_arguments,
             cwd=source,
             timeout=1800,
         )
@@ -964,7 +1034,22 @@ def release_precheck(options: argparse.Namespace) -> None:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
+    selected_product_name = (
+        json.dumps(options.product_name)
+        if options.product_name is not None
+        else "packager-default"
+    )
+    print(f"product_name={selected_product_name}")
     print(f"elapsed_seconds={time.monotonic() - started:.3f}")
+
+
+def test_one(options: argparse.Namespace) -> None:
+    source = _source_root(options.source_worktree)
+    cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
+    jobs = _available_cpu_count()
+    print(f"cargo_jobs={jobs}")
+    print(f"cargo_target={cargo_target}")
+    _run_normal_focused_test(source, cargo_target, jobs, options.test_filter)
 
 
 def candidate(options: argparse.Namespace) -> None:
@@ -1019,6 +1104,7 @@ def candidate(options: argparse.Namespace) -> None:
             argparse.Namespace(
                 source_worktree=source,
                 input_bundle=existing_bundle,
+                product_name=options.product_name,
             ),
             paths=paths,
             run_interactive_probe=True,
@@ -1039,25 +1125,11 @@ def candidate(options: argparse.Namespace) -> None:
         "HERDR_BUILD_FRESHNESS": build_freshness,
     }
     if options.test_filter is not None:
-        print(f"focused_test={options.test_filter}")
-        print("focused_test_profile=normal")
-        test_started = time.monotonic()
-        test_result = _run(
-            "just",
-            _just_test_arguments(options.test_filter),
-            cwd=source,
-            timeout=1200,
-            environment_overrides={
-                **build_environment,
-                "CARGO_BUILD_JOBS": str(jobs),
-                "CARGO_TARGET_DIR": str(cargo_target),
-            },
-            removed_environment=("HERDR_RELEASE_VERSION",),
+        _run_normal_focused_test(
+            source, cargo_target, jobs, options.test_filter
         )
-        _print_process_output(test_result)
-        _require_one_nextest_test(f"{test_result.stdout}\n{test_result.stderr}")
-        print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
     elif options.release_test_filter is not None:
+        _require_cargo_commit_headroom()
         print(f"focused_test={options.release_test_filter}")
         print("focused_test_profile=release")
         test_started = time.monotonic()
@@ -1073,6 +1145,7 @@ def candidate(options: argparse.Namespace) -> None:
         _require_one_focused_test(test_result.stdout)
         print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
 
+    _require_cargo_commit_headroom()
     cargo_started = time.monotonic()
     cargo_result = _run(
         "cargo",
@@ -1131,6 +1204,7 @@ def candidate(options: argparse.Namespace) -> None:
         argparse.Namespace(
             source_worktree=source,
             input_bundle=paths.input_root / build_id,
+            product_name=options.product_name,
         ),
         paths=paths,
         run_interactive_probe=True,
@@ -1151,10 +1225,28 @@ def _parser() -> argparse.ArgumentParser:
     build_command = commands.add_parser("build")
     build_command.add_argument("--source-worktree", required=True, type=Path)
     build_command.add_argument("--input-bundle", required=True, type=Path)
+    build_command.add_argument(
+        "--product-name",
+        help="validated runtime product and managed install-root name",
+    )
     build_command.add_argument("--isolated", action="store_true")
     precheck_command = commands.add_parser("release-precheck")
     precheck_command.add_argument("--source-worktree", required=True, type=Path)
     precheck_command.add_argument("--input-bundle", required=True, type=Path)
+    precheck_command.add_argument(
+        "--product-name",
+        help="runtime product name used by the installer under test",
+    )
+    test_command = commands.add_parser("test-one")
+    test_command.add_argument("--source-worktree", required=True, type=Path)
+    test_command.add_argument(
+        "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
+    )
+    test_command.add_argument(
+        "--test-filter",
+        required=True,
+        help="run one focused herdr test through the normal just test-one gate",
+    )
     candidate_command = commands.add_parser("candidate")
     candidate_command.add_argument("--source-worktree", required=True, type=Path)
     candidate_command.add_argument(
@@ -1168,6 +1260,10 @@ def _parser() -> argparse.ArgumentParser:
     candidate_test.add_argument(
         "--release-test-filter",
         help="run one focused herdr test in the release profile when that boundary is required",
+    )
+    candidate_command.add_argument(
+        "--product-name",
+        help="validated runtime product and managed install-root name",
     )
     candidate_command.add_argument(
         "--isolated",
@@ -1184,6 +1280,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "prepare": prepare,
             "build": build,
             "release-precheck": release_precheck,
+            "test-one": test_one,
             "candidate": candidate,
         }[options.command](options)
         return 0

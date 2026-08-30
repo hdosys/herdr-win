@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,14 +33,17 @@ from scripts.local_windows_installer import (
     _hashes,
     _isolated_candidate_paths,
     _just_test_arguments,
+    _parser,
     _prune_completed_candidate_outputs,
     _require_pushed_development_source,
     _require_one_focused_test,
     _require_one_nextest_test,
+    _run_normal_focused_test,
     _source_fingerprint,
     _source_branch,
     candidate,
     parse_identity,
+    test_one,
 )
 
 
@@ -103,6 +107,27 @@ class LocalWindowsInstallerTests(unittest.TestCase):
     def test_default_output_is_one_short_replaceable_candidate_path(self) -> None:
         self.assertEqual(OUTPUT_PATH.name, "herdr-win_local_candidate_setup.exe")
         self.assertEqual(DEFAULT_PATHS.output_path, OUTPUT_PATH)
+
+    def test_packaging_commands_expose_one_product_name_input(self) -> None:
+        parser = _parser()
+        common = ["--source-worktree", "C:/development"]
+        for command, arguments in (
+            (
+                "build",
+                [*common, "--input-bundle", "C:/bundle"],
+            ),
+            (
+                "release-precheck",
+                [*common, "--input-bundle", "C:/bundle"],
+            ),
+            ("candidate", common),
+        ):
+            defaults = parser.parse_args([command, *arguments])
+            custom = parser.parse_args(
+                [command, *arguments, "--product-name", "Herdr Quality Test"]
+            )
+            self.assertIsNone(defaults.product_name)
+            self.assertEqual(custom.product_name, "Herdr Quality Test")
 
     def test_isolated_candidate_paths_share_one_build_scoped_root(self) -> None:
         paths = _isolated_candidate_paths(BUILD_ID)
@@ -285,6 +310,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 cargo_target_dir=root / "cargo-target",
                 test_filter=None,
                 release_test_filter=None,
+                product_name="Herdr Quality Test",
                 isolated=False,
             )
 
@@ -326,6 +352,9 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             version_gate.assert_called_once_with(source)
             package.assert_called_once()
             self.assertEqual(package.call_args.args[0].input_bundle, bundle)
+            self.assertEqual(
+                package.call_args.args[0].product_name, "Herdr Quality Test"
+            )
             self.assertEqual(package.call_args.kwargs["paths"], paths)
             self.assertTrue(package.call_args.kwargs["run_interactive_probe"])
             prune.assert_called_once_with(paths, BUILD_ID, isolated=False)
@@ -340,6 +369,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 cargo_target_dir=root / "cargo-target",
                 test_filter=None,
                 release_test_filter=None,
+                product_name=None,
                 isolated=False,
             )
             with (
@@ -382,6 +412,78 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(LocalInstallerError, "non-option test filter"):
             _just_test_arguments("--all")
+
+    def test_normal_focused_test_uses_the_shared_target_without_build_identity(
+        self,
+    ) -> None:
+        source = Path("C:/development")
+        cargo_target = Path("C:/cargo-target")
+        completed = subprocess.CompletedProcess(
+            ["just", "test-one", "exact_test_filter"],
+            0,
+            stdout="Summary [   0.038s] 1 test run: 1 passed, 2693 skipped\n",
+            stderr="",
+        )
+        with (
+            patch(
+                "scripts.local_windows_installer._require_cargo_commit_headroom"
+            ) as headroom,
+            patch(
+                "scripts.local_windows_installer._run", return_value=completed
+            ) as run,
+        ):
+            _run_normal_focused_test(
+                source, cargo_target, 16, "exact_test_filter"
+            )
+
+        headroom.assert_called_once_with()
+        self.assertEqual(run.call_args.kwargs["cwd"], source)
+        self.assertEqual(
+            run.call_args.kwargs["environment_overrides"],
+            {
+                "CARGO_BUILD_JOBS": "16",
+                "CARGO_TARGET_DIR": str(cargo_target),
+            },
+        )
+        self.assertEqual(
+            run.call_args.kwargs["removed_environment"],
+            (
+                "HERDR_BUILD_ID",
+                "HERDR_BUILD_COMMIT",
+                "HERDR_BUILD_FRESHNESS",
+                "HERDR_RELEASE_VERSION",
+            ),
+        )
+
+    def test_pre_push_command_reuses_the_candidate_normal_test_owner(self) -> None:
+        source = Path("C:/development")
+        cargo_target = Path("C:/cargo-target")
+        options = argparse.Namespace(
+            source_worktree=source,
+            cargo_target_dir=cargo_target,
+            test_filter="exact_test_filter",
+        )
+        with (
+            patch(
+                "scripts.local_windows_installer._source_root", return_value=source
+            ),
+            patch(
+                "scripts.local_windows_installer._directory",
+                return_value=cargo_target,
+            ),
+            patch(
+                "scripts.local_windows_installer._available_cpu_count",
+                return_value=16,
+            ),
+            patch(
+                "scripts.local_windows_installer._run_normal_focused_test"
+            ) as focused_test,
+        ):
+            test_one(options)
+
+        focused_test.assert_called_once_with(
+            source, cargo_target, 16, "exact_test_filter"
+        )
 
     def test_candidate_release_focused_test_shares_windows_target_and_jobs(self) -> None:
         cargo_target = Path("C:/cargo-target")

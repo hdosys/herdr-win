@@ -183,7 +183,7 @@ configuration repository.
   `scripts/delta_workflow.py`, `scripts/local_windows_installer.py`, and their focused
   tests, without a second integration-version registry.
 
-- **Status: proposed. Share the Candidate normal-test Cargo target with the
+- **Status: done. Share the Candidate normal-test Cargo target with the
   pre-push focused Rust gate.** Expose one repository-owned command that runs the
   required pre-push `just test-one` boundary against Candidate's stable Cargo
   target, so Candidate can rerun the same test after push without recompiling its
@@ -191,10 +191,13 @@ configuration repository.
   Candidate compiled the same Windows test binary in a separate target for 46.750
   seconds before its 6.804-second test. A later eight-test gate reused its cache and
   finished in 7.401 seconds, while Candidate recompiled the same normal-profile
-  binary for 63 seconds and spent 71.711 seconds on that boundary. Reusing the cache
-  should remove roughly 45 to 60 seconds without skipping either gate. Owner:
-  `scripts/local_windows_installer.py`, `justfile`, and the Candidate procedure in
-  `CONTRIBUTING.md`.
+  binary for 63 seconds and spent 71.711 seconds on that boundary. The shared
+  `test-one` owner now clears build-identity variables and supplies Candidate's
+  stable target to the existing Just recipe. The first exact Windows test compiled
+  in 123.190 seconds; the final unchanged integrated rerun completed in 3.936
+  seconds, with Cargo itself taking 0.91 seconds. Owner:
+  `scripts/local_windows_installer.py`, the
+  existing `justfile` recipe, and the Candidate procedure in `CONTRIBUTING.md`.
 
 - **Status: blocked. Exercise restored OpenCode roots in the native split
   probe.** Start the existing adaptive-split acceptance from a persisted OpenCode
@@ -215,7 +218,7 @@ configuration repository.
   remains the deterministic split-logic owner. Owner: the OpenCode native Candidate
   acceptance boundary, reusing its current split probe rather than a second harness.
 
-- **Status: proposed. Fail local Candidate builds before Cargo when Windows
+- **Status: done. Fail local Candidate builds before Cargo when Windows
   commit headroom is exhausted.** Read the Windows committed-bytes and commit-limit
   counters before starting the nested all-core Cargo and Zig build. When commit
   charge is already at a measured unsafe threshold, stop with the current headroom
@@ -224,11 +227,17 @@ configuration repository.
   seconds failing across unrelated Zig 0.15.2 units and its readable standard
   library while the Sandbox was at 35.71/38.65 GiB committed with a full pagefile.
   Closing only user-authorized idle workspaces lowered charge to 18.85/36 GiB, and
-  the same 16-job release build then succeeded in 114.792 seconds. Owner:
-  `scripts/local_windows_installer.py`, focused preflight tests, and the Candidate
+  the same 16-job release build then succeeded in 114.792 seconds. A bounded native
+  Windows helper now reads `GetPerformanceInfo`, reports the five largest
+  private-memory process classes, and blocks at or below the measured unsafe 3 GiB
+  headroom without terminating anything. The final real snapshot completed in 0.963
+  seconds with 14.06 GiB headroom; a forced-threshold run exercised the complete
+  rejection diagnostic in 1.060 seconds without starting Cargo or terminating a
+  process. Owner: `scripts/local_windows_installer.py`,
+  `scripts/windows_commit_headroom.ps1`, focused preflight tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Expose validated packaging identity inputs through the
+- **Status: done. Expose validated packaging identity inputs through the
   canonical local installer owner.** Let `local_windows_installer.py` pass an
   explicit product name to the existing packager and record that input in its
   validated build invocation, so changing only packaging presentation can reuse an
@@ -238,6 +247,9 @@ configuration repository.
   packaging-only correction changed the source fingerprint and forced a 143.767-second
   Cargo rebuild plus 194.754 seconds total to replace the canonical installer. This
   is an explicit build input, not the previously declined source-exclusion
-  classifier. Owner: `scripts/local_windows_installer.py`,
+  classifier. `build`, `candidate`, and `release-precheck` now forward an explicit
+  `--product-name`; omission leaves the default with the materialized packager. A
+  real custom-name installer reused the current bundle and validated in 26.248
+  seconds without Cargo. Owner: `scripts/local_windows_installer.py`,
   `scripts/package_windows_installer.ps1`, focused identity tests, and the Candidate
   procedure in `CONTRIBUTING.md`.

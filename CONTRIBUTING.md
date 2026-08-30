@@ -202,21 +202,34 @@ development tree, and push `origin/candidate/development`. Candidate packaging f
 compares every changed embedded integration with the accepted queue, requires a
 higher migration version, and requires its Rust constant to match. This permits
 multiple cumulative Candidate generations before patch finalization. After a
-Rust-owned source change, run one exact focused behavior check while building the
-candidate:
+Rust-owned source change, run one exact focused behavior check before commit through
+the control checkout's shared Candidate target:
 
 ```powershell
 $testFilter = "<one exact test filter>"
+python scripts/local_windows_installer.py test-one `
+  --source-worktree <development-worktree> `
+  --test-filter $testFilter
+```
+
+After committing and pushing that exact source, rerun the same filter while building
+the candidate:
+
+```powershell
 python scripts/local_windows_installer.py candidate `
   --source-worktree <development-worktree> `
   --test-filter $testFilter
 ```
 
-The command keeps one Sandbox-local Cargo target and passes the detected logical
-processor count through the build. `--test-filter` runs the ordinary behavior check
-through the existing `just test-one` iteration gate before compiling only the three
-packaged release binaries. Use `--release-test-filter` instead only when the selected
-test's signal depends on optimization or another release-profile boundary. After
+Both commands keep one Sandbox-local Cargo target, remove local build-identity
+variables from the normal test profile, and pass the detected logical processor count
+through `just test-one`. The Candidate rerun therefore verifies the pushed source
+without compiling the same normal test binary into a second target. Before every
+Cargo test or build phase, the control owner reads the native Windows commit counters.
+At or below 3 GiB of remaining commit headroom it stops before Cargo, reports the
+largest private-memory process classes, and never terminates a process. Use
+`--release-test-filter` instead only when the selected test's signal depends on
+optimization or another release-profile boundary. After
 validating the exact input bundle and before packaging, Candidate exercises its built
 runtime from `cmd.exe` through the Windows interactive Task Scheduler server-launch
 path. The probe places only that command shell in a bounded kill-on-close job, then
@@ -282,6 +295,20 @@ python scripts/local_windows_installer.py build `
   --source-worktree <materialized-source-worktree> `
   --input-bundle <reported-input-bundle>
 ```
+
+When the runtime product identity itself is the packaging change, pass the explicit
+validated input without changing or rebuilding the runtime bundle:
+
+```powershell
+python scripts/local_windows_installer.py build `
+  --source-worktree <materialized-source-worktree> `
+  --input-bundle <reported-input-bundle> `
+  --product-name "<runtime product name>"
+```
+
+`candidate` accepts the same optional input, and `release-precheck` must receive the
+same value when it checks that installer. Omitting it keeps the current `Herdr`
+default. The materialized packager remains the one validation owner.
 
 Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtime
 and launcher identity, then delegates to the materialized source's existing NSIS

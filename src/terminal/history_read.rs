@@ -57,18 +57,22 @@ pub(crate) fn merge_scrolled_up(
     let Some(shift) = best_upward_shift(&previous_text, &next_text) else {
         return UpwardMerge::Unaligned;
     };
-    let Some(boundary) = (0..previous_text.len().saturating_sub(shift)).find_map(|index| {
-        let next_index = index + shift;
-        (!previous_text[index].is_empty() && previous_text[index] == next_text[next_index])
-            .then_some(next_index)
-    }) else {
+    let Some((alignment_start, boundary)) = (0..previous_text.len().saturating_sub(shift))
+        .find_map(|index| {
+            let next_index = index + shift;
+            (!previous_text[index].is_empty() && previous_text[index] == next_text[next_index])
+                .then_some((index, next_index))
+        })
+    else {
         return UpwardMerge::Unaligned;
     };
     let added: Vec<_> = next.rows[..boundary]
         .iter()
         .enumerate()
         .filter(|(index, _)| {
-            next_text[*index].is_empty() || previous_text.get(*index) != Some(&next_text[*index])
+            *index >= alignment_start
+                || next_text[*index].is_empty()
+                || previous_text.get(*index) != Some(&next_text[*index])
         })
         .map(|(_, row)| row.clone())
         .collect();
@@ -258,6 +262,22 @@ mod tests {
         assert_eq!(
             row_identities(&history),
             ["line 2", "line 3", "sticky", "line 4", "line 5", "line 6", "line 7"]
+        );
+    }
+
+    #[test]
+    fn repeated_scrolled_rows_are_not_mistaken_for_a_fixed_header() {
+        let previous = snapshot(&["sticky", "same", "same", "newer"]);
+        let next = snapshot(&["sticky", "same", "same", "same"]);
+        let mut history = previous.rows.clone();
+
+        assert_eq!(
+            merge_scrolled_up(&mut history, &previous, &next),
+            UpwardMerge::Advanced { rows: 1 }
+        );
+        assert_eq!(
+            row_identities(&history),
+            ["same", "sticky", "same", "same", "newer"]
         );
     }
 

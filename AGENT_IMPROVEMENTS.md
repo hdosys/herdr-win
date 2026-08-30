@@ -253,3 +253,14 @@ configuration repository.
   seconds without Cargo. Owner: `scripts/local_windows_installer.py`,
   `scripts/package_windows_installer.ps1`, focused identity tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Include captured issue semantics in offline triage
+  partitions.** Pass each issue title and one concise behavior summary with its
+  number when a read-only investigator cannot query upstream. Evidence: four
+  number-only Windows issue partitions searched local source, the ledger, and
+  3,278 commit objects; one partition spent 119.4 seconds and still returned most
+  entries as uncertain because issue semantics were absent. Reusing the already
+  authorized title capture exposed direct owners and enabled three bounded fixes.
+  Expected benefit: avoid broad history pickaxe searches and reach source-owner
+  classification sooner without expanding upstream access. Owner: the Windows
+  issue triage partition procedure and its active checkpoint prompt.

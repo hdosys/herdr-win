@@ -1123,7 +1123,7 @@ fn resolved_token_spans(
             let previous = &resolved[visible_indices[position - 1]];
             spans.push(Span::styled(
                 tokens::separator(previous, token),
-                Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+                Style::default().fg(p.overlay0),
             ));
         }
         match &token.kind {
@@ -1305,9 +1305,8 @@ fn render_workspace_list(
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
         let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
-        let state_text_style = Style::default()
-            .fg(state_label_color(display_state, display_seen, p))
-            .add_modifier(Modifier::DIM);
+        let state_text_style =
+            Style::default().fg(state_label_color(display_state, display_seen, p));
         let branch_style = Style::default().fg(if selected || is_active {
             p.mauve
         } else {
@@ -1511,12 +1510,8 @@ fn render_agent_detail(
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };
-        let status_style = if is_active {
-            Style::default().fg(label_color)
-        } else {
-            Style::default().fg(label_color).add_modifier(Modifier::DIM)
-        };
-        let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+        let status_style = Style::default().fg(label_color);
+        let agent_style = Style::default().fg(p.overlay0);
         let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
@@ -1691,17 +1686,17 @@ mod tests {
         let agent_x = find_symbol_x(buffer, body.y + 1, body.width, "p");
         let agent_style = buffer[(agent_x, body.y + 1)].style();
         assert_eq!(agent_style.fg, Some(app.palette.overlay0));
-        assert!(agent_style.add_modifier.contains(Modifier::DIM));
+        assert!(!agent_style.add_modifier.contains(Modifier::DIM));
         assert!(!agent_style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(agent_style.bg, Some(app.palette.active_row_bg));
     }
 
     #[test]
-    fn occurrence_false_removes_default_workspace_bold_and_agent_dim() {
+    fn occurrence_style_overrides_workspace_bold_and_agent_dim() {
         let config: crate::config::Config = toml::from_str(
             r##"
 [ui.sidebar.agents]
-rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }]]
+rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = true }]]
 "##,
         )
         .unwrap();
@@ -1731,7 +1726,7 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         assert_eq!(workspace.fg, Some(app.palette.text));
         assert!(!workspace.add_modifier.contains(Modifier::BOLD));
         assert_eq!(agent.fg, Some(app.palette.overlay0));
-        assert!(!agent.add_modifier.contains(Modifier::DIM));
+        assert!(agent.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -1922,7 +1917,7 @@ rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspa
             assert_eq!(style.bg, Some(app.palette.active_row_bg));
         }
         assert_eq!(separator.fg, Some(app.palette.overlay0));
-        assert!(separator.add_modifier.contains(Modifier::DIM));
+        assert!(!separator.add_modifier.contains(Modifier::DIM));
         assert!(!separator.add_modifier.contains(Modifier::BOLD));
         assert_eq!(separator.bg, Some(app.palette.active_row_bg));
     }

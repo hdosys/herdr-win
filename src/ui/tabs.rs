@@ -398,10 +398,7 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
                 base.add_modifier(Modifier::BOLD)
             }
         } else if tab.is_auto_named() {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.surface0)
-                .add_modifier(Modifier::DIM)
+            Style::default().fg(p.overlay0).bg(p.surface0)
         } else {
             Style::default().fg(p.overlay1).bg(p.surface0)
         };
@@ -720,9 +717,10 @@ mod tests {
     }
 
     #[test]
-    fn active_auto_named_tab_keeps_readable_weight() {
+    fn auto_named_tabs_keep_readable_weight() {
         let mut app = AppState::test_new();
-        let ws = Workspace::test_new("test");
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None);
 
         app.workspaces = vec![ws];
         app.active = Some(0);
@@ -736,12 +734,18 @@ mod tests {
             .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
             .unwrap();
 
-        let tab_rect = app.view.tab_hit_areas[0];
-        let style = terminal.backend().buffer()[(tab_rect.x + 1, tab_rect.y)].style();
+        let active_rect = app.view.tab_hit_areas[0];
+        let inactive_rect = app.view.tab_hit_areas[1];
+        let buffer = terminal.backend().buffer();
+        let active_style = buffer[(active_rect.x + 1, active_rect.y)].style();
+        let inactive_style = buffer[(inactive_rect.x + 1, inactive_rect.y)].style();
 
-        assert_eq!(style.bg, Some(app.palette.accent));
-        assert!(!style.add_modifier.contains(Modifier::DIM));
-        assert!(!style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(active_style.bg, Some(app.palette.accent));
+        assert!(!active_style.add_modifier.contains(Modifier::DIM));
+        assert!(!active_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(inactive_style.fg, Some(app.palette.overlay0));
+        assert_eq!(inactive_style.bg, Some(app.palette.surface0));
+        assert!(!inactive_style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

@@ -76,6 +76,11 @@ pub(crate) fn devin_dir() -> io::Result<PathBuf> {
         return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("devin"));
     }
 
+    #[cfg(windows)]
+    if let Some(value) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(value).join("devin"));
+    }
+
     Ok(home_dir()?.join(".config").join("devin"))
 }
 

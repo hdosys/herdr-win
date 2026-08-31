@@ -98,12 +98,14 @@ configuration repository.
   server detach filter passed its native Windows test through the shared recipe.
   Owner: `justfile`.
 
-- **Status: done. Give public preview-manifest propagation a sufficient bounded
-  release-ready gate.** The exact raw branch URL now receives 18 bounded attempts
-  instead of 12 before publication is declared stale. Evidence: the prior URL
-  remained stale for the complete 110-second window and exposed the correct build
-  shortly afterward; the extended workflow passed focused inventory and Actionlint
-  checks. Owner: `.github/workflows/release.yml`.
+- **Status: proposed. Retier public preview-manifest convergence to its observed
+  cache window.** Keep the real fixed updater URL as the acceptance boundary, but
+  allow enough bounded retries for GitHub's branch-content cache to converge before
+  declaring a published release stale. Evidence: all 18 ten-second attempts expired
+  for immutable release `2026.08.31.4`; the same URL exposed the correct build later,
+  and the isolated updater then returned `already up to date (2026.08.31.4)`.
+  Expected benefit: avoid false-failed immutable releases without weakening the
+  public updater-path check. Owner: `.github/workflows/release.yml`.
 
 - **Status: done. Document one clean sparse checkout for WinGet PR updates.** The
   contribution procedure now starts sparse mode in the initial single-branch clone,

@@ -835,6 +835,89 @@ mod tests {
         assert!(script_was_deleted);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn remote_sidecar_removal_waits_for_the_server_lease_to_close() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "herdr-sidecar-removal-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("payload.txt"), b"payload").unwrap();
+        std::fs::write(root.join(".lease"), b"").unwrap();
+        let lease = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(1 | 2)
+            .open(root.join(".lease"))
+            .unwrap();
+
+        let invocation = format!(
+            "Remove-HerdrRemoteSidecar -Path {} -LeaseWaitMilliseconds 5000",
+            powershell_quote(root.to_str().unwrap())
+        );
+        let script_path = root.with_extension("ps1");
+        std::fs::write(
+            &script_path,
+            powershell_script_file_bytes(&powershell_bootstrap_script(&invocation)),
+        )
+        .unwrap();
+        let command = powershell_script_file_command(script_path.to_str().unwrap());
+        let encoded = command.split_whitespace().last().unwrap();
+        let mut child = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                encoded,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if child.try_wait().unwrap().is_some() {
+            let output = child.wait_with_output().unwrap();
+            drop(lease);
+            let _ = std::fs::remove_dir_all(&root);
+            let _ = std::fs::remove_file(&script_path);
+            panic!(
+                "sidecar removal did not wait for the held lease: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        drop(lease);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(7);
+        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if child.try_wait().unwrap().is_none() {
+            let _ = child.kill();
+        }
+        let output = child.wait_with_output().unwrap();
+        let root_removed = !root.exists();
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&script_path);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(root_removed);
+    }
+
     fn decoded_powershell_command(command: &str) -> String {
         let encoded = command.split_whitespace().last().unwrap();
         decode_powershell_script(encoded)

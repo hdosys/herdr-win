@@ -11,7 +11,10 @@ function Assert-HerdrRemotePlainDirectory {
 }
 
 function Remove-HerdrRemoteSidecar {
-    param([Parameter(Mandatory = $true)][string] $Path)
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [ValidateRange(0, 30000)][int] $LeaseWaitMilliseconds = 0
+    )
 
     if (-not [IO.Directory]::Exists($Path)) {
         return
@@ -22,12 +25,24 @@ function Remove-HerdrRemoteSidecar {
         throw "remote sidecar is missing its lease: $Path"
     }
 
-    $lease = [IO.File]::Open(
-        $leasePath,
-        [IO.FileMode]::Open,
-        [IO.FileAccess]::ReadWrite,
-        [IO.FileShare]::None
-    )
+    $lease = $null
+    $leaseWait = [Diagnostics.Stopwatch]::StartNew()
+    while ($null -eq $lease) {
+        try {
+            $lease = [IO.File]::Open(
+                $leasePath,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::None
+            )
+        } catch [IO.IOException] {
+            $nativeError = $_.Exception.HResult -band 0xffff
+            if ($nativeError -ne 32 -or $leaseWait.ElapsedMilliseconds -ge $LeaseWaitMilliseconds) {
+                throw
+            }
+            Start-Sleep -Milliseconds 50
+        }
+    }
     try {
         foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
             if ($child.Name -eq '.lease') {
@@ -189,7 +204,7 @@ function Invoke-HerdrRemoteActivateInstall {
     }
 
     if ([IO.Directory]::Exists($Destination)) {
-        Remove-HerdrRemoteSidecar -Path $Destination
+        Remove-HerdrRemoteSidecar -Path $Destination -LeaseWaitMilliseconds 10000
     }
     [IO.Directory]::Move($Stage, $Destination)
 

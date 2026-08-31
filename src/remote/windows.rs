@@ -837,7 +837,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn remote_sidecar_removal_waits_for_the_server_lease_to_close() {
+    fn remote_sidecar_removal_waits_for_runtime_files_to_unlock() {
         use std::os::windows::fs::OpenOptionsExt as _;
 
         let root = std::env::temp_dir().join(format!(
@@ -851,6 +851,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("payload.txt"), b"payload").unwrap();
+        let locked_executable = root.join("locked.exe");
+        std::fs::copy(
+            std::path::Path::new(&std::env::var("SystemRoot").unwrap())
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe"),
+            &locked_executable,
+        )
+        .unwrap();
+        let mut locked_process = std::process::Command::new(&locked_executable)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
         std::fs::write(root.join(".lease"), b"").unwrap();
         let lease = std::fs::OpenOptions::new()
             .read(true)
@@ -860,7 +883,7 @@ mod tests {
             .unwrap();
 
         let invocation = format!(
-            "Remove-HerdrRemoteSidecar -Path {} -LeaseWaitMilliseconds 5000",
+            "Remove-HerdrRemoteSidecar -Path {} -ReleaseWaitMilliseconds 5000",
             powershell_quote(root.to_str().unwrap())
         );
         let script_path = root.with_extension("ps1");
@@ -885,18 +908,23 @@ mod tests {
             .spawn()
             .unwrap();
 
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        drop(lease);
+        std::thread::sleep(std::time::Duration::from_millis(1500));
         if child.try_wait().unwrap().is_some() {
             let output = child.wait_with_output().unwrap();
-            drop(lease);
+            let _ = locked_process.kill();
+            let _ = locked_process.wait();
             let _ = std::fs::remove_dir_all(&root);
             let _ = std::fs::remove_file(&script_path);
             panic!(
-                "sidecar removal did not wait for the held lease: {}",
+                "sidecar removal did not wait for the locked runtime: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        drop(lease);
+        assert!(locked_process.try_wait().unwrap().is_none());
+        locked_process.kill().unwrap();
+        locked_process.wait().unwrap();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(7);
         while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {

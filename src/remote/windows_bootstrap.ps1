@@ -10,10 +10,36 @@ function Assert-HerdrRemotePlainDirectory {
     }
 }
 
+function Remove-HerdrRemoteFile {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][Diagnostics.Stopwatch] $ReleaseWait,
+        [ValidateRange(0, 30000)][int] $ReleaseWaitMilliseconds = 0
+    )
+
+    while ($true) {
+        try {
+            [IO.File]::Delete($Path)
+            return
+        } catch {
+            $cause = $_.Exception.GetBaseException()
+            $nativeError = $cause.HResult -band 0xffff
+            $transientRelease =
+                ($cause -is [UnauthorizedAccessException] -or $cause -is [IO.IOException]) -and
+                $nativeError -in @(5, 32, 33)
+            if (-not $transientRelease -or
+                $ReleaseWait.ElapsedMilliseconds -ge $ReleaseWaitMilliseconds) {
+                throw
+            }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+}
+
 function Remove-HerdrRemoteSidecar {
     param(
         [Parameter(Mandatory = $true)][string] $Path,
-        [ValidateRange(0, 30000)][int] $LeaseWaitMilliseconds = 0
+        [ValidateRange(0, 30000)][int] $ReleaseWaitMilliseconds = 0
     )
 
     if (-not [IO.Directory]::Exists($Path)) {
@@ -26,7 +52,7 @@ function Remove-HerdrRemoteSidecar {
     }
 
     $lease = $null
-    $leaseWait = [Diagnostics.Stopwatch]::StartNew()
+    $releaseWait = [Diagnostics.Stopwatch]::StartNew()
     while ($null -eq $lease) {
         try {
             $lease = [IO.File]::Open(
@@ -37,7 +63,8 @@ function Remove-HerdrRemoteSidecar {
             )
         } catch [IO.IOException] {
             $nativeError = $_.Exception.HResult -band 0xffff
-            if ($nativeError -ne 32 -or $leaseWait.ElapsedMilliseconds -ge $LeaseWaitMilliseconds) {
+            if ($nativeError -ne 32 -or
+                $releaseWait.ElapsedMilliseconds -ge $ReleaseWaitMilliseconds) {
                 throw
             }
             Start-Sleep -Milliseconds 50
@@ -52,9 +79,15 @@ function Remove-HerdrRemoteSidecar {
                 throw "unsafe remote sidecar child: $($child.FullName)"
             }
             if ($child.PSIsContainer) {
-                Remove-HerdrRemoteTree -Path $child.FullName
+                Remove-HerdrRemoteTree `
+                    -Path $child.FullName `
+                    -ReleaseWait $releaseWait `
+                    -ReleaseWaitMilliseconds $ReleaseWaitMilliseconds
             } else {
-                [IO.File]::Delete($child.FullName)
+                Remove-HerdrRemoteFile `
+                    -Path $child.FullName `
+                    -ReleaseWait $releaseWait `
+                    -ReleaseWaitMilliseconds $ReleaseWaitMilliseconds
             }
         }
     } finally {
@@ -65,10 +98,17 @@ function Remove-HerdrRemoteSidecar {
 }
 
 function Remove-HerdrRemoteTree {
-    param([Parameter(Mandatory = $true)][string] $Path)
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Diagnostics.Stopwatch] $ReleaseWait = $null,
+        [ValidateRange(0, 30000)][int] $ReleaseWaitMilliseconds = 0
+    )
 
     if (-not [IO.Directory]::Exists($Path)) {
         return
+    }
+    if ($null -eq $ReleaseWait) {
+        $ReleaseWait = [Diagnostics.Stopwatch]::StartNew()
     }
     Assert-HerdrRemotePlainDirectory -Path $Path
     foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
@@ -76,9 +116,15 @@ function Remove-HerdrRemoteTree {
             throw "unsafe remote staging child: $($child.FullName)"
         }
         if ($child.PSIsContainer) {
-            Remove-HerdrRemoteTree -Path $child.FullName
+            Remove-HerdrRemoteTree `
+                -Path $child.FullName `
+                -ReleaseWait $ReleaseWait `
+                -ReleaseWaitMilliseconds $ReleaseWaitMilliseconds
         } else {
-            [IO.File]::Delete($child.FullName)
+            Remove-HerdrRemoteFile `
+                -Path $child.FullName `
+                -ReleaseWait $ReleaseWait `
+                -ReleaseWaitMilliseconds $ReleaseWaitMilliseconds
         }
     }
     [IO.Directory]::Delete($Path, $false)
@@ -204,7 +250,7 @@ function Invoke-HerdrRemoteActivateInstall {
     }
 
     if ([IO.Directory]::Exists($Destination)) {
-        Remove-HerdrRemoteSidecar -Path $Destination -LeaseWaitMilliseconds 10000
+        Remove-HerdrRemoteSidecar -Path $Destination -ReleaseWaitMilliseconds 10000
     }
     [IO.Directory]::Move($Stage, $Destination)
 

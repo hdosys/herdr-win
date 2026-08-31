@@ -1,15 +1,15 @@
-From d2a4173707a8d92581306608b665ee86bb36cde4 Mon Sep 17 00:00:00 2001
+From b8f29762a2b68ee5e3fbe1bedd483bbcab702e89 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Wed, 5 Aug 2026 09:38:50 +0200
-Subject: [PATCH 5/11] fix(security): harden curl transfers
+Subject: [PATCH 5/17] fix(security): harden curl transfers
 
 Ignore user curl configuration, require TLS 1.2+ HTTPS for initial and redirected runtime transfers, cap redirects, disable URL globbing, and pass each URL as data rather than a possible option.
 ---
  src/detect/manifest_update.rs | 21 ++++++++---
  src/noninteractive_process.rs | 65 +++++++++++++++++++++++++++++++++--
  src/remote/attach.rs          |  9 ++---
- src/update.rs                 | 27 ++++-----------
- 4 files changed, 90 insertions(+), 32 deletions(-)
+ src/update.rs                 | 14 +++-----
+ 4 files changed, 88 insertions(+), 21 deletions(-)
 
 diff --git a/src/detect/manifest_update.rs b/src/detect/manifest_update.rs
 index 362dd9060c860e58cb8012c97d26351e3b3bdabe..d79458265968815931b5423a8268ec5ae0eeef39 100644
@@ -133,10 +133,10 @@ index 98198dce5aba1bd7f158e6894c41033a773ebf85..c296d30ba90e0cd50f541e26707de7c0
 +    }
  }
 diff --git a/src/remote/attach.rs b/src/remote/attach.rs
-index db25bae5bdedea1e65414c40d377e59dae53d0fe..b221b5d2f697d740010d3eda0656d3afff9587f4 100644
+index 69421870afdd1cb8ecbd475207fcd7cfbca3897a..5c244e4b0d42a40976cbd77a87c89689980ee505 100644
 --- a/src/remote/attach.rs
 +++ b/src/remote/attach.rs
-@@ -2780,10 +2780,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -2864,10 +2864,9 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  
      let dir = private_download_dir(&asset_key)?;
      let path = dir.join("herdr.tmp");
@@ -149,7 +149,7 @@ index db25bae5bdedea1e65414c40d377e59dae53d0fe..b221b5d2f697d740010d3eda0656d3af
          .status()
          .map_err(|err| io::Error::new(err.kind(), format!("download failed: {err}")))?;
      if !status.success() {
-@@ -2830,9 +2829,8 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
+@@ -2914,9 +2913,8 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
  }
  
  fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
@@ -160,7 +160,7 @@ index db25bae5bdedea1e65414c40d377e59dae53d0fe..b221b5d2f697d740010d3eda0656d3af
              "-H",
              "Cache-Control: no-cache",
              "--retry",
-@@ -2841,7 +2839,6 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
+@@ -2925,7 +2923,6 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
              "10",
              "--max-time",
              "20",
@@ -169,10 +169,10 @@ index db25bae5bdedea1e65414c40d377e59dae53d0fe..b221b5d2f697d740010d3eda0656d3af
          .output()
          .map_err(|err| io::Error::new(err.kind(), format!("curl failed: {err}")))?;
 diff --git a/src/update.rs b/src/update.rs
-index 353809fb50f341c7c9c8ae95f7186f5f3037ab32..5aa5207ded5f4b7da4f484b48cd33f8c19fe1a94 100644
+index 2cad5a08451c20d555fcdafc231e25d1871ccb18..5b329a94bffcdc10b561677f4ed5c4ba7c8daaf0 100644
 --- a/src/update.rs
 +++ b/src/update.rs
-@@ -399,9 +399,8 @@ fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
+@@ -287,9 +287,8 @@ fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
  where
      T: serde::de::DeserializeOwned,
  {
@@ -183,7 +183,7 @@ index 353809fb50f341c7c9c8ae95f7186f5f3037ab32..5aa5207ded5f4b7da4f484b48cd33f8c
              "-H",
              "Cache-Control: no-cache",
              "--retry",
-@@ -410,7 +409,6 @@ where
+@@ -298,7 +297,6 @@ where
              "10",
              "--max-time",
              "20",
@@ -191,27 +191,7 @@ index 353809fb50f341c7c9c8ae95f7186f5f3037ab32..5aa5207ded5f4b7da4f484b48cd33f8c
          ])
          .output()
          .map_err(|e| format!("curl failed: {e}"))?;
-@@ -724,17 +722,8 @@ fn homebrew_update_from_formula_json(
- fn check_homebrew_latest() -> Result<Option<Version>, String> {
-     let current = Version::current();
- 
--    let output = crate::noninteractive_process::curl_command()
--        .args([
--            "-sfL",
--            "--retry",
--            "2",
--            "--connect-timeout",
--            "5",
--            "--max-time",
--            "10",
--            HOMEBREW_FORMULA_API_URL,
--        ])
-+    let output = crate::noninteractive_process::curl_command(HOMEBREW_FORMULA_API_URL)
-+        .args(["--retry", "2", "--connect-timeout", "5", "--max-time", "10"])
-         .output()
-         .map_err(|e| format!("curl failed: {e}"))?;
- 
-@@ -874,10 +863,9 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
+@@ -599,10 +597,9 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
      let tmp_path = parent.join(format!(".herdr-update-{}.tmp", std::process::id()));
  
      // Download the exact asset URL (pinned to the release we checked)
@@ -224,7 +204,7 @@ index 353809fb50f341c7c9c8ae95f7186f5f3037ab32..5aa5207ded5f4b7da4f484b48cd33f8c
          .status()
          .map_err(|e| format!("download failed: {e}"))?;
  
-@@ -987,10 +975,9 @@ fn download_windows_installer(release: &ReleaseInfo) -> Result<DownloadedWindows
+@@ -711,10 +708,9 @@ fn download_windows_installer(release: &ReleaseInfo) -> Result<DownloadedWindows
      let path = root.join(asset_name);
      let download = DownloadedWindowsInstaller { root, path };
  

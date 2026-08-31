@@ -1,0 +1,147 @@
+From fc0795a59d22b84565b4f6938bf1f3460ae8d530 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Sun, 30 Aug 2026 17:21:35 +0200
+Subject: [PATCH 14/17] fix(ui): keep muted labels readable
+
+Refs herdrdev/herdr#2692
+---
+ src/ui/sidebar.rs | 25 ++++++++++---------------
+ src/ui/tabs.rs    | 28 ++++++++++++++++------------
+ 2 files changed, 26 insertions(+), 27 deletions(-)
+
+diff --git a/src/ui/sidebar.rs b/src/ui/sidebar.rs
+index a6dfbcd3bcf5c3276d4800524ca1fcf686ebf285..34f17e9f728d93112ef79dfd5f67bc0db1d2cea5 100644
+--- a/src/ui/sidebar.rs
++++ b/src/ui/sidebar.rs
+@@ -1123,7 +1123,7 @@ fn resolved_token_spans(
+             let previous = &resolved[visible_indices[position - 1]];
+             spans.push(Span::styled(
+                 tokens::separator(previous, token),
+-                Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
++                Style::default().fg(p.overlay0),
+             ));
+         }
+         match &token.kind {
+@@ -1305,9 +1305,8 @@ fn render_workspace_list(
+             .map(|(key, _)| space_aggregate_state(app, key))
+             .unwrap_or((agg_state, agg_seen));
+         let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
+-        let state_text_style = Style::default()
+-            .fg(state_label_color(display_state, display_seen, p))
+-            .add_modifier(Modifier::DIM);
++        let state_text_style =
++            Style::default().fg(state_label_color(display_state, display_seen, p));
+         let branch_style = Style::default().fg(if selected || is_active {
+             p.mauve
+         } else {
+@@ -1511,12 +1510,8 @@ fn render_agent_detail(
+         } else {
+             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
+         };
+-        let status_style = if is_active {
+-            Style::default().fg(label_color)
+-        } else {
+-            Style::default().fg(label_color).add_modifier(Modifier::DIM)
+-        };
+-        let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
++        let status_style = Style::default().fg(label_color);
++        let agent_style = Style::default().fg(p.overlay0);
+         let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+ 
+         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
+@@ -1691,17 +1686,17 @@ mod tests {
+         let agent_x = find_symbol_x(buffer, body.y + 1, body.width, "p");
+         let agent_style = buffer[(agent_x, body.y + 1)].style();
+         assert_eq!(agent_style.fg, Some(app.palette.overlay0));
+-        assert!(agent_style.add_modifier.contains(Modifier::DIM));
++        assert!(!agent_style.add_modifier.contains(Modifier::DIM));
+         assert!(!agent_style.add_modifier.contains(Modifier::BOLD));
+         assert_eq!(agent_style.bg, Some(app.palette.active_row_bg));
+     }
+ 
+     #[test]
+-    fn occurrence_false_removes_default_workspace_bold_and_agent_dim() {
++    fn occurrence_style_overrides_workspace_bold_and_agent_dim() {
+         let config: crate::config::Config = toml::from_str(
+             r##"
+ [ui.sidebar.agents]
+-rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }]]
++rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = true }]]
+ "##,
+         )
+         .unwrap();
+@@ -1731,7 +1726,7 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
+         assert_eq!(workspace.fg, Some(app.palette.text));
+         assert!(!workspace.add_modifier.contains(Modifier::BOLD));
+         assert_eq!(agent.fg, Some(app.palette.overlay0));
+-        assert!(!agent.add_modifier.contains(Modifier::DIM));
++        assert!(agent.add_modifier.contains(Modifier::DIM));
+     }
+ 
+     #[test]
+@@ -1922,7 +1917,7 @@ rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspa
+             assert_eq!(style.bg, Some(app.palette.active_row_bg));
+         }
+         assert_eq!(separator.fg, Some(app.palette.overlay0));
+-        assert!(separator.add_modifier.contains(Modifier::DIM));
++        assert!(!separator.add_modifier.contains(Modifier::DIM));
+         assert!(!separator.add_modifier.contains(Modifier::BOLD));
+         assert_eq!(separator.bg, Some(app.palette.active_row_bg));
+     }
+diff --git a/src/ui/tabs.rs b/src/ui/tabs.rs
+index 603422fb6cca322f1a0315206e5a6786b29fbd97..08d72314b36bd9eaca6cf12562776e0ee7fb134d 100644
+--- a/src/ui/tabs.rs
++++ b/src/ui/tabs.rs
+@@ -398,10 +398,7 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
+                 base.add_modifier(Modifier::BOLD)
+             }
+         } else if tab.is_auto_named() {
+-            Style::default()
+-                .fg(p.overlay0)
+-                .bg(p.surface0)
+-                .add_modifier(Modifier::DIM)
++            Style::default().fg(p.overlay0).bg(p.surface0)
+         } else {
+             Style::default().fg(p.overlay1).bg(p.surface0)
+         };
+@@ -720,9 +717,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn active_auto_named_tab_keeps_readable_weight() {
++    fn auto_named_tabs_keep_readable_weight() {
+         let mut app = AppState::test_new();
+-        let ws = Workspace::test_new("test");
++        let mut ws = Workspace::test_new("test");
++        ws.test_add_tab(None);
+ 
+         app.workspaces = vec![ws];
+         app.active = Some(0);
+@@ -736,12 +734,18 @@ mod tests {
+             .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+             .unwrap();
+ 
+-        let tab_rect = app.view.tab_hit_areas[0];
+-        let style = terminal.backend().buffer()[(tab_rect.x + 1, tab_rect.y)].style();
+-
+-        assert_eq!(style.bg, Some(app.palette.accent));
+-        assert!(!style.add_modifier.contains(Modifier::DIM));
+-        assert!(!style.add_modifier.contains(Modifier::BOLD));
++        let active_rect = app.view.tab_hit_areas[0];
++        let inactive_rect = app.view.tab_hit_areas[1];
++        let buffer = terminal.backend().buffer();
++        let active_style = buffer[(active_rect.x + 1, active_rect.y)].style();
++        let inactive_style = buffer[(inactive_rect.x + 1, inactive_rect.y)].style();
++
++        assert_eq!(active_style.bg, Some(app.palette.accent));
++        assert!(!active_style.add_modifier.contains(Modifier::DIM));
++        assert!(!active_style.add_modifier.contains(Modifier::BOLD));
++        assert_eq!(inactive_style.fg, Some(app.palette.overlay0));
++        assert_eq!(inactive_style.bg, Some(app.palette.surface0));
++        assert!(!inactive_style.add_modifier.contains(Modifier::DIM));
+     }
+ 
+     #[test]
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,43 @@
+From 5f43ae36f7531c206c8a7099badfa227acbce5f3 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Sun, 30 Aug 2026 17:33:23 +0200
+Subject: [PATCH 15/17] fix(settings): show valid integration hints
+
+Refs herdrdev/herdr#2880
+---
+ src/ui/settings.rs | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/src/ui/settings.rs b/src/ui/settings.rs
+index e1e75ed01b73d43412039c56838081cf849989a1..c8ef37a7e3f52963db6ab5e3b0ba5a5814abcf91 100644
+--- a/src/ui/settings.rs
++++ b/src/ui/settings.rs
+@@ -208,15 +208,18 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
+                 .add_modifier(Modifier::BOLD),
+         );
+ 
+-        frame.render_widget(
+-            Paragraph::new(Line::from(vec![
++        let mut navigation_hints = Vec::new();
++        if app.settings.section != SettingsSection::Integrations {
++            navigation_hints.extend([
+                 Span::styled(" ↑↓", Style::default().fg(p.overlay0)),
+                 Span::styled(" select  ", Style::default().fg(p.overlay1)),
+-                Span::styled("tab", Style::default().fg(p.overlay0)),
+-                Span::styled(" section", Style::default().fg(p.overlay1)),
+-            ])),
+-            footer_rows[0],
+-        );
++            ]);
++        }
++        navigation_hints.extend([
++            Span::styled("tab", Style::default().fg(p.overlay0)),
++            Span::styled(" section", Style::default().fg(p.overlay1)),
++        ]);
++        frame.render_widget(Paragraph::new(Line::from(navigation_hints)), footer_rows[0]);
+     }
+ }
+ 
+-- 
+2.55.0.windows.3
+

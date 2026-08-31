@@ -1,0 +1,67 @@
+From 7d11e64ef8366fe652164d90f7fd536e882d937a Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Sun, 30 Aug 2026 17:40:30 +0200
+Subject: [PATCH 16/17] fix(integrations): find native Devin config
+
+Refs herdrdev/herdr#2724
+---
+ src/integration/env.rs   |  5 +++++
+ src/integration/tests.rs | 26 ++++++++++++++++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/src/integration/env.rs b/src/integration/env.rs
+index 8f3a9e655def82792ea3e673fd7b2f0e61b9206e..3190336eb73d9a3774f707f074b5a0bd7ad693e4 100644
+--- a/src/integration/env.rs
++++ b/src/integration/env.rs
+@@ -76,6 +76,11 @@ pub(crate) fn devin_dir() -> io::Result<PathBuf> {
+         return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("devin"));
+     }
+ 
++    #[cfg(windows)]
++    if let Some(value) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
++        return Ok(PathBuf::from(value).join("devin"));
++    }
++
+     Ok(home_dir()?.join(".config").join("devin"))
+ }
+ 
+diff --git a/src/integration/tests.rs b/src/integration/tests.rs
+index e7a2a81f2012d160748402437453216e7eb09b51..0a355585428fcff724954d5aca9addfedfe31f5f 100644
+--- a/src/integration/tests.rs
++++ b/src/integration/tests.rs
+@@ -363,6 +363,32 @@ fn hermes_layout_makes_target_available() {
+     let _ = fs::remove_dir_all(base);
+ }
+ 
++#[test]
++#[cfg(windows)]
++fn windows_devin_dir_uses_roaming_app_data() {
++    let _lock = integration_env_lock();
++    let base = unique_base();
++    let roaming_app_data = base.join("roaming-app-data");
++    let original_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
++    let original_app_data = std::env::var_os("APPDATA");
++    std::env::remove_var("XDG_CONFIG_HOME");
++    std::env::set_var("APPDATA", &roaming_app_data);
++
++    assert_eq!(devin_dir().unwrap(), roaming_app_data.join("devin"));
++
++    if let Some(xdg_config_home) = original_xdg_config_home {
++        std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
++    } else {
++        std::env::remove_var("XDG_CONFIG_HOME");
++    }
++    if let Some(app_data) = original_app_data {
++        std::env::set_var("APPDATA", app_data);
++    } else {
++        std::env::remove_var("APPDATA");
++    }
++    let _ = fs::remove_dir_all(base);
++}
++
+ #[test]
+ fn codex_availability_finds_standalone_binary_under_codex_home() {
+     let _lock = integration_env_lock();
+-- 
+2.55.0.windows.3
+

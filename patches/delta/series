@@ -9,3 +9,9 @@
 0010-agent-transient-hook-takeover.patch
 0011-metadata-token-capacity.patch
 0012-agent-completion-controls.patch
+0013-terminal-history-scroll-aliasing.patch
+0014-plugin-root-pane-commands.patch
+0015-muted-label-contrast.patch
+0016-settings-integration-hints.patch
+0017-devin-native-config.patch
+0018-windows-process-environment-validation.patch

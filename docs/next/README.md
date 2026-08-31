@@ -28,7 +28,7 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 ```mermaid
 flowchart TB
     S["Source<br/>Upstream Herdr v0.8.2 → BASE 9eb521456ac0"]
-    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;experience&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery<br/>↓&nbsp;0011&nbsp;Metadata&nbsp;capacity&nbsp;→&nbsp;0012&nbsp;Completion&nbsp;alerts"]
+    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;experience&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery<br/>↓&nbsp;0011&nbsp;Metadata&nbsp;capacity&nbsp;→&nbsp;0012&nbsp;Completion&nbsp;alerts&nbsp;→&nbsp;0013&nbsp;Terminal&nbsp;history<br/>↓&nbsp;0014&nbsp;Plugin-root&nbsp;commands&nbsp;→&nbsp;0015&nbsp;Muted-label&nbsp;contrast&nbsp;→&nbsp;0016&nbsp;Integration&nbsp;hints<br/>↓&nbsp;0017&nbsp;Devin&nbsp;config&nbsp;→&nbsp;0018&nbsp;Windows&nbsp;environment"]
     V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
     S --> Q --> V
 ```
@@ -53,17 +53,12 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 | Agent hook recovery | **Maintained here** · [#1033](https://github.com/herdrdev/herdr/issues/1033) · [`0010`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0010-agent-transient-hook-takeover.patch) | Lets a still-running full-lifecycle Agent regain hook authority after a temporary foreground takeover without reviving a session after a real exit. |
 | Metadata capacity | **Maintained here** · [`0011`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0011-metadata-token-capacity.patch) | Atomically updates and retains up to 64 pane or workspace metadata tokens while preserving existing validation bounds. |
 | Completion alerts | **Maintained here** · [`0012`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0012-agent-completion-controls.patch) | Exposes one persistent opt-out for completion popups and sounds while keeping questions, permission prompts, and errors actionable. |
-
-### Current development candidate fixes
-
-The pushed but unpublished [`candidate/development`](https://github.com/hdosys/herdr-win/tree/candidate/development) line also contains completed fixes for these upstream reports. They are not part of the latest release or maintained patch queue until explicit promotion:
-
-- [#2893](https://github.com/herdrdev/herdr/issues/2893): retain repeated rows that scroll into alternate-screen history.
-- [#3024](https://github.com/herdrdev/herdr/issues/3024): resolve explicit relative plugin commands from the linked plugin root.
-- [#2692](https://github.com/herdrdev/herdr/issues/2692): keep muted sidebar and inactive tab labels readable.
-- [#2880](https://github.com/herdrdev/herdr/issues/2880): show only controls that integration settings actually support.
-- [#2724](https://github.com/herdrdev/herdr/issues/2724): find Devin's native configuration in roaming AppData.
-- [#3430](https://github.com/herdrdev/herdr/issues/3430): omit malformed Windows environment entries before process creation.
+| Terminal history | **Maintained here** · [#2893](https://github.com/herdrdev/herdr/issues/2893) · [`0013`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0013-terminal-history-scroll-aliasing.patch) | Retains repeated rows that scroll into alternate-screen history. |
+| Plugin command resolution | **Maintained here** · [#3024](https://github.com/herdrdev/herdr/issues/3024) · [`0014`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0014-plugin-root-pane-commands.patch) | Resolves explicit relative pane commands from the linked plugin root. |
+| Muted-label contrast | **Maintained here** · [#2692](https://github.com/herdrdev/herdr/issues/2692) · [`0015`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0015-muted-label-contrast.patch) | Keeps muted sidebar and inactive tab labels readable. |
+| Integration settings | **Maintained here** · [#2880](https://github.com/herdrdev/herdr/issues/2880) · [`0016`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0016-settings-integration-hints.patch) | Shows only controls that the selected integration supports. |
+| Devin configuration | **Maintained here** · [#2724](https://github.com/herdrdev/herdr/issues/2724) · [`0017`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0017-devin-native-config.patch) | Finds Devin's native configuration in roaming AppData. |
+| Windows process environment | **Maintained here** · [#3430](https://github.com/herdrdev/herdr/issues/3430) · [`0018`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0018-windows-process-environment-validation.patch) | Omits malformed Windows environment entries before process creation. |
 
 ## Install
 

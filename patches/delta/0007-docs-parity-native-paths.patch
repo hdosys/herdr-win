@@ -1,9 +1,9 @@
-From aa90d020de166495a53ca0a64ea44e8a64ad1938 Mon Sep 17 00:00:00 2001
+From 01bff4231e385af76748f3925d3f38e8d7b56041 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 16:44:59 +0200
-Subject: [PATCH 6/11] test(docs): accept native path separators
+Subject: [PATCH 6/17] test(docs): accept native path separators
 
-refs #3041
+Refs herdrdev/herdr#3041
 ---
  scripts/test_docs_translation_parity.py | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)

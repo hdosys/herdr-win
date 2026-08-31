@@ -1,7 +1,7 @@
-From bab79214a4d3886f10e39fefaa81c0696bacb625 Mon Sep 17 00:00:00 2001
+From 72fff158b88c697d4663194e0ec8a0884a6eea77 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Wed, 26 Aug 2026 13:52:34 +0200
-Subject: [PATCH 10/11] feat(api): expand metadata token capacity
+Subject: [PATCH 10/17] feat(api): expand metadata token capacity
 
 ---
  docs/next/CHANGELOG.md              |  1 +
@@ -25,7 +25,7 @@ index a8322335b03fd4753d64da571d546f4d4fcdcd02..0f3fc76a41796bdbfed40227cea3ed62
  
  ### Fixed
 diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
-index b53ad548124354ae7ae23612fbdc7709a68cb430..cb94dbfc6e8c0ceae81850e48d6883f685991cfc 100644
+index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc09b5d58f 100644
 --- a/docs/next/api/herdr-api.schema.json
 +++ b/docs/next/api/herdr-api.schema.json
 @@ -857,7 +857,7 @@
@@ -154,7 +154,7 @@ index 5118382806722a9e80d810ce852cc86dffea56ed..f4f2808fce7773137eb8f767eaff1118
      fn pane_tokens_are_independent_from_presentation_guards() {
          let (mut app, pane_id) = app_with_test_workspace();
 diff --git a/src/app/api/workspaces.rs b/src/app/api/workspaces.rs
-index 76b5866ba96dcf95f356c748fb9c7a9911804153..000cc1a35e42691cc87cf2b6559b570b2363c2ed 100644
+index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff52285a3eb20 100644
 --- a/src/app/api/workspaces.rs
 +++ b/src/app/api/workspaces.rs
 @@ -7,7 +7,10 @@ use crate::api::schema::{

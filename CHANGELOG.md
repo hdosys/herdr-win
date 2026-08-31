@@ -4,6 +4,10 @@ This changelog records only user-visible changes released by the `herdr-win` for
 
 ## Unreleased
 
+## [2026.08.31.1] - 2026-08-31
+
+Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
+
 ### Changed
 - Managed Agent startup and native session restore now share the selected
   interactive shell's command renderer. PowerShell, cmd, Nushell, Git Bash, and
@@ -13,6 +17,18 @@ This changelog records only user-visible changes released by the `herdr-win` for
 ### Fixed
 - Closing the final shell no longer lets its automatically created replacement
   workspace queue the configured Agent again.
+- Repeated terminal rows that scroll out of the alternate screen remain visible
+  in history (`herdrdev/herdr#2893`).
+- Explicit relative plugin commands resolve from the linked plugin root instead
+  of the current process directory (`herdrdev/herdr#3024`).
+- Muted sidebar and inactive tab labels retain readable contrast
+  (`herdrdev/herdr#2692`).
+- Integration settings show only controls supported by that integration
+  (`herdrdev/herdr#2880`).
+- Devin's native configuration is found in roaming AppData
+  (`herdrdev/herdr#2724`).
+- Malformed Windows environment entries are omitted before process creation
+  (`herdrdev/herdr#3430`).
 
 ## [2026.08.27.5] - 2026-08-27
 

@@ -1,7 +1,7 @@
-From ad09c836c5bd6198a0e4bd19307dd7f3eaedd62b Mon Sep 17 00:00:00 2001
+From 03c1a72f7b17f647cbc5235ddc39b0a2ab2e3879 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 27 Aug 2026 01:46:36 +0200
-Subject: [PATCH 11/11] feat(agent): add completion alert controls
+Subject: [PATCH 11/17] feat(agent): add completion alert controls
 
 ---
  docs/next/CHANGELOG.md                        |   3 +
@@ -17,7 +17,6 @@ Subject: [PATCH 11/11] feat(agent): add completion alert controls
  src/app/config_io.rs                          |   8 +
  src/app/input/mod.rs                          |   3 +
  src/app/input/settings.rs                     |  61 ++++-
- src/app/mod.rs                                |  24 ++
  src/app/state.rs                              |   5 +
  src/cli/pane.rs                               |   1 +
  src/config/model.rs                           |  11 +-
@@ -25,7 +24,7 @@ Subject: [PATCH 11/11] feat(agent): add completion alert controls
  src/server/headless.rs                        | 244 ++----------------
  src/server/notifications.rs                   | 144 -----------
  src/ui/settings.rs                            |  13 +-
- 21 files changed, 295 insertions(+), 417 deletions(-)
+ 20 files changed, 271 insertions(+), 417 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 0f3fc76a41796bdbfed40227cea3ed62bab8bc17..3d41d94caf2c6164b72319012ae66fd539848916 100644
@@ -534,7 +533,7 @@ index a45687b4808985b4165cc41384d99711138764a1..c31d1eb512fcfde5fc0d33f8cf321bdf
          state.active = Some(1);
          state.ensure_test_terminals();
 diff --git a/src/app/api.rs b/src/app/api.rs
-index 92d9596fb7fa5f61f6d46ba208a526f22cee2d78..dd00d52834a8241f237ed508ad7c7688362beb11 100644
+index a68d192cf871525aa6e8bb353d457f52428f2e85..cd0c26f8367d11eb45f9afddbd0974910483b1e8 100644
 --- a/src/app/api.rs
 +++ b/src/app/api.rs
 @@ -690,6 +690,7 @@ impl App {
@@ -734,55 +733,6 @@ index fb1a7d757c07565658b86d45611fa05470c309fe..3eaed142b1e0042b240ae4c56b5ba23c
      #[test]
      fn settings_tab_cycle_wraps_after_integrations() {
          let mut state = state_with_workspaces(&["test"]);
-diff --git a/src/app/mod.rs b/src/app/mod.rs
-index ee0eb7e13d2bd36052d6594537cf3cae3d9c4f7f..e48fe6039cfb4086d77cb62ca19c588223e61e26 100644
---- a/src/app/mod.rs
-+++ b/src/app/mod.rs
-@@ -712,6 +712,7 @@ impl App {
-             accent: crate::config::parse_color(&config.ui.accent),
-             sound: config.ui.sound.clone(),
-             local_sound_playback: true,
-+            notify_on_agent_completion: config.ui.notify_on_agent_completion,
-             toast_config: config.ui.toast.clone(),
-             keybinds: config.keybinds(),
-             palette: theme_palette,
-@@ -1570,6 +1571,7 @@ impl App {
-                     self.state.request_client_config_reload = true;
-                 }
-                 self.state.sound = config.ui.sound.clone();
-+                self.state.notify_on_agent_completion = config.ui.notify_on_agent_completion;
-                 self.state.toast_config = config.ui.toast.clone();
-             }
-         }
-@@ -3707,6 +3709,28 @@ mod tests {
-         let _ = std::fs::remove_dir_all(path.parent().unwrap());
-     }
- 
-+    #[test]
-+    fn settings_save_completion_notifications_persists_then_applies_live_config() {
-+        let _guard = config_env_lock().lock().unwrap();
-+        let path = temp_config_path("settings-save-completion-notifications");
-+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-+        std::fs::write(&path, "onboarding = false\n").unwrap();
-+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-+
-+        let mut app = test_app();
-+        assert!(app.state.notify_on_agent_completion);
-+
-+        app.save_completion_notifications(false);
-+
-+        assert!(!app.state.notify_on_agent_completion);
-+        let content = std::fs::read_to_string(&path).unwrap();
-+        assert!(content.contains("notify_on_agent_completion = false"));
-+        assert!(app.state.config_diagnostic.is_none());
-+
-+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-+    }
-+
-     #[test]
-     fn save_status_indicators_persists_then_applies_live_config() {
-         let _guard = config_env_lock().lock().unwrap();
 diff --git a/src/app/state.rs b/src/app/state.rs
 index 8f9e9dabdf68a8405787176c4cf9e1699dd6ae6e..741964d957684b9b918fa4cd2b684e8fea1eda98 100644
 --- a/src/app/state.rs
@@ -891,7 +841,7 @@ index cd6b329fe59fd0b7afa3233454cbc2d18759a4bc..b83f7856ebbbb222c2355b7440f92176
          assert_eq!(config.ui.toast.delay_seconds, 1);
          assert_eq!(
 diff --git a/src/events.rs b/src/events.rs
-index cc638e6018e509b42e06fabdd19b485b639d43af..98a36dd9876517424fedd2f9420bda340101a08b 100644
+index 55ee4da6dbee87d3db15e188016b4bc27203e59f..9d4c828ee7d3b8636629502d2e045d0832cae7ae 100644
 --- a/src/events.rs
 +++ b/src/events.rs
 @@ -81,6 +81,7 @@ pub enum AppEvent {

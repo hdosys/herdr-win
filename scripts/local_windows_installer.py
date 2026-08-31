@@ -564,6 +564,32 @@ def _cargo_test_arguments(
     ]
 
 
+def _portable_pty_test_arguments(
+    manifest: Path, cargo_target: Path, jobs: int, test_filter: str
+) -> list[str]:
+    if jobs < 1:
+        raise LocalInstallerError("Cargo requires at least one build job")
+    if not test_filter.strip() or test_filter.startswith("-"):
+        raise LocalInstallerError(
+            "--portable-pty-test-filter must be one non-option test filter"
+        )
+    return [
+        "test",
+        "--manifest-path",
+        str(manifest),
+        "--lib",
+        "--target",
+        WINDOWS_TARGET,
+        "--target-dir",
+        str(cargo_target),
+        "--jobs",
+        str(jobs),
+        test_filter,
+        "--",
+        "--nocapture",
+    ]
+
+
 def _just_test_arguments(test_filter: str) -> list[str]:
     if not test_filter.strip() or test_filter.startswith("-"):
         raise LocalInstallerError("--test-filter must be one non-option test filter")
@@ -679,6 +705,70 @@ def _run_normal_focused_test(
     )
     _print_process_output(test_result)
     _require_one_nextest_test(f"{test_result.stdout}\n{test_result.stderr}")
+    print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
+
+
+def _run_portable_pty_focused_test(
+    source: Path, cargo_target: Path, jobs: int, test_filter: str
+) -> None:
+    _require_cargo_commit_headroom()
+    package = _safe_path(
+        source / "vendor" / "portable-pty",
+        "vendored portable-pty package",
+        directory=True,
+    )
+    manifest = _safe_path(
+        package / "Cargo.toml", "vendored portable-pty manifest", directory=False
+    )
+    package_lock = package / "Cargo.lock"
+    if package_lock.exists() or package_lock.is_symlink():
+        raise LocalInstallerError(
+            "vendored portable-pty Cargo.lock already exists; preserve it for its owner"
+        )
+
+    lock_created = False
+    print(f"focused_test={test_filter}")
+    print("focused_test_owner=vendor/portable-pty")
+    print("focused_test_profile=normal")
+    test_started = time.monotonic()
+    try:
+        try:
+            with package_lock.open("xb") as temporary_lock:
+                lock_created = True
+                temporary_lock.write(b"version = 4\n")
+        except OSError as error:
+            raise LocalInstallerError(
+                f"could not create temporary portable-pty Cargo lock: {error}"
+            ) from error
+
+        test_result = _run(
+            "cargo",
+            _portable_pty_test_arguments(
+                manifest, cargo_target, jobs, test_filter
+            ),
+            cwd=source,
+            timeout=300,
+            environment_overrides={"CARGO_BUILD_JOBS": str(jobs)},
+            removed_environment=(
+                "HERDR_BUILD_ID",
+                "HERDR_BUILD_COMMIT",
+                "HERDR_BUILD_FRESHNESS",
+                "HERDR_RELEASE_VERSION",
+            ),
+        )
+        _print_process_output(test_result)
+        _require_one_focused_test(test_result.stdout)
+    finally:
+        if lock_created:
+            owned_lock = _safe_path(
+                package_lock, "temporary portable-pty Cargo lock", directory=False
+            )
+            try:
+                owned_lock.unlink()
+            except OSError as error:
+                raise LocalInstallerError(
+                    f"could not remove temporary portable-pty Cargo lock: {error}"
+                ) from error
     print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
 
 
@@ -1049,7 +1139,12 @@ def test_one(options: argparse.Namespace) -> None:
     jobs = _available_cpu_count()
     print(f"cargo_jobs={jobs}")
     print(f"cargo_target={cargo_target}")
-    _run_normal_focused_test(source, cargo_target, jobs, options.test_filter)
+    if options.portable_pty_test_filter is not None:
+        _run_portable_pty_focused_test(
+            source, cargo_target, jobs, options.portable_pty_test_filter
+        )
+    else:
+        _run_normal_focused_test(source, cargo_target, jobs, options.test_filter)
 
 
 def candidate(options: argparse.Namespace) -> None:
@@ -1096,6 +1191,7 @@ def candidate(options: argparse.Namespace) -> None:
     existing_bundle = paths.input_root / build_id
     if (
         options.test_filter is None
+        and options.portable_pty_test_filter is None
         and options.release_test_filter is None
         and existing_bundle.exists()
     ):
@@ -1127,6 +1223,10 @@ def candidate(options: argparse.Namespace) -> None:
     if options.test_filter is not None:
         _run_normal_focused_test(
             source, cargo_target, jobs, options.test_filter
+        )
+    elif options.portable_pty_test_filter is not None:
+        _run_portable_pty_focused_test(
+            source, cargo_target, jobs, options.portable_pty_test_filter
         )
     elif options.release_test_filter is not None:
         _require_cargo_commit_headroom()
@@ -1242,10 +1342,14 @@ def _parser() -> argparse.ArgumentParser:
     test_command.add_argument(
         "--cargo-target-dir", type=Path, default=DEFAULT_CARGO_TARGET
     )
-    test_command.add_argument(
+    test_selector = test_command.add_mutually_exclusive_group(required=True)
+    test_selector.add_argument(
         "--test-filter",
-        required=True,
         help="run one focused herdr test through the normal just test-one gate",
+    )
+    test_selector.add_argument(
+        "--portable-pty-test-filter",
+        help="run one focused vendored portable-pty library test",
     )
     candidate_command = commands.add_parser("candidate")
     candidate_command.add_argument("--source-worktree", required=True, type=Path)
@@ -1256,6 +1360,10 @@ def _parser() -> argparse.ArgumentParser:
     candidate_test.add_argument(
         "--test-filter",
         help="run one focused herdr test through the normal just test-one gate before packaging",
+    )
+    candidate_test.add_argument(
+        "--portable-pty-test-filter",
+        help="run one focused vendored portable-pty library test before packaging",
     )
     candidate_test.add_argument(
         "--release-test-filter",

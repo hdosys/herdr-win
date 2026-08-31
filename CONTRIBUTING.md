@@ -221,11 +221,27 @@ python scripts/local_windows_installer.py candidate `
   --test-filter $testFilter
 ```
 
-Both commands keep one Sandbox-local Cargo target, remove local build-identity
-variables from the normal test profile, and pass the detected logical processor count
-through `just test-one`. The Candidate rerun therefore verifies the pushed source
-without compiling the same normal test binary into a second target. Before every
-Cargo test or build phase, the control owner reads the native Windows commit counters.
+For a regression owned by the vendored `portable-pty` library, select that owner
+directly before and after the push instead of routing it through the `herdr` binary:
+
+```powershell
+$testFilter = "<one exact portable-pty test filter>"
+python scripts/local_windows_installer.py test-one `
+  --source-worktree <development-worktree> `
+  --portable-pty-test-filter $testFilter
+python scripts/local_windows_installer.py candidate `
+  --source-worktree <development-worktree> `
+  --portable-pty-test-filter $testFilter
+```
+
+These commands keep one Sandbox-local Cargo target, remove local build-identity
+variables from the normal test profile, and pass the detected logical processor
+count to Cargo. The ordinary filter uses `just test-one`; the vendored filter runs
+the library manifest with a task-owned temporary lock beside it and removes that
+lock after success or failure. The Candidate rerun therefore verifies the pushed
+source without a second target or an unrelated PTY lifecycle harness. Before every
+Cargo test or build phase, the control owner reads the native Windows commit
+counters.
 At or below 3 GiB of remaining commit headroom it stops before Cargo, reports the
 largest private-memory process classes, and never terminates a process. Use
 `--release-test-filter` instead only when the selected test's signal depends on

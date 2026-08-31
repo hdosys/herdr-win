@@ -34,11 +34,13 @@ from scripts.local_windows_installer import (
     _isolated_candidate_paths,
     _just_test_arguments,
     _parser,
+    _portable_pty_test_arguments,
     _prune_completed_candidate_outputs,
     _require_pushed_development_source,
     _require_one_focused_test,
     _require_one_nextest_test,
     _run_normal_focused_test,
+    _run_portable_pty_focused_test,
     _source_fingerprint,
     _source_branch,
     candidate,
@@ -309,6 +311,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 source_worktree=source,
                 cargo_target_dir=root / "cargo-target",
                 test_filter=None,
+                portable_pty_test_filter=None,
                 release_test_filter=None,
                 product_name="Herdr Quality Test",
                 isolated=False,
@@ -368,6 +371,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 source_worktree=source,
                 cargo_target_dir=root / "cargo-target",
                 test_filter=None,
+                portable_pty_test_filter=None,
                 release_test_filter=None,
                 product_name=None,
                 isolated=False,
@@ -462,6 +466,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             source_worktree=source,
             cargo_target_dir=cargo_target,
             test_filter="exact_test_filter",
+            portable_pty_test_filter=None,
         )
         with (
             patch(
@@ -477,6 +482,103 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             ),
             patch(
                 "scripts.local_windows_installer._run_normal_focused_test"
+            ) as focused_test,
+        ):
+            test_one(options)
+
+        focused_test.assert_called_once_with(
+            source, cargo_target, 16, "exact_test_filter"
+        )
+
+    def test_portable_pty_focused_test_cleans_its_temporary_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            package = source / "vendor" / "portable-pty"
+            package.mkdir(parents=True)
+            manifest = package / "Cargo.toml"
+            manifest.write_text("[package]\nname = 'portable-pty'\n", encoding="utf-8")
+            cargo_target = Path(temporary) / "cargo-target"
+            completed = subprocess.CompletedProcess(
+                ["cargo", "test"],
+                0,
+                stdout="test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n",
+                stderr="",
+            )
+
+            with (
+                patch(
+                    "scripts.local_windows_installer._require_cargo_commit_headroom"
+                ) as headroom,
+                patch(
+                    "scripts.local_windows_installer._run", return_value=completed
+                ) as run,
+            ):
+                _run_portable_pty_focused_test(
+                    source, cargo_target, 16, "exact_test_filter"
+                )
+
+            headroom.assert_called_once_with()
+            self.assertFalse((package / "Cargo.lock").exists())
+            arguments = run.call_args.args[1]
+            self.assertEqual(arguments[0], "test")
+            self.assertEqual(
+                arguments[arguments.index("--manifest-path") + 1], str(manifest)
+            )
+            self.assertNotIn("--locked", arguments)
+            self.assertEqual(
+                arguments[arguments.index("--target") + 1],
+                "x86_64-pc-windows-msvc",
+            )
+            self.assertEqual(
+                arguments[arguments.index("--target-dir") + 1], str(cargo_target)
+            )
+            self.assertEqual(arguments[arguments.index("--jobs") + 1], "16")
+            self.assertEqual(
+                arguments[-3:], ["exact_test_filter", "--", "--nocapture"]
+            )
+            with self.assertRaisesRegex(LocalInstallerError, "non-option test filter"):
+                _portable_pty_test_arguments(
+                    manifest, cargo_target, 16, "--all"
+                )
+
+            with (
+                patch(
+                    "scripts.local_windows_installer._require_cargo_commit_headroom"
+                ),
+                patch(
+                    "scripts.local_windows_installer._run",
+                    side_effect=LocalInstallerError("expected failure"),
+                ),
+                self.assertRaisesRegex(LocalInstallerError, "expected failure"),
+            ):
+                _run_portable_pty_focused_test(
+                    source, cargo_target, 16, "exact_test_filter"
+                )
+            self.assertFalse((package / "Cargo.lock").exists())
+
+    def test_pre_push_command_selects_the_portable_pty_owner(self) -> None:
+        source = Path("C:/development")
+        cargo_target = Path("C:/cargo-target")
+        options = argparse.Namespace(
+            source_worktree=source,
+            cargo_target_dir=cargo_target,
+            test_filter=None,
+            portable_pty_test_filter="exact_test_filter",
+        )
+        with (
+            patch(
+                "scripts.local_windows_installer._source_root", return_value=source
+            ),
+            patch(
+                "scripts.local_windows_installer._directory",
+                return_value=cargo_target,
+            ),
+            patch(
+                "scripts.local_windows_installer._available_cpu_count",
+                return_value=16,
+            ),
+            patch(
+                "scripts.local_windows_installer._run_portable_pty_focused_test"
             ) as focused_test,
         ):
             test_one(options)

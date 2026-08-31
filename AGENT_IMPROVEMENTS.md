@@ -265,17 +265,13 @@ configuration repository.
   classification sooner without expanding upstream access. Owner: the Windows
   issue triage partition procedure and its active checkpoint prompt.
 
-- **Status: proposed. Give Candidate one exact vendored `portable-pty` unit-test
-  path.** Add an explicit bounded selector that runs the vendored library test with
-  all logical processors, a shared temporary target, and task-owned lock cleanup,
-  then lets `candidate` rerun that same selector after push. Evidence: the current
-  Windows `test-one` owner correctly returned no-match status 4 because it selects
-  only the `herdr` binary. The direct vendored regression passed in 16.27 seconds,
-  but first resolved 76 standalone packages and generated a temporary lock; moving
-  the check to the full PTY path instead produced 600-second and 180-second stalls
-  in unrelated ConPTY teardown. Request-to-artifact was about 68.5 minutes, while
-  the final candidate itself took 164.47 seconds. Expected benefit: keep vendored
-  behavior checks at their real owner, preserve Candidate's post-push rerun, and
-  avoid duplicate dependency setup or an unrelated native harness. Owner:
-  `scripts/local_windows_installer.py`, the focused test recipe, and the Candidate
+- **Status: done. Give Candidate one exact vendored `portable-pty` unit-test
+  path.** `--portable-pty-test-filter` now runs the library manifest with every
+  logical processor, Candidate's shared temporary target, a five-minute process
+  bound, exact one-test acceptance, and task-owned lock cleanup, then lets
+  `candidate` rerun the same selector after push. Evidence: all 27 focused runner
+  tests passed in 0.062 seconds; the real malformed-environment regression passed
+  through the new owner in 15.170 seconds and left no package lock. This replaces
+  the unrelated full-PTY path that stalled for 600 and 180 seconds. Owner:
+  `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.

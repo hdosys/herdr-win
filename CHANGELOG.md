@@ -29,6 +29,8 @@ Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
   (`herdrdev/herdr#2724`).
 - Malformed Windows environment entries are omitted before process creation
   (`herdrdev/herdr#3430`).
+- Uninstall now preserves the managed installation and fails closed when private
+  pending-launcher state is malformed.
 
 ## [2026.08.27.5] - 2026-08-27
 

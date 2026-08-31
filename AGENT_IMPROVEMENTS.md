@@ -275,3 +275,15 @@ configuration repository.
   the unrelated full-PTY path that stalled for 600 and 180 seconds. Owner:
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
+
+- **Status: proposed. Finalize interdependent mailboxes as one atomic queue
+  transaction.** Accept an ordered set of owner worktrees or trees, construct all
+  replacement mailboxes in temporary state, and publish them only after the whole
+  queue reproduces the accepted tree. Evidence: a release refactor changed files
+  shared by mailboxes 0003, 0004, 0006, and 0009; seven one-owner finalizer cycles
+  took 38 to 43 seconds each, while reverse application stopped successively on
+  shared `src/platform/windows.rs`, `src/app/mod.rs`, `CHANGELOG.md`, and
+  `src/update.rs`. Expected benefit: preserve logical ownership without temporary
+  owner leakage, repeated worktrees, or serial conflict discovery. Owner:
+  `scripts/delta_workflow.py`, focused finalizer tests, and the promotion procedure
+  in `CONTRIBUTING.md`.

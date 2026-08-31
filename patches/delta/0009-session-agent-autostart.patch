@@ -1,4 +1,4 @@
-From 3d110acbc568f53482d857da64da2e26a08b812b Mon Sep 17 00:00:00 2001
+From c91df0154213dba8c6b0541a9f25a40936d70fed Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/11] feat(session): auto-start configured agent
@@ -16,7 +16,7 @@ Refs herdrdev/herdr#321
  src/app/api/tabs.rs                           |  10 +-
  src/app/api/workspaces.rs                     |   2 +-
  src/app/creation.rs                           |   9 +-
- src/app/mod.rs                                |  90 +++++-
+ src/app/mod.rs                                | 199 ++++++------
  src/app/runtime.rs                            |   3 +
  src/config.rs                                 |  20 ++
  src/config/io.rs                              |  18 ++
@@ -30,7 +30,7 @@ Refs herdrdev/herdr#321
  src/platform/windows.rs                       | 200 ++++++------
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 25 files changed, 881 insertions(+), 219 deletions(-)
+ 25 files changed, 906 insertions(+), 303 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
@@ -734,19 +734,20 @@ index c3edff59945f4c8eb656779dcb372f3b505b260c..3e1139430f4d51f109d5f201ff7888cc
          Ok(())
      }
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae3d9c4f7f 100644
+index 25448aa1c8ead9ff618744b72eda4acd9d6add65..51cb5359a86ab29d9dce561d630c4b1603ddec83 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
-@@ -142,6 +142,8 @@ pub struct App {
+@@ -142,6 +142,9 @@ pub struct App {
      pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
      pub(crate) agent_metadata_deadline: Option<Instant>,
      pub(crate) pending_agent_resume_deadline: Option<Instant>,
 +    pub(crate) tab_auto_start_agent: Option<crate::detect::Agent>,
 +    pub(crate) pending_tab_auto_start_agents: Vec<PendingTabAutoStartAgent>,
++    initial_default_workspace_auto_start_pending: bool,
      pub(crate) selection_autoscroll_deadline: Option<Instant>,
      pub(crate) selection_highlight_clear_deadline: Option<Instant>,
      pub(crate) session_save_deadline: Option<Instant>,
-@@ -173,6 +175,14 @@ pub struct App {
+@@ -173,6 +176,14 @@ pub struct App {
      prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
  }
  
@@ -761,7 +762,7 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
  pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
  pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
  
-@@ -391,6 +401,15 @@ fn resolve_effective_theme(
+@@ -391,6 +402,15 @@ fn resolve_effective_theme(
      )
  }
  
@@ -777,7 +778,7 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
  impl App {
      pub fn new(
          config: &Config,
-@@ -404,6 +423,12 @@ impl App {
+@@ -404,6 +424,12 @@ impl App {
          let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
          let render_notify = Arc::new(Notify::new());
          let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
@@ -790,7 +791,7 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
  
          // Try to restore previous session
          let mut restored_terminals = std::collections::HashMap::new();
-@@ -426,7 +451,7 @@ impl App {
+@@ -426,7 +452,7 @@ impl App {
                  0.5_f32,
                  std::collections::HashSet::new(),
              )
@@ -799,16 +800,43 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
              let history = config
                  .experimental
                  .pane_history
-@@ -788,6 +813,8 @@ impl App {
+@@ -492,6 +518,7 @@ impl App {
+             )
+         };
+ 
++        let initial_default_workspace_auto_start_pending = workspaces.is_empty();
+         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
+ 
+         // Validate sidebar bounds before they reach any `u16::clamp(min, max)`
+@@ -788,6 +815,9 @@ impl App {
              loaded_host_cursor: config.ui.host_cursor,
              agent_metadata_deadline: None,
              pending_agent_resume_deadline: None,
 +            tab_auto_start_agent,
 +            pending_tab_auto_start_agents: Vec::new(),
++            initial_default_workspace_auto_start_pending,
              session_save_deadline: None,
              session_save_thread: None,
              startup_session_save_blocked: false,
-@@ -1444,6 +1471,17 @@ impl App {
+@@ -864,6 +894,7 @@ impl App {
+         app.state.detach_exits = false;
+         app.state.pane_id_aliases = pane_id_aliases;
+         app.state.workspaces = workspaces;
++        app.initial_default_workspace_auto_start_pending = false;
+         app.state.terminals = terminals;
+         app.terminal_runtimes = runtimes.into();
+         app.state.active = snapshot
+@@ -1258,7 +1289,8 @@ impl App {
+         );
+         let cwd = self.resolve_new_terminal_cwd(None);
+ 
+-        match self.create_workspace_with_options(cwd, true) {
++        let queue_auto_start_agent = self.initial_default_workspace_auto_start_pending;
++        match self.create_workspace_with_launch_env(cwd, true, Vec::new(), queue_auto_start_agent) {
+             Ok(_) => {
+                 if preserve_mode {
+                     self.state.mode = previous_mode;
+@@ -1444,6 +1476,17 @@ impl App {
          let invalid_section =
              |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
  
@@ -826,7 +854,34 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
          if !invalid_section("keys") {
              match config.live_keybinds_with_diagnostics() {
                  Ok((live, keybind_diagnostics)) => {
-@@ -2768,6 +2806,56 @@ mod tests {
+@@ -1868,11 +1911,6 @@ impl App {
+                         self.update_host_terminal_theme(kind, color);
+                     }
+                 }
+-                crate::raw_input::RawInputEvent::HostPaletteColors { colors } => {
+-                    if apply_host_terminal_theme {
+-                        self.update_host_terminal_palette_colors(&colors);
+-                    }
+-                }
+                 crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => {
+                     if apply_host_terminal_theme {
+                         self.set_host_terminal_appearance(appearance, true);
+@@ -2369,14 +2407,6 @@ mod tests {
+         std::env::temp_dir().join(unique).join("config.toml")
+     }
+ 
+-    fn restore_xdg_state_home(original: Option<std::ffi::OsString>) {
+-        if let Some(value) = original {
+-            std::env::set_var("XDG_STATE_HOME", value);
+-        } else {
+-            std::env::remove_var("XDG_STATE_HOME");
+-        }
+-    }
+-
+     #[test]
+     fn git_refresh_deadline_is_suppressed_while_in_flight() {
+         let mut app = test_app();
+@@ -2768,6 +2798,56 @@ mod tests {
          assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
      }
  
@@ -883,6 +938,125 @@ index 25448aa1c8ead9ff618744b72eda4acd9d6add65..ee0eb7e13d2bd36052d6594537cf3cae
      #[test]
      fn startup_uses_configured_sidebar_state() {
          let mut config = Config::default();
+@@ -2807,6 +2887,22 @@ mod tests {
+         assert!(app.state.pending_workspace_create_cwd.is_none());
+     }
+ 
++    #[tokio::test]
++    async fn replacement_default_workspace_does_not_queue_agent_auto_start() {
++        let mut app = test_app();
++        app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
++        app.initial_default_workspace_auto_start_pending = false;
++        app.state.mode = Mode::Navigate;
++
++        assert!(app.ensure_default_workspace());
++        assert_eq!(app.state.workspaces.len(), 1);
++        assert!(app.pending_tab_auto_start_agents.is_empty());
++
++        for (_, runtime) in app.terminal_runtimes.drain() {
++            runtime.shutdown();
++        }
++    }
++
+     #[test]
+     fn startup_uses_workspace_name_prompt_config() {
+         let mut config = Config::default();
+@@ -2983,50 +3079,6 @@ mod tests {
+         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+     }
+ 
+-    #[test]
+-    fn startup_still_auto_opens_unseen_product_announcement() {
+-        let _guard = config_env_lock().lock().unwrap();
+-        let path = temp_config_path("startup-product-announcement-auto-open");
+-        let state_home = path.parent().unwrap().join("state");
+-        let original_xdg_state_home = std::env::var_os("XDG_STATE_HOME");
+-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+-        std::env::set_var("XDG_STATE_HOME", &state_home);
+-
+-        crate::release_notes::save_pending(env!("CARGO_PKG_VERSION"), "### Changed\n- One")
+-            .unwrap();
+-        crate::product_announcements::save_manifest_announcement(
+-            env!("CARGO_PKG_VERSION"),
+-            Some(&crate::product_announcements::ManifestAnnouncement {
+-                id: "startup-announcement".into(),
+-                title: Some("Startup announcement".into()),
+-                body: "### Announcement\n- One".into(),
+-            }),
+-        )
+-        .unwrap();
+-
+-        let config = Config {
+-            onboarding: Some(false),
+-            ..Default::default()
+-        };
+-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+-
+-        let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+-
+-        assert_eq!(app.state.mode, Mode::ProductAnnouncement);
+-        assert_eq!(
+-            app.state
+-                .product_announcement
+-                .as_ref()
+-                .map(|announcement| announcement.id.as_str()),
+-            Some("startup-announcement")
+-        );
+-        assert!(app.state.release_notes.is_none());
+-
+-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+-        restore_xdg_state_home(original_xdg_state_home);
+-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+-    }
+-
+     #[test]
+     fn reload_config_updates_live_state() {
+         let _guard = config_env_lock().lock().unwrap();
+@@ -6486,7 +6538,7 @@ last_pane = "prefix+tab"
+     }
+ 
+     #[test]
+-    fn route_client_input_updates_host_terminal_theme_from_osc_response() {
++    fn route_client_input_updates_host_terminal_theme_from_default_color_response() {
+         let mut app = test_app();
+ 
+         app.route_client_input(b"\x1b]11;#123456\x07\x1b]4;7;rgb:aaaa/bbbb/cccc\x1b\\".to_vec());
+@@ -6499,33 +6551,10 @@ last_pane = "prefix+tab"
+                 b: 0x56,
+             })
+         );
+-        assert_eq!(
+-            app.state.host_terminal_theme.palette[7],
+-            Some(crate::terminal_theme::RgbColor {
+-                r: 0xaa,
+-                g: 0xbb,
+-                b: 0xcc,
+-            })
+-        );
+-
+         app.route_client_input(crate::raw_input::GHOSTTY_COLOR_SCHEME_DARK_REPORT.to_vec());
+         assert_eq!(
+-            app.state.host_terminal_theme.palette[7],
+-            Some(crate::terminal_theme::RgbColor {
+-                r: 0xaa,
+-                g: 0xbb,
+-                b: 0xcc,
+-            })
+-        );
+-
+-        app.route_client_input(b"\x1b]4;7;rgb:dddd/eeee/ffff\x1b\\".to_vec());
+-        assert_eq!(
+-            app.state.host_terminal_theme.palette[7],
+-            Some(crate::terminal_theme::RgbColor {
+-                r: 0xdd,
+-                g: 0xee,
+-                b: 0xff,
+-            })
++            app.state.host_terminal_appearance,
++            Some(crate::terminal_theme::HostAppearance::Dark)
+         );
+     }
+ 
 diff --git a/src/app/runtime.rs b/src/app/runtime.rs
 index 2991954f67e250de046a7dc518c983917f2526ee..5bb655ba251100d9c9d6e40341af0d10d9334768 100644
 --- a/src/app/runtime.rs
@@ -1056,7 +1230,7 @@ index 791cfb247dcbb4b0d8e2a9bdd5a1a3a4bedfdc2b..f06448898103d6fab277b9b670b80163
  # a Herdr server restart. Requires official integrations that report session refs.
  # resume_agents_on_restore = true
 diff --git a/src/pane.rs b/src/pane.rs
-index f68999bcc9f64fd789e2fa502207867eb2a23ebb..bc8cca0448ff3d26826cc9266b18e914c57d281b 100644
+index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e53a53cd0c 100644
 --- a/src/pane.rs
 +++ b/src/pane.rs
 @@ -1400,6 +1400,10 @@ impl<'a> PaneShellConfig<'a> {

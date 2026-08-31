@@ -548,7 +548,13 @@ Keep `PRODUCT.md` as the concise canonical user-visible truth and
 facts into the fork README without turning it into internal design documentation.
 Keep root `README.md` and `docs/next/README.md` byte-for-byte identical. Product
 documentation carried in release source belongs in the logical mailbox that owns
-the behavior. Root `CHANGELOG.md` records only herdr-win CalVer releases and
+the behavior. When a completed, pushed development candidate fixes a referenced
+upstream issue, add its concise user-visible outcome to the README's current
+development candidate section in the same milestone. List only fixes actually on
+`origin/candidate/development`, link the fully qualified upstream report, and state
+that they remain unpublished. At explicit patch promotion or release, move each
+entry into its normal capability or changelog owner instead of retaining a stale
+candidate list. Root `CHANGELOG.md` records only herdr-win CalVer releases and
 user-visible fork changes; link the official upstream Herdr changelog instead of
 copying upstream release entries. Do not edit changelog, release notes, website,
 or broad docs unless changed behavior requires it, and never edit generated

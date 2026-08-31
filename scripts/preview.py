@@ -18,11 +18,6 @@ ASSET_TARGETS = (
     "windows-x86_64",
     "windows-x86_64-installer",
 )
-EXPECTED_ASSET_NAMES = {
-    **{target: f"herdr-{target}" for target in ASSET_TARGETS},
-    "windows-x86_64": "herdr-windows-x86_64.zip",
-    "windows-x86_64-installer": "herdr-windows-x86_64-installer.exe",
-}
 HERDR_WIN_RELEASE_VERSION_RE = re.compile(
     r"^(?P<year>[0-9]{4})\.(?P<month>[0-9]{2})\.(?P<day>[0-9]{2})\.(?P<sequence>[1-9][0-9]*)$"
 )
@@ -243,12 +238,13 @@ def candidate_build_id(
     return f"{upstream_sha[:12]}.{candidate}"
 
 
-def default_asset_urls(
-    repo: str, tag: str, release_version: str | None = None
-) -> dict[str, str]:
-    names = dict(EXPECTED_ASSET_NAMES)
-    if release_version is not None:
-        names.update(herdr_win_asset_names(release_version))
+def default_asset_urls(repo: str, tag: str, release_version: str) -> dict[str, str]:
+    names = herdr_win_asset_names(release_version)
+    expected_tag = f"v{release_version}"
+    if tag != expected_tag:
+        raise ValueError(
+            f"tag must be {expected_tag} for release_version {release_version}"
+        )
     return {
         target: f"https://github.com/{repo}/releases/download/{tag}/{names[target]}"
         for target in ASSET_TARGETS
@@ -294,15 +290,14 @@ def build_manifest(
     notes: str,
     shas: dict[str, str],
     retain: int,
-    release_version: str | None = None,
+    release_version: str,
 ) -> str:
     if not re.fullmatch(r"[0-9a-f]{12}\.[0-9a-f]{12}", build_id):
         raise ValueError("build_id must be two lowercase 12-hex components")
     urls = default_asset_urls(repo, tag, release_version)
     assets = asset_objects(urls, shas)
     current = read_json(output) or {}
-    if release_version is not None:
-        require_newer_herdr_win_release(release_version, current)
+    require_newer_herdr_win_release(release_version, current)
     current_builds = current.get("builds")
     builds: dict[str, Any] = dict(current_builds) if isinstance(current_builds, dict) else {}
     build = {
@@ -314,8 +309,7 @@ def build_manifest(
         "prerelease": False,
         "assets": assets,
     }
-    if release_version is not None:
-        build["release_version"] = release_version
+    build["release_version"] = release_version
     builds[build_id] = build
     ordered_builds = {
         key: builds[key]
@@ -338,8 +332,7 @@ def build_manifest(
         "assets": assets,
         "builds": ordered_builds,
     }
-    if release_version is not None:
-        manifest["release_version"] = release_version
+    manifest["release_version"] = release_version
     return json.dumps(manifest, indent=2) + "\n"
 
 
@@ -439,7 +432,7 @@ def main() -> int:
     manifest.add_argument("--notes", required=True)
     manifest.add_argument("--sha-file")
     manifest.add_argument("--retain", type=int, default=30)
-    manifest.add_argument("--release-version")
+    manifest.add_argument("--release-version", required=True)
     manifest.set_defaults(func=cmd_manifest)
 
     asset_names = sub.add_parser("herdr-win-asset-names")

@@ -4,7 +4,7 @@ This changelog records only user-visible changes released by the `herdr-win` for
 
 ## Unreleased
 
-## [2026.08.31.3] - 2026-08-31
+## [2026.08.31.4] - 2026-08-31
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.
 

@@ -13,6 +13,8 @@ VALID_SHAS = {
     target: f"{index:x}" * 64
     for index, target in enumerate(preview.ASSET_TARGETS, start=1)
 }
+VALID_RELEASE_VERSION = "2026.06.02.1"
+VALID_RELEASE_TAG = f"v{VALID_RELEASE_VERSION}"
 
 
 class PreviewNotesTests(unittest.TestCase):
@@ -37,7 +39,7 @@ class PreviewNotesTests(unittest.TestCase):
             content = preview.build_manifest(
                 output=output,
                 repo="herdrdev/herdr",
-                tag="v2026.06.02.1",
+                tag=VALID_RELEASE_TAG,
                 build_id="abcdef123456.7890abcdef12",
                 commit="abcdef1234567890",
                 built_at="2026-06-02T03:00:00Z",
@@ -46,7 +48,7 @@ class PreviewNotesTests(unittest.TestCase):
                 notes=notes,
                 shas=VALID_SHAS,
                 retain=30,
-                release_version="2026.06.02.1",
+                release_version=VALID_RELEASE_VERSION,
             )
             data = json.loads(content)
             self.assertEqual(data["channel"], "preview")
@@ -154,7 +156,7 @@ class PreviewNotesTests(unittest.TestCase):
                     preview.build_manifest(
                         output=Path(tmp) / "preview.json",
                         repo="herdrdev/herdr",
-                        tag="preview-test",
+                        tag=VALID_RELEASE_TAG,
                         build_id="abcdef123456.7890abcdef12",
                         commit="abcdef",
                         built_at="2026-06-02T03:00:00Z",
@@ -163,6 +165,7 @@ class PreviewNotesTests(unittest.TestCase):
                         notes="test",
                         shas=shas,
                         retain=1,
+                        release_version=VALID_RELEASE_VERSION,
                     )
 
             invalid = dict(VALID_SHAS)
@@ -173,7 +176,7 @@ class PreviewNotesTests(unittest.TestCase):
                 preview.build_manifest(
                     output=Path(tmp) / "preview.json",
                     repo="herdrdev/herdr",
-                    tag="preview-test",
+                    tag=VALID_RELEASE_TAG,
                     build_id="abcdef123456.7890abcdef12",
                     commit="abcdef",
                     built_at="2026-06-02T03:00:00Z",
@@ -182,7 +185,27 @@ class PreviewNotesTests(unittest.TestCase):
                     notes="test",
                     shas=invalid,
                     retain=1,
+                    release_version=VALID_RELEASE_VERSION,
                 )
+
+    def test_manifest_binds_tag_to_release_version(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(
+            ValueError, "tag must be v2026.06.02.1"
+        ):
+            preview.build_manifest(
+                output=Path(tmp) / "preview.json",
+                repo="herdrdev/herdr",
+                tag="v2026.06.02.2",
+                build_id="abcdef123456.7890abcdef12",
+                commit="abcdef",
+                built_at="2026-06-02T03:00:00Z",
+                base_version="0.6.6",
+                protocol=12,
+                notes="test",
+                shas=VALID_SHAS,
+                retain=1,
+                release_version=VALID_RELEASE_VERSION,
+            )
 
     def test_manifest_preserves_legacy_zip_only_archived_build(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,7 +233,7 @@ class PreviewNotesTests(unittest.TestCase):
             content = preview.build_manifest(
                 output=output,
                 repo="herdrdev/herdr",
-                tag="preview-test",
+                tag=VALID_RELEASE_TAG,
                 build_id="abcdef123456.7890abcdef12",
                 commit="abcdef",
                 built_at="2026-06-02T03:00:00Z",
@@ -219,6 +242,7 @@ class PreviewNotesTests(unittest.TestCase):
                 notes="test",
                 shas=VALID_SHAS,
                 retain=2,
+                release_version=VALID_RELEASE_VERSION,
             )
             data = json.loads(content)
             self.assertEqual(
@@ -235,7 +259,7 @@ class PreviewNotesTests(unittest.TestCase):
                 preview.build_manifest(
                     output=Path(tmp) / "preview.json",
                     repo="herdrdev/herdr",
-                    tag="preview-test",
+                    tag=VALID_RELEASE_TAG,
                     build_id="2026-06-02-abcdef123456",
                     commit="abcdef",
                     built_at="2026-06-02T03:00:00Z",
@@ -244,6 +268,7 @@ class PreviewNotesTests(unittest.TestCase):
                     notes="test",
                     shas=VALID_SHAS,
                     retain=1,
+                    release_version=VALID_RELEASE_VERSION,
                 )
 
     def test_candidate_build_id_is_stable_and_attempt_scoped(self):

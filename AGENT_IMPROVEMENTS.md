@@ -98,14 +98,15 @@ configuration repository.
   server detach filter passed its native Windows test through the shared recipe.
   Owner: `justfile`.
 
-- **Status: proposed. Retier public preview-manifest convergence to its observed
-  cache window.** Keep the real fixed updater URL as the acceptance boundary, but
-  allow enough bounded retries for GitHub's branch-content cache to converge before
-  declaring a published release stale. Evidence: all 18 ten-second attempts expired
-  for immutable release `2026.08.31.4`; the same URL exposed the correct build later,
-  and the isolated updater then returned `already up to date (2026.08.31.4)`.
-  Expected benefit: avoid false-failed immutable releases without weakening the
-  public updater-path check. Owner: `.github/workflows/release.yml`.
+- **Status: done. Retier public preview-manifest convergence to its observed cache
+  window.** The real fixed updater URL now receives 60 bounded attempts, reports the
+  successful convergence attempt, and identifies a terminal miss as delayed
+  post-publication visibility rather than a failed publication. `CONTRIBUTING.md`
+  routes that exact failure through `gh run rerun <promotion-run-id> --failed` and
+  forbids another promotion or CalVer. Evidence: all former 18 ten-second attempts
+  expired for immutable release `2026.08.31.4`; the same URL exposed the correct
+  build later, and the isolated updater returned `already up to date
+  (2026.08.31.4)`. Owner: `.github/workflows/release.yml` and `CONTRIBUTING.md`.
 
 - **Status: done. Document one clean sparse checkout for WinGet PR updates.** The
   contribution procedure now starts sparse mode in the initial single-branch clone,

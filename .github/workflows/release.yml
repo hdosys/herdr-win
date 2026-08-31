@@ -1649,17 +1649,19 @@ jobs:
 
           $manifestUrl = "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/master/website/preview.json"
           $manifest = $null
-          for ($attempt = 1; $attempt -le 18; $attempt++) {
+          $manifestAttempts = 60
+          for ($attempt = 1; $attempt -le $manifestAttempts; $attempt++) {
             try {
               $manifest = Invoke-RestMethod -Uri $manifestUrl -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 30
             } catch {
               $manifest = $null
             }
             if ($null -ne $manifest -and [string]$manifest.build_id -eq $env:BUILD_ID) {
+              Write-Host "public preview manifest advanced to $env:BUILD_ID on attempt $attempt of $manifestAttempts"
               break
             }
-            if ($attempt -eq 18) {
-              throw "published preview manifest did not advance to $env:BUILD_ID"
+            if ($attempt -eq $manifestAttempts) {
+              throw "release $env:RELEASE_VERSION is published, but the public preview manifest did not advance to $env:BUILD_ID within the bounded cache-propagation window; rerun only the failed jobs for this workflow run and do not dispatch promotion again"
             }
             Start-Sleep -Seconds 10
           }

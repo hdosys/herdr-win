@@ -462,12 +462,22 @@ sources.
 Manual release work is ephemeral: never create or force-push an integration
 branch, merge upstream into a release branch, resolve replay conflicts
 automatically, or publish releases from ordinary pushes. A conflict fails closed.
-On a promotion rerun for the same candidate, the existing immutable release is
-canonical; validate and reuse its complete platform asset set, derive each manifest
-digest independently from the downloaded canonical release, and never replace or
-repoint an asset. Promotion never deletes a tag or GitHub release. Preserve any
-draft or mutable release and fail before manifest publication instead of trying to
-recover by removing public state.
+Once promotion publishes the immutable release and manifest commit, publication is
+complete even though the separate public-feed verification job may still be waiting
+for GitHub's branch-content cache. If only that post-publication job fails, keep the
+same release and CalVer and rerun only the failed jobs from the original promotion:
+
+```powershell
+gh run rerun <promotion-run-id> --failed --repo hdosys/herdr-win
+```
+
+Never dispatch promotion again for that candidate. The existing immutable release
+is canonical, and a complete promotion rerun must remain blocked by the equal-CalVer
+gate. The failed-job rerun uses the original workflow revision to download and
+validate the complete canonical asset set and the real fixed updater URL without
+replacing or repointing an asset. Promotion never deletes a tag or GitHub release.
+Preserve any draft or mutable release and fail before manifest publication instead
+of trying to recover by removing public state.
 
 ### Preparing a WinGet manifest update
 

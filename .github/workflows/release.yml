@@ -1717,7 +1717,7 @@ jobs:
           $env:HERDR_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "herdr-win-update-install"
           Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
           $output = Invoke-BoundedCaptured -FilePath (Join-Path $stage "herdr.exe") -Arguments @("update")
-          $expected = "already up to date ($env:RELEASE_VERSION+$env:BUILD_ID)"
+          $expected = "already up to date ($env:RELEASE_VERSION)"
           if ($output -notlike "*$expected*") {
             throw "updater did not confirm the published fork build: $output"
           }

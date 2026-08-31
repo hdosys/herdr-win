@@ -1,4 +1,4 @@
-From cdf429e1de4542f0a4dfe887648e20dbbf4a6303 Mon Sep 17 00:00:00 2001
+From efa66b86ef2fa1560984baf6e43b7117cf58fca2 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
 Subject: [PATCH 4/11] fix(opencode): preserve truthful lifecycle state
@@ -6,12 +6,12 @@ Subject: [PATCH 4/11] fix(opencode): preserve truthful lifecycle state
 Defer root-session errors until idle or a bounded fallback, cancel them when explicit continuing status follows, and prevent terminal blocked state from being overwritten by legacy idle events. Keep outstanding root and child prompts blocked until their exact replies arrive so unrelated busy or idle events cannot erase user-waiting state.
 ---
  CHANGELOG.md                                  |    3 +
- .../assets/opencode/herdr-agent-state.js      |  958 +++++++++++++--
- .../assets/opencode/herdr-agent-state.test.ts | 1063 ++++++++++++++++-
+ .../assets/opencode/herdr-agent-state.js      |  995 +++++++++++--
+ .../assets/opencode/herdr-agent-state.test.ts | 1273 ++++++++++++++++-
  .../assets/opencode/herdr-tui-session.js      |    9 +-
  .../assets/opencode/herdr-tui-session.test.ts |   15 +
  src/integration/mod.rs                        |    2 +-
- 6 files changed, 1935 insertions(+), 115 deletions(-)
+ 6 files changed, 2160 insertions(+), 137 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index 05f368084241fc56b7f437bd1232edce40f12b0b..576a7abcdf532aad296c5bb7a0092393d92808c1 100644
@@ -28,7 +28,7 @@ index 05f368084241fc56b7f437bd1232edce40f12b0b..576a7abcdf532aad296c5bb7a0092393
  
  ### Added
 diff --git a/src/integration/assets/opencode/herdr-agent-state.js b/src/integration/assets/opencode/herdr-agent-state.js
-index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37dbc39f64a 100644
+index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139ddc7d2ac5 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.js
 +++ b/src/integration/assets/opencode/herdr-agent-state.js
 @@ -2,19 +2,24 @@
@@ -36,7 +36,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
  // add custom hooks/plugins beside this file instead of editing it.
  // HERDR_INTEGRATION_ID=opencode
 -// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=15
++// HERDR_INTEGRATION_VERSION=19
  
 +import { createHash } from "node:crypto";
  import net from "node:net";
@@ -56,95 +56,145 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
 +const SUBAGENT_START_TIMEOUT_MS = 30_000;
 +const MAX_RESPONSE_CHARACTERS = 64 * 1024;
-+const MIN_READABLE_SUBAGENT_COLUMNS = 80;
++const PANE_WIDTH_TO_HEIGHT_RATIO = 2;
 +const SERVER_PROBE_TIMEOUT_MS = 500;
 +
  const CHILD_EVENT_STATES = new Map([
    ["permission.asked", "blocked"],
    ["question.asked", "blocked"],
-@@ -23,6 +28,17 @@ const CHILD_EVENT_STATES = new Map([
+@@ -23,17 +28,6 @@ const CHILD_EVENT_STATES = new Map([
    ["question.rejected", "working"],
  ]);
  
-+const SESSION_STATE_BY_STATUS = new Map([
-+  ["idle", "idle"],
-+  ["active", "working"],
-+  ["busy", "working"],
-+  ["pending", "working"],
-+  ["retry", "working"],
-+  ["running", "working"],
-+  ["streaming", "working"],
-+  ["working", "working"],
-+]);
-+
- function nextReportSeq() {
-   reportSeq += 1;
-   return reportSeq;
-@@ -34,138 +50,881 @@ function sessionIDFromProperties(properties) {
-     : undefined;
- }
+-function nextReportSeq() {
+-  reportSeq += 1;
+-  return reportSeq;
+-}
+-
+-function sessionIDFromProperties(properties) {
+-  return typeof properties?.sessionID === "string" && properties.sessionID
+-    ? properties.sessionID
+-    : undefined;
+-}
+-
+ const SESSION_STATE_BY_STATUS = new Map([
+   ["idle", "idle"],
+   ["active", "working"],
+@@ -45,80 +39,46 @@ const SESSION_STATE_BY_STATUS = new Map([
+   ["working", "working"],
+ ]);
  
--const SESSION_STATE_BY_STATUS = new Map([
--  ["idle", "idle"],
--  ["active", "working"],
--  ["busy", "working"],
--  ["pending", "working"],
--  ["retry", "working"],
--  ["running", "working"],
--  ["streaming", "working"],
--  ["working", "working"],
--]);
-+function sessionStatusKind(status) {
-+  return typeof status === "string" ? status.toLowerCase() : status?.type?.toLowerCase();
-+}
- 
- function stateFromSessionStatus(status) {
+-function stateFromSessionStatus(status) {
 -  const kind = typeof status === "string" ? status : status?.type;
-+  const kind = sessionStatusKind(status);
-   return typeof kind === "string"
+-  return typeof kind === "string"
 -    ? SESSION_STATE_BY_STATUS.get(kind.toLowerCase())
-+    ? SESSION_STATE_BY_STATUS.get(kind)
-     : undefined;
+-    : undefined;
++function nextReportSeq() {
++  reportSeq += 1;
++  return reportSeq;
  }
  
 -function request(method, params) {
 -  const pending = requestChain.then(() => requestOnce(method, params));
 -  requestChain = pending.catch(() => {});
 -  return pending;
-+function isSessionAbort(error) {
-+  return error?.name === "MessageAbortedError";
++function sessionIDFromProperties(properties) {
++  return typeof properties?.sessionID === "string" && properties.sessionID
++    ? properties.sessionID
++    : undefined;
  }
  
 -function requestOnce(method, params) {
 -  const paneId = process.env.HERDR_PANE_ID;
 -  const socketPath = process.env.HERDR_SOCKET_PATH;
+-
+-  if (!paneId || !socketPath) {
+-    return Promise.resolve();
+-  }
+-
+-  const socketEndpoint =
+-    process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
+-
+-  const requestId = `${SOURCE}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)
+-    .toString()
+-    .padStart(6, "0")}`;
+-  const request = {
+-    id: requestId,
+-    method,
+-    params: {
+-      pane_id: paneId,
+-      source: SOURCE,
+-      agent: AGENT,
+-      seq: nextReportSeq(),
+-      ...params,
+-    },
+-  };
+-
+-  return new Promise((resolve) => {
+-    const client = net.createConnection(socketEndpoint, () => {
+-      client.write(`${JSON.stringify(request)}\n`);
+-    });
+-
+-    const finish = () => {
+-      client.destroy();
+-      resolve();
+-    };
++function sessionStatusKind(status) {
++  return typeof status === "string" ? status.toLowerCase() : status?.type?.toLowerCase();
++}
+ 
+-    client.setTimeout(500, finish);
+-    client.on("data", finish);
+-    client.on("error", finish);
+-    client.on("end", finish);
+-    client.on("close", resolve);
+-  });
++function stateFromSessionStatus(status) {
++  const kind = sessionStatusKind(status);
++  return typeof kind === "string"
++    ? SESSION_STATE_BY_STATUS.get(kind)
++    : undefined;
+ }
+ 
+-function reportSession(sessionID) {
+-  if (!sessionID) {
+-    return Promise.resolve();
+-  }
+-  return request("pane.report_agent_session", { agent_session_id: sessionID });
++function isSessionAbort(error) {
++  return error?.name === "MessageAbortedError";
+ }
+ 
+-function reportState(state, sessionID) {
+-  const params = { state };
+-  if (sessionID) {
+-    reportedRootSessionID = sessionID;
+-    params.agent_session_id = sessionID;
 +function promptEventKey(type, properties) {
 +  const kind = type?.split(".", 1)[0];
 +  if (kind !== "permission" && kind !== "question") {
 +    return undefined;
-+  }
+   }
+-  return request("pane.report_agent", params);
 +  const requestID = type.endsWith(".asked")
 +    ? properties?.id
 +    : properties?.requestID;
 +  return typeof requestID === "string" && requestID
 +    ? `${kind}:${requestID}`
 +    : undefined;
-+}
+ }
  
--  if (!paneId || !socketPath) {
--    return Promise.resolve();
+-export const HerdrAgentStatePlugin = async () => {
 +export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {}) => {
-+  if (
-+    process.env.HERDR_ENV !== "1" ||
-+    !process.env.HERDR_SOCKET_PATH ||
-+    !process.env.HERDR_PANE_ID
-+  ) {
-+    return {};
+   if (
+     process.env.HERDR_ENV !== "1" ||
+     !process.env.HERDR_SOCKET_PATH ||
+@@ -127,45 +87,865 @@ export const HerdrAgentStatePlugin = async () => {
+     return {};
    }
  
--  const socketEndpoint =
--    process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-+  let requestChain = Promise.resolve();
++  let reportRequestChain = Promise.resolve();
++  let paneRequestChain = Promise.resolve();
 +  let panePlacementChain = Promise.resolve();
 +  let currentRootSessionID;
 +  let unscopedErrorBlocked = false;
@@ -241,14 +291,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +          newline = responseBuffer.indexOf("\n");
 +        }
 +      };
- 
--  const requestId = `${SOURCE}:${Date.now()}:${Math.floor(Math.random() * 1_000_000)
--    .toString()
--    .padStart(6, "0")}`;
--  const request = {
--    id: requestId,
--    method,
--    params: {
++
 +      client = net.createConnection(socketEndpoint, () => {
 +        if (disposed || (disposing && !allowWhileDisposing)) {
 +          finish();
@@ -270,13 +313,19 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +  }
 +
 +  function request(method, params, allowWhileDisposing = false) {
-+    const pending = requestChain.then(() => {
-+      if (disposed || (disposing && !allowWhileDisposing)) {
-+        return;
-+      }
-+      return requestOnce(method, params, allowWhileDisposing);
-+    });
-+    requestChain = pending.catch(() => {});
++    if (disposed || (disposing && !allowWhileDisposing)) {
++      return Promise.resolve();
++    }
++    return requestOnce(method, params, allowWhileDisposing);
++  }
++
++  function paneRequest(method, params, allowWhileDisposing = false) {
++    const pending = paneRequestChain.then(() => request(
++      method,
++      params,
++      allowWhileDisposing,
++    ));
++    paneRequestChain = pending.catch(() => {});
 +    return pending;
 +  }
 +
@@ -285,19 +334,17 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    if (!paneId) {
 +      return Promise.resolve();
 +    }
-+    return request(method, {
-       pane_id: paneId,
-       source: SOURCE,
-       agent: AGENT,
-       seq: nextReportSeq(),
-       ...params,
--    },
--  };
--
--  return new Promise((resolve) => {
--    const client = net.createConnection(socketEndpoint, () => {
--      client.write(`${JSON.stringify(request)}\n`);
-     });
++    const pending = reportRequestChain.then(() =>
++      request(method, {
++        pane_id: paneId,
++        source: SOURCE,
++        agent: AGENT,
++        seq: nextReportSeq(),
++        ...params,
++      }),
++    );
++    reportRequestChain = pending.catch(() => {});
++    return pending;
 +  }
 +
 +  function reportSession(sessionID, sessionStartSource) {
@@ -353,13 +400,19 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +      clearTimeout(timeout);
 +    }
 +  }
- 
--    const finish = () => {
--      client.destroy();
--      resolve();
++
 +  function subagentName(sessionID) {
 +    const suffix = createHash("sha256").update(sessionID).digest("hex").slice(0, 12);
 +    return `opencode-${suffix}`;
++  }
++
++  async function agentStartSucceeded(name, paneID, response) {
++    if (responseResult(response, "agent_started")) {
++      return true;
++    }
++    const observedResponse = await request("agent.get", { target: name });
++    const observed = responseResult(observedResponse, "agent_info")?.agent;
++    return observed?.name === name && observed?.pane_id === paneID;
 +  }
 +
 +  function childDirectory(info) {
@@ -374,16 +427,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +      return undefined;
 +    }
 +    const panes = Array.isArray(layout?.panes) ? layout.panes : [];
-+    const childPaneIDs = new Set(
-+      [...children.values()].map((child) => child.paneID).filter(Boolean),
++    const activePaneIDs = new Set(
++      [rootPaneID, ...[...children.values()].map((child) => child.paneID)].filter(Boolean),
 +    );
-+    let candidates = panes.filter((pane) => childPaneIDs.has(pane?.pane_id));
-+    // The first child splits the root to establish a permanent left Main column.
-+    // Later children divide only the largest area in the right child subtree.
-+    const splitRoot = candidates.length === 0;
-+    if (splitRoot) {
-+      candidates = panes.filter((pane) => pane?.pane_id === rootPaneID);
-+    }
++    const candidates = panes.filter((pane) => activePaneIDs.has(pane?.pane_id));
 +    let targetPaneID;
 +    let rect;
 +    for (const candidate of candidates) {
@@ -407,17 +454,11 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    return {
 +      paneID: targetPaneID,
 +      direction:
-+        splitRoot || rect.width >= MIN_READABLE_SUBAGENT_COLUMNS * 2 ? "right" : "down",
-     };
++        rect.width > rect.height * PANE_WIDTH_TO_HEIGHT_RATIO ? "right" : "down",
++      ratio: 0.5,
++    };
 +  }
- 
--    client.setTimeout(500, finish);
--    client.on("data", finish);
--    client.on("error", finish);
--    client.on("end", finish);
--    client.on("close", resolve);
--  });
--}
++
 +  function layoutPaneIDs(layout) {
 +    return new Set(
 +      (Array.isArray(layout?.panes) ? layout.panes : [])
@@ -425,10 +466,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +        .filter((paneID) => typeof paneID === "string" && paneID),
 +    );
 +  }
- 
--function reportSession(sessionID) {
--  if (!sessionID) {
--    return Promise.resolve();
++
 +  async function acquirePanePlacement() {
 +    const previousPanePlacement = panePlacementChain;
 +    let releasePanePlacement = () => {};
@@ -437,15 +475,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    });
 +    await previousPanePlacement;
 +    return releasePanePlacement;
-   }
--  return request("pane.report_agent_session", { agent_session_id: sessionID });
--}
- 
--function reportState(state, sessionID) {
--  const params = { state };
--  if (sessionID) {
--    reportedRootSessionID = sessionID;
--    params.agent_session_id = sessionID;
++  }
++
 +  async function recoverPendingSplit(sessionID, allowWhileDisposing = false) {
 +    const child = children.get(sessionID);
 +    const previousPaneIDs = child?.pendingSplitPaneIDs;
@@ -453,7 +484,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
 +      return undefined;
 +    }
-+    const layoutResponse = await request(
++    const layoutResponse = await paneRequest(
 +      "pane.layout",
 +      { pane_id: rootPaneID },
 +      allowWhileDisposing,
@@ -469,17 +500,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    child.paneID = paneID;
 +    child.pendingSplitPaneIDs = undefined;
 +    return paneID;
-   }
--  return request("pane.report_agent", params);
--}
- 
--export const HerdrAgentStatePlugin = async () => {
--  if (
--    process.env.HERDR_ENV !== "1" ||
--    !process.env.HERDR_SOCKET_PATH ||
--    !process.env.HERDR_PANE_ID
--  ) {
--    return {};
++  }
++
 +  async function childSessionState(sessionID) {
 +    if (typeof client?.session?.status !== "function") {
 +      return "idle";
@@ -503,10 +525,14 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    if (!paneID) {
 +      return true;
 +    }
-+    const response = await request("pane.close", { pane_id: paneID }, allowWhileDisposing);
++    const response = await paneRequest(
++      "pane.close",
++      { pane_id: paneID },
++      allowWhileDisposing,
++    );
 +    let closed = Boolean(responseResult(response, "ok")) || responseErrorCode(response) === "pane_not_found";
 +    if (!closed) {
-+      const layoutResponse = await request(
++      const layoutResponse = await paneRequest(
 +        "pane.layout",
 +        { pane_id: paneID },
 +        allowWhileDisposing,
@@ -566,7 +592,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +        if (child.pendingSplitPaneIDs) {
 +          paneID = await recoverPendingSplit(sessionID);
 +        } else {
-+          const layoutResponse = await request("pane.layout", { pane_id: rootPaneID });
++          const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
 +          const layout = responseResult(layoutResponse, "pane_layout")?.layout;
 +          const target = splitTarget(layout);
 +          if (
@@ -579,10 +605,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +          }
 +
 +          child.pendingSplitPaneIDs = layoutPaneIDs(layout);
-+          const splitResponse = await request("pane.split", {
++          const splitResponse = await paneRequest("pane.split", {
 +            target_pane_id: target.paneID,
 +            direction: target.direction,
-+            ratio: 0.5,
++            ratio: target.ratio,
 +            ...(directory ? { cwd: directory } : {}),
 +            focus: false,
 +            env: { [SUBAGENT_SESSION_ENV]: sessionID },
@@ -608,8 +634,9 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +        releasePanePlacement();
 +      }
 +
++      const name = subagentName(sessionID);
 +      const startResponse = await request("agent.start", {
-+        name: subagentName(sessionID),
++        name,
 +        kind: AGENT,
 +        pane_id: paneID,
 +        args: [
@@ -621,7 +648,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +        ],
 +        timeout_ms: SUBAGENT_START_TIMEOUT_MS,
 +      });
-+      if (!responseResult(startResponse, "agent_started")) {
++      if (!(await agentStartSucceeded(name, paneID, startResponse))) {
 +        await closeChildPane(sessionID, disposing);
 +      }
 +    } finally {
@@ -905,9 +932,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
 +    serverCreatedSessions.clear();
 +    currentRootSessionID = undefined;
 +    unscopedErrorBlocked = false;
-+    requestChain = Promise.resolve();
-   }
- 
++    reportRequestChain = Promise.resolve();
++    paneRequestChain = Promise.resolve();
++  }
++
    return {
      "chat.message": async ({ sessionID }) => {
 -      if (sessionID && childSessions.has(sessionID)) {
@@ -1041,7 +1069,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
            } else {
              await reportSession(sessionID);
            }
-@@ -177,21 +936,44 @@ export const HerdrAgentStatePlugin = async () => {
+@@ -177,21 +957,44 @@ export const HerdrAgentStatePlugin = async () => {
          case "question.replied":
          case "question.rejected":
          case "session.compacted":
@@ -1090,12 +1118,13 @@ index 2840c221ac252444bda54c36ba0370d51268726e..f72b8c24188e74ecf1bf19bf1acba37d
    };
  };
 diff --git a/src/integration/assets/opencode/herdr-agent-state.test.ts b/src/integration/assets/opencode/herdr-agent-state.test.ts
-index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5ca933139 100644
+index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd70378b28501 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.test.ts
 +++ b/src/integration/assets/opencode/herdr-agent-state.test.ts
-@@ -1,34 +1,45 @@
+@@ -1,34 +1,46 @@
 -import { beforeEach, expect, mock, test } from "bun:test";
 +import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
++import { createHash } from "node:crypto";
  
  const requests: unknown[] = [];
  const clients: FakeClient[] = [];
@@ -1148,7 +1177,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
          },
        };
        clients.push(client);
-@@ -42,22 +53,122 @@ beforeEach(() => {
+@@ -42,22 +54,122 @@ beforeEach(() => {
    requests.length = 0;
    clients.length = 0;
    requestWaiters.length = 0;
@@ -1273,7 +1302,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
  test("serializes lifecycle reports", async () => {
    autoAcknowledge = false;
    const plugin = await loadPlugin();
-@@ -79,10 +190,10 @@ test("serializes lifecycle reports", async () => {
+@@ -79,10 +191,10 @@ test("serializes lifecycle reports", async () => {
    });
    expect(clients).toHaveLength(1);
  
@@ -1286,7 +1315,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
    await Promise.all([working, idle]);
  
    expect(requests.map(requestState)).toEqual(["working", "idle"]);
-@@ -91,7 +202,7 @@ test("serializes lifecycle reports", async () => {
+@@ -91,7 +203,7 @@ test("serializes lifecycle reports", async () => {
    expect(sequences[1]).toBe((sequences[0] as number) + 1);
  });
  
@@ -1295,7 +1324,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
    const plugin = await loadPlugin();
  
    await plugin.event({
-@@ -107,11 +218,8 @@ test("suppresses redundant same-session updates", async () => {
+@@ -107,11 +219,8 @@ test("suppresses redundant same-session updates", async () => {
      event: { type: "session.updated", properties: { sessionID: "replacement-session" } },
    });
  
@@ -1309,10 +1338,11 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
  });
  
  test("does not classify server activity in another root session as a selection", async () => {
-@@ -160,8 +268,838 @@ test("reports retry status as working", async () => {
+@@ -160,8 +269,395 @@ test("reports retry status as working", async () => {
    expect(requests.map(requestSessionID)).toEqual(["root-session"]);
  });
  
+-test("reports child prompts without replacing the root session", async () => {
 +test("reports a user-aborted session as idle instead of blocked", async () => {
 +  const plugin = await loadPlugin();
 +
@@ -1555,7 +1585,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +});
 +
 +test("chat.message establishes new root ownership", async () => {
-+  const plugin = await loadPlugin();
+   const plugin = await loadPlugin();
 +  await plugin.event({
 +    event: {
 +      type: "session.created",
@@ -1573,7 +1603,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +  expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
 +});
 +
-+test("opens concurrent direct child sessions in adaptive same-tab splits", async () => {
++test("tiles five concurrent direct children across the complete tab", async () => {
 +  const plugin = await loadPlugin({
 +    directory: "C:\\repo",
 +    serverUrl: new URL("http://127.0.0.1:4096"),
@@ -1610,28 +1640,35 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +  await Promise.all([
 +    openChild(
 +      "child-one",
-+      [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }],
++      [{ pane_id: "test:p1", rect: { width: 140, height: 41 } }],
 +      "C:\\repo\\one",
 +    ),
 +    openChild("child-two", [
-+      { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-+      { pane_id: "test:p2", rect: { width: 100, height: 50 } },
++      { pane_id: "test:p1", rect: { width: 70, height: 41 } },
++      { pane_id: "test:p2", rect: { width: 70, height: 41 } },
 +    ]),
 +    openChild("child-three", [
-+      { pane_id: "test:p1", rect: { width: 200, height: 50 } },
-+      { pane_id: "test:p2", rect: { width: 200, height: 25 } },
-+      { pane_id: "test:p3", rect: { width: 200, height: 25 } },
++      { pane_id: "test:p1", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p2", rect: { width: 70, height: 41 } },
 +    ]),
 +    openChild("child-four", [
-+      { pane_id: "test:p1", rect: { width: 200, height: 50 } },
-+      { pane_id: "test:p2", rect: { width: 100, height: 25 } },
-+      { pane_id: "test:p4", rect: { width: 100, height: 25 } },
-+      { pane_id: "test:p3", rect: { width: 200, height: 25 } },
++      { pane_id: "test:p1", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p2", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p4", rect: { width: 70, height: 20 } },
++    ]),
++    openChild("child-five", [
++      { pane_id: "test:p1", rect: { width: 35, height: 20 } },
++      { pane_id: "test:p5", rect: { width: 35, height: 20 } },
++      { pane_id: "test:p3", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p2", rect: { width: 70, height: 20 } },
++      { pane_id: "test:p4", rect: { width: 70, height: 20 } },
 +    ]),
 +  ]);
 +
 +  const splits = requests.filter((request) => requestMethod(request) === "pane.split");
-+  expect(splits).toHaveLength(4);
++  expect(splits).toHaveLength(5);
 +  expect(requestParam(splits[0], "target_pane_id")).toBe("test:p1");
 +  expect(requestParam(splits[0], "direction")).toBe("right");
 +  expect(requestParam(splits[0], "ratio")).toBe(0.5);
@@ -1640,16 +1677,18 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +  expect(requestParam(splits[0], "env")).toEqual({
 +    HERDR_OPENCODE_SUBAGENT_SESSION_ID: "child-one",
 +  });
-+  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p2");
++  expect(requestParam(splits[1], "target_pane_id")).toBe("test:p1");
 +  expect(requestParam(splits[1], "direction")).toBe("down");
 +  expect(requestParam(splits[1], "ratio")).toBe(0.5);
 +  expect(requestParam(splits[2], "target_pane_id")).toBe("test:p2");
-+  expect(requestParam(splits[2], "direction")).toBe("right");
-+  expect(requestParam(splits[3], "target_pane_id")).toBe("test:p3");
++  expect(requestParam(splits[2], "direction")).toBe("down");
++  expect(requestParam(splits[3], "target_pane_id")).toBe("test:p1");
 +  expect(requestParam(splits[3], "direction")).toBe("right");
++  expect(requestParam(splits[4], "target_pane_id")).toBe("test:p3");
++  expect(requestParam(splits[4], "direction")).toBe("right");
 +
 +  const starts = requests.filter((request) => requestMethod(request) === "agent.start");
-+  expect(starts).toHaveLength(4);
++  expect(starts).toHaveLength(5);
 +  expect(requestParam(starts[0], "name")).toMatch(/^opencode-[0-9a-f]{12}$/);
 +  expect(requestParam(starts[0], "kind")).toBe("opencode");
 +  expect(requestParam(starts[0], "pane_id")).toBe("test:p2");
@@ -1670,6 +1709,192 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
 +});
 +
++test("stacks the first child when the root is not wide landscape", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++
++  enqueueResult("pane.layout", {
++    type: "pane_layout",
++    layout: {
++      panes: [{ pane_id: "test:p1", rect: { width: 170, height: 100 } }],
++    },
++  });
++  enqueueResult("pane.split", {
++    type: "pane_info",
++    pane: { pane_id: "test:p2" },
++  });
++  enqueueResult("agent.start", {
++    type: "agent_started",
++    agent: { pane_id: "test:p2" },
++    argv: [],
++  });
+ 
+   await plugin.event({
+     event: {
+@@ -173,29 +669,730 @@ test("reports child prompts without replacing the root session", async () => {
+     },
+   });
+ 
+-  for (const type of ["permission.asked", "question.asked"]) {
+-    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
+-  }
+-  for (const type of ["permission.replied", "question.replied", "question.rejected"]) {
+-    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
+-  }
++  const split = requests.find((request) => requestMethod(request) === "pane.split");
++  expect(requestParam(split, "target_pane_id")).toBe("test:p1");
++  expect(requestParam(split, "direction")).toBe("down");
++  expect(requestParam(split, "ratio")).toBe(0.5);
++});
+ 
+-  expect(requests.map(requestState)).toEqual([
+-    "blocked",
+-    "blocked",
+-    "working",
+-    "working",
+-    "working",
++test("does not let a pending agent start block later pane placement", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++  clients.length = 0;
++  autoAcknowledge = false;
++
++  let dispatched = waitForNextRequest();
++  const first = plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-one",
++        info: { id: "child-one", parentID: "root-session" },
++      },
++    },
++  });
++  await dispatched;
++  expect(requestMethod(requests[0])).toBe("pane.layout");
++
++  dispatched = waitForNextRequest();
++  acknowledgeRequest(0, 0, {
++    result: {
++      type: "pane_layout",
++      layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++    },
++  });
++  await dispatched;
++  expect(requestMethod(requests[1])).toBe("pane.split");
++
++  dispatched = waitForNextRequest();
++  acknowledgeRequest(1, 1, {
++    result: { type: "pane_info", pane: { pane_id: "test:p2" } },
++  });
++  await dispatched;
++  expect(requestMethod(requests[2])).toBe("agent.start");
++
++  dispatched = waitForNextRequest();
++  const second = plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-two",
++        info: { id: "child-two", parentID: "root-session" },
++      },
++    },
++  });
++  await dispatched;
++  expect(requestMethod(requests[3])).toBe("pane.layout");
++
++  dispatched = waitForNextRequest();
++  acknowledgeRequest(3, 3, {
++    result: {
++      type: "pane_layout",
++      layout: {
++        panes: [
++          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
++          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
++        ],
++      },
++    },
++  });
++  await dispatched;
++  expect(requestMethod(requests[4])).toBe("pane.split");
++
++  dispatched = waitForNextRequest();
++  acknowledgeRequest(4, 4, {
++    result: { type: "pane_info", pane: { pane_id: "test:p3" } },
++  });
++  await dispatched;
++  expect(requestMethod(requests[5])).toBe("agent.start");
++
++  acknowledgeRequest(2, 2, {
++    result: { type: "agent_started", agent: { pane_id: "test:p2" }, argv: [] },
++  });
++  acknowledgeRequest(5, 5, {
++    result: { type: "agent_started", agent: { pane_id: "test:p3" }, argv: [] },
++  });
++  await Promise.all([first, second]);
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.layout",
++    "pane.split",
++    "agent.start",
++    "pane.layout",
++    "pane.split",
++    "agent.start",
+   ]);
+-  expect(requests.map(requestSessionID)).toEqual([
+-    undefined,
+-    undefined,
+-    undefined,
+-    undefined,
+-    undefined,
++});
++
++test("retains a child pane when the agent start response is lost", async () => {
++  const plugin = await loadPlugin({
++    directory: "C:\\repo",
++    serverUrl: new URL("http://127.0.0.1:4096"),
++  });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  requests.length = 0;
++
++  const sessionID = "child-session";
++  const name = `opencode-${createHash("sha256").update(sessionID).digest("hex").slice(0, 12)}`;
++  enqueueResult("pane.layout", {
++    type: "pane_layout",
++    layout: { panes: [{ pane_id: "test:p1", rect: { width: 200, height: 50 } }] },
++  });
++  enqueueResult("pane.split", { type: "pane_info", pane: { pane_id: "test:p2" } });
++  enqueueResult("agent.start", { type: "ok" });
++  enqueueResult("agent.get", {
++    type: "agent_info",
++    agent: { name, pane_id: "test:p2" },
++  });
++
++  await plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID,
++        info: { id: sessionID, parentID: "root-session" },
++      },
++    },
++  });
++
++  expect(requests.map(requestMethod)).toEqual([
++    "pane.layout",
++    "pane.split",
++    "agent.start",
++    "agent.get",
+   ]);
+ });
+ 
 +test("keeps the child pane when delayed idle disagrees with live status", async () => {
 +  let liveStatus = { type: "busy" };
 +  const plugin = await loadPlugin({
@@ -2141,22 +2366,36 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +  expect(requests.map(requestSessionID)).toEqual(["root-session"]);
 +});
 +
- test("reports child prompts without replacing the root session", async () => {
-   const plugin = await loadPlugin();
++test("reports child prompts without replacing the root session", async () => {
++  const plugin = await loadPlugin();
 +  await plugin["chat.message"]({ sessionID: "root-session" });
 +  requests.length = 0;
- 
-   await plugin.event({
-     event: {
-@@ -188,14 +1126,91 @@ test("reports child prompts without replacing the root session", async () => {
-     "working",
-   ]);
-   expect(requests.map(requestSessionID)).toEqual([
--    undefined,
--    undefined,
--    undefined,
--    undefined,
--    undefined,
++
++  await plugin.event({
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
++  });
++
++  for (const type of ["permission.asked", "question.asked"]) {
++    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
++  }
++  for (const type of ["permission.replied", "question.replied", "question.rejected"]) {
++    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
++  }
++
++  expect(requests.map(requestState)).toEqual([
++    "blocked",
++    "blocked",
++    "working",
++    "working",
++    "working",
++  ]);
++  expect(requests.map(requestSessionID)).toEqual([
 +    "root-session",
 +    "root-session",
 +    "root-session",
@@ -2200,9 +2439,9 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
 +    "root-session",
 +    "root-session",
 +    "root-session",
-   ]);
- });
- 
++  ]);
++});
++
 +test("child prompt blocks survive root statuses until the child replies", async () => {
 +  const plugin = await loadPlugin();
 +  await plugin.event({
@@ -2246,7 +2485,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..704e2cd0651cd29fa07edc52ad22fcb5
    return isRecord(request) ? request.method : undefined;
  }
 diff --git a/src/integration/assets/opencode/herdr-tui-session.js b/src/integration/assets/opencode/herdr-tui-session.js
-index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..a7779b8a02696a92357835b4188481418fbe970b 100644
+index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..03e69b66f24232236ed41c441094abd1e684f047 100644
 --- a/src/integration/assets/opencode/herdr-tui-session.js
 +++ b/src/integration/assets/opencode/herdr-tui-session.js
 @@ -1,7 +1,7 @@
@@ -2254,7 +2493,7 @@ index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..a7779b8a02696a92357835b418848141
  // managed by herdr; reinstalling or updating the integration overwrites this file.
  // HERDR_INTEGRATION_ID=opencode-tui
 -// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=15
++// HERDR_INTEGRATION_VERSION=19
  
  import net from "node:net";
  
@@ -2313,7 +2552,7 @@ index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..98aff058fed93921a86f90b6b23c6a30
    const plugin = await loadPlugin();
    const tui = fakeApi();
 diff --git a/src/integration/mod.rs b/src/integration/mod.rs
-index c87ccac6ccd3a0a268f09067a72523fe6750f016..1fdb7ec2eee3a3d9917681602e0ba2b5b01c5981 100644
+index c87ccac6ccd3a0a268f09067a72523fe6750f016..4b376ff46972b17861dbd1a25c70e76f1ad31616 100644
 --- a/src/integration/mod.rs
 +++ b/src/integration/mod.rs
 @@ -170,7 +170,7 @@ const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-st
@@ -2321,7 +2560,7 @@ index c87ccac6ccd3a0a268f09067a72523fe6750f016..1fdb7ec2eee3a3d9917681602e0ba2b5
  const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
  const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
 -const OPENCODE_INTEGRATION_VERSION: u32 = 10;
-+const OPENCODE_INTEGRATION_VERSION: u32 = 15;
++const OPENCODE_INTEGRATION_VERSION: u32 = 19;
  const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
  const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
  const KILO_INTEGRATION_VERSION: u32 = 4;

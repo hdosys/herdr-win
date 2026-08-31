@@ -921,16 +921,20 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
             continue;
         };
         let Some(hash) = candidate.strip_suffix(PENDING_LAUNCHER_SUFFIX) else {
-            remove_invalid_pending_launcher(&entry.path())?;
-            continue;
+            return Err(invalid_data(format!(
+                "invalid pending launcher filename: {}",
+                entry.path().display()
+            )));
         };
         if hash.len() != 64
             || !hash
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
-            remove_invalid_pending_launcher(&entry.path())?;
-            continue;
+            return Err(invalid_data(format!(
+                "invalid pending launcher filename: {}",
+                entry.path().display()
+            )));
         }
         if found.is_some() {
             return Err(invalid_data(
@@ -939,8 +943,10 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
         }
         assert_regular_file(&entry.path())?;
         if sha256(&entry.path())? != hash {
-            remove_invalid_pending_launcher(&entry.path())?;
-            continue;
+            return Err(invalid_data(format!(
+                "pending launcher hash does not match filename: {}",
+                entry.path().display()
+            )));
         }
         found = Some(PendingLauncher {
             path: entry.path(),
@@ -948,19 +954,6 @@ pub(crate) fn pending_launcher(state_dir: &Path) -> io::Result<Option<PendingLau
         });
     }
     Ok(found)
-}
-
-fn remove_invalid_pending_launcher(path: &Path) -> io::Result<()> {
-    assert_regular_file(path)?;
-    fs::remove_file(path).map_err(|err| {
-        contextual(
-            err,
-            format!(
-                "failed to remove invalid pending launcher {}",
-                path.display()
-            ),
-        )
-    })
 }
 
 pub(crate) fn wait_for_process(pid: u32, timeout: Duration) -> io::Result<bool> {
@@ -1059,15 +1052,15 @@ mod tests {
     }
 
     #[test]
-    fn malformed_private_pending_launcher_is_removed() {
+    fn malformed_pending_launcher_name_is_not_ignored() {
         let state = std::env::temp_dir().join(format!("herdr-pending-name-{}", unique_hex()));
         fs::create_dir(&state).unwrap();
         let malformed = state.join("launcher.pending-not-a-hash.exe");
         fs::write(&malformed, b"fixture").unwrap();
-        let result = pending_launcher(&state).unwrap();
-        assert!(result.is_none());
-        assert!(!malformed.exists());
+        let result = pending_launcher(&state);
+        fs::remove_file(malformed).unwrap();
         fs::remove_dir(state).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

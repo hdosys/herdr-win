@@ -1,10 +1,11 @@
-From c91df0154213dba8c6b0541a9f25a40936d70fed Mon Sep 17 00:00:00 2001
+From e0640e046c6810e908f6c9f69010086edd31731e Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 8/11] feat(session): auto-start configured agent
 
 Refs herdrdev/herdr#321
 ---
+ CHANGELOG.md                                  |   8 +-
  docs/next/CHANGELOG.md                        |   5 +
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
@@ -30,8 +31,31 @@ Refs herdrdev/herdr#321
  src/platform/windows.rs                       | 200 ++++++------
  src/server/headless.rs                        |   2 +
  src/terminal/runtime.rs                       |   4 +
- 25 files changed, 906 insertions(+), 303 deletions(-)
+ 26 files changed, 913 insertions(+), 304 deletions(-)
 
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 07da9d2b86c17639a06bf8c981010a292fa00933..35908aa8e1731f27b614c5dc0142ff3bbb092a8b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,11 +3,17 @@
+ ## Unreleased
+ 
+ ### Added
+-- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
++- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits that evenly tile the complete tab across both axes, then close when the child session becomes idle or is deleted.
++- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
+ 
+ ### Fixed
++- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
++- Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
+ - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
+ 
++### Changed
++- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
++
+ ## [0.8.2] - 2026-08-19
+ 
+ ### Added
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
 --- a/docs/next/CHANGELOG.md

@@ -264,3 +264,18 @@ configuration repository.
   Expected benefit: avoid broad history pickaxe searches and reach source-owner
   classification sooner without expanding upstream access. Owner: the Windows
   issue triage partition procedure and its active checkpoint prompt.
+
+- **Status: proposed. Give Candidate one exact vendored `portable-pty` unit-test
+  path.** Add an explicit bounded selector that runs the vendored library test with
+  all logical processors, a shared temporary target, and task-owned lock cleanup,
+  then lets `candidate` rerun that same selector after push. Evidence: the current
+  Windows `test-one` owner correctly returned no-match status 4 because it selects
+  only the `herdr` binary. The direct vendored regression passed in 16.27 seconds,
+  but first resolved 76 standalone packages and generated a temporary lock; moving
+  the check to the full PTY path instead produced 600-second and 180-second stalls
+  in unrelated ConPTY teardown. Request-to-artifact was about 68.5 minutes, while
+  the final candidate itself took 164.47 seconds. Expected benefit: keep vendored
+  behavior checks at their real owner, preserve Candidate's post-push rerun, and
+  avoid duplicate dependency setup or an unrelated native harness. Owner:
+  `scripts/local_windows_installer.py`, the focused test recipe, and the Candidate
+  procedure in `CONTRIBUTING.md`.

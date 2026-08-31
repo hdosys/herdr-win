@@ -54,6 +54,17 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 | Metadata capacity | **Maintained here** · [`0011`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0011-metadata-token-capacity.patch) | Atomically updates and retains up to 64 pane or workspace metadata tokens while preserving existing validation bounds. |
 | Completion alerts | **Maintained here** · [`0012`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0012-agent-completion-controls.patch) | Exposes one persistent opt-out for completion popups and sounds while keeping questions, permission prompts, and errors actionable. |
 
+### Current development candidate fixes
+
+The pushed but unpublished [`candidate/development`](https://github.com/hdosys/herdr-win/tree/candidate/development) line also contains completed fixes for these upstream reports. They are not part of the latest release or maintained patch queue until explicit promotion:
+
+- [#2893](https://github.com/herdrdev/herdr/issues/2893): retain repeated rows that scroll into alternate-screen history.
+- [#3024](https://github.com/herdrdev/herdr/issues/3024): resolve explicit relative plugin commands from the linked plugin root.
+- [#2692](https://github.com/herdrdev/herdr/issues/2692): keep muted sidebar and inactive tab labels readable.
+- [#2880](https://github.com/herdrdev/herdr/issues/2880): show only controls that integration settings actually support.
+- [#2724](https://github.com/herdrdev/herdr/issues/2724): find Devin's native configuration in roaming AppData.
+- [#3430](https://github.com/herdrdev/herdr/issues/3430): omit malformed Windows environment entries before process creation.
+
 ## Install
 
 ### Requirements

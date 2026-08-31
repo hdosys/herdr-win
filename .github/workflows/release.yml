@@ -228,7 +228,7 @@ jobs:
           if ($manifestUrl -cne $expectedManifestUrl) {
             throw "replayed distribution manifest URL is not fork-owned"
           }
-          $releasePrefix = Get-DistributionUrl "WINDOWS_RELEASE_DOWNLOAD_PREFIX"
+          $releasePrefix = Get-DistributionUrl "RELEASE_DOWNLOAD_PREFIX"
           $expectedReleasePrefix = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/"
           if ($releasePrefix -cne $expectedReleasePrefix) {
             throw "replayed Windows release prefix is not the immutable fork release owner"
@@ -478,7 +478,7 @@ jobs:
           $distribution = Get-Content -LiteralPath source\src\distribution.rs -Raw
           $requiredUrls = [regex]::Matches(
             $distribution,
-            '(?s)\bconst\s+(?:PREVIEW_MANIFEST_URL|WINDOWS_RELEASE_DOWNLOAD_PREFIX):\s*&str\s*=\s*"([^"]+)";'
+            '(?s)\bconst\s+(?:PREVIEW_MANIFEST_URL|RELEASE_DOWNLOAD_PREFIX):\s*&str\s*=\s*"([^"]+)";'
           ) | ForEach-Object { $_.Groups[1].Value }
           if ($requiredUrls.Count -ne 2) {
             throw "could not read required fork URLs from distribution configuration"

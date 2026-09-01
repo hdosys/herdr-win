@@ -257,16 +257,17 @@ configuration repository.
   `scripts/package_windows_installer.ps1`, focused identity tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Include captured issue semantics in offline triage
-  partitions.** Pass each issue title and one concise behavior summary with its
-  number when a read-only investigator cannot query upstream. Evidence: four
-  number-only Windows issue partitions searched local source, the ledger, and
-  3,278 commit objects; one partition spent 119.4 seconds and still returned most
-  entries as uncertain because issue semantics were absent. Reusing the already
-  authorized title capture exposed direct owners and enabled three bounded fixes.
-  Expected benefit: avoid broad history pickaxe searches and reach source-owner
-  classification sooner without expanding upstream access. Owner: the Windows
-  issue triage partition procedure and its active checkpoint prompt.
+- **Status: proposed. Generate one issue-reference triage report.** Extract
+  qualified issue keys, subject, current source owner, and final reachable commit
+  from the maintained mailboxes and release history, then join each key with a
+  captured issue title and one concise behavior summary. Evidence: four
+  number-only Windows partitions searched local source, the ledger, and 3,278
+  commit objects; one spent 119.4 seconds and still returned uncertain entries.
+  The later all-platform reconciliation repeated history and GitHub searches and
+  found 13 exact mappings missing from the private ledger. Expected benefit:
+  replace broad pickaxe and duplicate-history review with one deterministic,
+  read-only inventory before upstream triage. Owner: a repository report command
+  beside the delta workflow and the upstream issue triage procedure.
 
 - **Status: done. Give Candidate one exact vendored `portable-pty` unit-test
   path.** `--portable-pty-test-filter` now runs the library manifest with every

@@ -38,6 +38,9 @@ flowchart TB
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact reviewed upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only patch order. A manual build replays that source and retains one complete candidate; promotion publishes those exact bytes without rebuilding or repackaging them.
 
+> [!IMPORTANT]
+> GitHub's **ahead/behind** banner compares commit ancestry, not release-source freshness. This repository's `master` is a control branch for the patch queue and release automation, not a mirror of upstream `master`. Each build starts from the stable commit recorded in `BASE` and applies `series`; GitHub's **Sync fork** action is not this project's refresh mechanism.
+
 ## What differs from upstream
 
 The table is intentionally capability-level. The linked mailboxes contain the exact implementation and focused evidence.
@@ -180,9 +183,6 @@ For exact changes in downloadable fork releases, see the [herdr-win changelog](h
 ## Project reference
 
 This README describes the maintained queue on `master`. The fork-only [changelog](https://github.com/hdosys/herdr-win/blob/master/CHANGELOG.md) is the exact user-facing history for tagged herdr-win releases. Upstream Herdr owns the general CLI, TUI, configuration, integrations, and product documentation.
-
-> [!IMPORTANT]
-> GitHub's **ahead/behind** banner compares commit ancestry, not release-source freshness. This repository's `master` is a control branch for the patch queue and release automation, not a mirror of upstream `master`. Each build starts from the stable commit recorded in `BASE` and applies `series`; GitHub's **Sync fork** action is not this project's refresh mechanism.
 
 <details>
 <summary><strong>Patch queue and upstream review</strong></summary>

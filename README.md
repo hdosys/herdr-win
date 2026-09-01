@@ -8,6 +8,9 @@ Despite its historical name, `herdr-win` is not Windows-only. It is an unofficia
 
 Every published release contains matching Windows, Linux, and macOS binaries built from one reviewed stable Herdr release and one ordered patch queue. Releases are normal stable GitHub releases, and the integrated update paths reject prerelease feeds.
 
+> [!NOTE]
+> herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a sister project that provides disposable native Windows environments for coding agents. It is not a runtime dependency.
+
 [What differs from upstream](#what-differs-from-upstream) · [Install](#install) · [First use](#first-use) · [Everyday use](#everyday-use) · [Troubleshooting](#troubleshooting) · [Project reference](#project-reference)
 
 ## See it in action
@@ -64,11 +67,14 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 
 ### Choose an installation method
 
-For most Windows x86_64 users, install with WinGet. You can instead download the direct setup or use the portable ZIP without installing Herdr. Choose one method.
+Every release provides Windows, Linux, and macOS builds as one coherent distribution. Choose one installation method for each machine:
 
-The managed WinGet and direct setup installations are per-user, require no administrator access, and need no separately installed Microsoft Visual C++ Redistributable. The portable ZIP is a standalone alternative. Matching Linux amd64/arm64 and macOS amd64/arm64 executables are also available.
+- **Windows:** install with WinGet, download the direct setup, or use the portable ZIP.
+- **Linux and macOS:** download the executable for your platform and architecture.
 
-### WinGet
+Windows managed installations are per-user, require no administrator access, and need no separately installed Microsoft Visual C++ Redistributable. The Windows portable ZIP is a standalone alternative.
+
+### Windows with WinGet
 
 Install from the WinGet community source:
 
@@ -76,7 +82,7 @@ Install from the WinGet community source:
 winget install --id hdosys.herdr-win --exact --source winget
 ```
 
-### Direct setup
+### Windows direct setup
 
 Download `herdr-win_v<version>_windows_amd64_setup.exe` from the [latest Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest), verify its GitHub SHA-256 digest, and run it.
 
@@ -86,9 +92,11 @@ Download `herdr-win_v<version>_windows_amd64_setup.exe` from the [latest Herdr W
 
 The managed install lives under `%LOCALAPPDATA%\Programs\Herdr`, registers **Herdr Win** in Installed Apps, installs Herdr's canonical agent skill, and preserves customized skill copies.
 
-### Portable and cross-platform assets
+### Windows portable
 
 The Windows release also includes `herdr-win_v<version>_windows_amd64.zip`. Extract the complete archive into one directory and run `herdr.exe`; keep its ConPTY payload beside it.
+
+### Linux and macOS
 
 Linux and macOS releases are raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. Use assets from the same herdr-win release on every endpoint because independently released builds are not guaranteed to share this fork's wire protocol.
 
@@ -214,10 +222,6 @@ Ordinary pushes do not publish binaries.
 | Selected future product work | [`BACKLOG.md`](https://github.com/hdosys/herdr-win/blob/master/BACKLOG.md) |
 
 </details>
-
-### Sister project: Herdr Sandbox
-
-herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a disposable native Windows environment for coding agents. It supplies clean toolchains and realistic Windows boundaries for this fork; it is not a runtime dependency.
 
 ### Issues and contributions
 

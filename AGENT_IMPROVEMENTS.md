@@ -56,6 +56,18 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
+- **Status: proposed. Bound incremental reuse for local Candidate release
+  builds.** Measure and enable Candidate-only optimized incremental reuse under the
+  existing shared target, commit-headroom preflight, and bounded cache pruning;
+  keep public release builds unchanged. Evidence: this one-module Rust fix spent
+  4.135 seconds in its cached focused test and 23.916 seconds in installer
+  packaging, but the all-core release compile remained the largest bottleneck at
+  111.740 seconds and brought the validated Candidate to 166.238 seconds. Expected
+  benefit: preserve exact source provenance and real installer validation while
+  shortening repeated small-source release rebuilds enough to approach the daytime
+  artifact goal. Owner: `scripts/local_windows_installer.py`, its focused tests,
+  and the Candidate procedure in `CONTRIBUTING.md`.
+
 - **Status: declined. Reuse validated binaries for package-excluded candidate
   changes.** The current candidate identity intentionally changes for every tracked
   diff and untracked source input, and that identity owns the managed runtime path.

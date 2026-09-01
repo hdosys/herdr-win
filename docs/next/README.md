@@ -62,13 +62,11 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 
 ## Install
 
-### Requirements
+### Choose an installation method
 
-- The managed Windows setup and portable ZIP target Windows x86_64.
-- Setup is per-user, requires no administrator access, and needs no separately installed Microsoft Visual C++ Redistributable.
-- Linux amd64/arm64 and macOS amd64/arm64 are available as matching raw executables.
+For most Windows x86_64 users, install with WinGet. You can instead download the direct setup or use the portable ZIP without installing Herdr. Choose one method.
 
-WinGet-owned installations update through WinGet. Direct and portable installations update through the fork-owned release feed. `herdr update` deliberately refuses to replace package-managed bytes.
+The managed WinGet and direct setup installations are per-user, require no administrator access, and need no separately installed Microsoft Visual C++ Redistributable. The portable ZIP is a standalone alternative. Matching Linux amd64/arm64 and macOS amd64/arm64 executables are also available.
 
 ### WinGet
 
@@ -151,7 +149,7 @@ notify_on_agent_completion = false
 - WinGet-owned installation: `winget upgrade --id hdosys.herdr-win --exact --source winget`
 - Direct setup or portable installation: `herdr update`
 
-Direct updates accept only a newer stable CalVer from an immutable normal GitHub release. Active sessions continue on their current immutable runtime and the replacement activates safely afterward; update never terminates running work.
+Direct updates accept only a newer stable CalVer from an immutable normal GitHub release. Active sessions continue on their current immutable runtime and the replacement activates safely afterward; update never terminates running work. `herdr update` refuses to replace a WinGet-managed installation.
 
 ## Uninstall
 

@@ -144,7 +144,6 @@ pub struct App {
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) tab_auto_start_agent: Option<crate::detect::Agent>,
     pub(crate) pending_tab_auto_start_agents: Vec<PendingTabAutoStartAgent>,
-    initial_default_workspace_auto_start_pending: bool,
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
@@ -518,7 +517,6 @@ impl App {
             )
         };
 
-        let initial_default_workspace_auto_start_pending = workspaces.is_empty();
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
 
         // Validate sidebar bounds before they reach any `u16::clamp(min, max)`
@@ -818,7 +816,6 @@ impl App {
             pending_agent_resume_deadline: None,
             tab_auto_start_agent,
             pending_tab_auto_start_agents: Vec::new(),
-            initial_default_workspace_auto_start_pending,
             session_save_deadline: None,
             session_save_thread: None,
             startup_session_save_blocked: false,
@@ -895,7 +892,6 @@ impl App {
         app.state.detach_exits = false;
         app.state.pane_id_aliases = pane_id_aliases;
         app.state.workspaces = workspaces;
-        app.initial_default_workspace_auto_start_pending = false;
         app.state.terminals = terminals;
         app.terminal_runtimes = runtimes.into();
         app.state.active = snapshot
@@ -1290,8 +1286,7 @@ impl App {
         );
         let cwd = self.resolve_new_terminal_cwd(None);
 
-        let queue_auto_start_agent = self.initial_default_workspace_auto_start_pending;
-        match self.create_workspace_with_launch_env(cwd, true, Vec::new(), queue_auto_start_agent) {
+        match self.create_workspace_with_options(cwd, true) {
             Ok(_) => {
                 if preserve_mode {
                     self.state.mode = previous_mode;
@@ -2890,15 +2885,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replacement_default_workspace_does_not_queue_agent_auto_start() {
+    async fn replacement_default_workspace_queues_agent_auto_start() {
         let mut app = test_app();
         app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
-        app.initial_default_workspace_auto_start_pending = false;
         app.state.mode = Mode::Navigate;
 
         assert!(app.ensure_default_workspace());
         assert_eq!(app.state.workspaces.len(), 1);
-        assert!(app.pending_tab_auto_start_agents.is_empty());
+        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(app.pending_tab_auto_start_agents.len(), 1);
+        assert_eq!(
+            app.pending_tab_auto_start_agents[0].pane_id,
+            app.public_pane_id(0, root_pane).unwrap()
+        );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

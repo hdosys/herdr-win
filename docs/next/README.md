@@ -90,7 +90,7 @@ winget install --id hdosys.herdr-win --exact --source winget
 Download `herdr-win_v<version>_windows_amd64_setup.exe` from the [latest Herdr Win release](https://github.com/hdosys/herdr-win/releases/latest), verify its GitHub SHA-256 digest, and run it.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png" alt="Herdr Win setup welcome page">
+  <img src="https://raw.githubusercontent.com/hdosys/herdr-win/master/docs/assets/herdr-win-setup-welcome.png?v=2026.08.31.4" alt="Herdr Win setup welcome page">
 </p>
 
 The managed install lives under `%LOCALAPPDATA%\Programs\Herdr`, registers **Herdr Win** in Installed Apps, installs Herdr's canonical agent skill, and preserves customized skill copies.

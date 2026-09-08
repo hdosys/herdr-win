@@ -23,7 +23,6 @@ from typing import Sequence
 try:
     from scripts.delta_workflow import (
         DEVELOPMENT_BRANCH,
-        DEVELOPMENT_REMOTE_REF,
         DeltaWorkflowError,
         unintegrated_topic_worktrees,
         validate_changed_integration_asset_versions,
@@ -31,7 +30,6 @@ try:
 except ModuleNotFoundError:
     from delta_workflow import (  # type: ignore[no-redef]
         DEVELOPMENT_BRANCH,
-        DEVELOPMENT_REMOTE_REF,
         DeltaWorkflowError,
         unintegrated_topic_worktrees,
         validate_changed_integration_asset_versions,
@@ -356,7 +354,7 @@ def _source_branch(source: Path) -> str:
     return branch
 
 
-def _require_pushed_development_source(
+def _require_integrated_development_source(
     source: Path, branch: str, *, isolated: bool
 ) -> None:
     if isolated or branch != DEVELOPMENT_BRANCH:
@@ -364,28 +362,7 @@ def _require_pushed_development_source(
     status = _git(source, ["status", "--porcelain=v1", "--untracked-files=all"])
     if status:
         raise LocalInstallerError("development worktree must be clean before packaging")
-    remote_tracking_ref = f"refs/remotes/origin/{DEVELOPMENT_BRANCH}"
-    _run(
-        "git",
-        _git_arguments(
-            source,
-            [
-                "fetch",
-                "--no-tags",
-                "origin",
-                f"{DEVELOPMENT_REMOTE_REF}:{remote_tracking_ref}",
-            ],
-        ),
-        timeout=120,
-    )
     local_head = _git(source, ["rev-parse", "HEAD"])
-    remote_head = _git(
-        source, ["rev-parse", remote_tracking_ref]
-    )
-    if local_head != remote_head:
-        raise LocalInstallerError(
-            f"development worktree must equal origin/{DEVELOPMENT_BRANCH} before packaging"
-        )
     try:
         unintegrated = unintegrated_topic_worktrees(PROJECT_ROOT, local_head)
     except DeltaWorkflowError as error:
@@ -1151,7 +1128,7 @@ def candidate(options: argparse.Namespace) -> None:
     total_started = time.monotonic()
     source = _source_root(options.source_worktree)
     source_branch = _source_branch(source)
-    _require_pushed_development_source(
+    _require_integrated_development_source(
         source, source_branch, isolated=options.isolated
     )
     try:

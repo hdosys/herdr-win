@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from scripts.delta_workflow import (
     DEVELOPMENT_BRANCH,
-    DEVELOPMENT_REMOTE_REF,
     DeltaWorkflowError,
 )
 from scripts.local_windows_installer import (
@@ -36,7 +35,7 @@ from scripts.local_windows_installer import (
     _parser,
     _portable_pty_test_arguments,
     _prune_completed_candidate_outputs,
-    _require_pushed_development_source,
+    _require_integrated_development_source,
     _require_one_focused_test,
     _require_one_nextest_test,
     _run_normal_focused_test,
@@ -175,7 +174,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             _isolated_candidate_paths(BUILD_ID),
         )
 
-    def test_development_installer_requires_clean_pushed_source(self) -> None:
+    def test_development_installer_requires_clean_integrated_source(self) -> None:
         source = Path("C:/development")
         with (
             patch("scripts.local_windows_installer._git") as git,
@@ -185,21 +184,21 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                 return_value=(),
             ),
         ):
-            git.side_effect = ["", "a" * 40, "a" * 40]
+            git.side_effect = ["", "a" * 40]
 
-            _require_pushed_development_source(
+            _require_integrated_development_source(
                 source, DEVELOPMENT_BRANCH, isolated=False
             )
 
-            self.assertIn(DEVELOPMENT_REMOTE_REF, run.call_args.args[1][-1])
+            run.assert_not_called()
 
         with (
             patch("scripts.local_windows_installer._git") as git,
             patch("scripts.local_windows_installer._run"),
-            self.assertRaisesRegex(LocalInstallerError, "must equal"),
+            self.assertRaisesRegex(LocalInstallerError, "must be clean"),
         ):
-            git.side_effect = ["", "a" * 40, "b" * 40]
-            _require_pushed_development_source(
+            git.return_value = " M src/main.rs"
+            _require_integrated_development_source(
                 source, DEVELOPMENT_BRANCH, isolated=False
             )
 
@@ -326,7 +325,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                     "scripts.local_windows_installer._source_branch",
                     return_value=DEVELOPMENT_BRANCH,
                 ),
-                patch("scripts.local_windows_installer._require_pushed_development_source"),
+                patch("scripts.local_windows_installer._require_integrated_development_source"),
                 patch(
                     "scripts.local_windows_installer.validate_changed_integration_asset_versions",
                     return_value=(),
@@ -385,7 +384,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
                     "scripts.local_windows_installer._source_branch",
                     return_value=DEVELOPMENT_BRANCH,
                 ),
-                patch("scripts.local_windows_installer._require_pushed_development_source"),
+                patch("scripts.local_windows_installer._require_integrated_development_source"),
                 patch(
                     "scripts.local_windows_installer.validate_changed_integration_asset_versions",
                     side_effect=DeltaWorkflowError("stale marker"),

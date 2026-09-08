@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=20
+// HERDR_INTEGRATION_VERSION=21
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -19,6 +19,7 @@ const SUBAGENT_START_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_CHARACTERS = 64 * 1024;
 const PANE_WIDTH_TO_HEIGHT_RATIO = 2;
 const SERVER_PROBE_TIMEOUT_MS = 500;
+const STATUS_TIMEOUT_MS = 500;
 
 const CHILD_EVENT_STATES = new Map([
   ["permission.asked", "blocked"],
@@ -45,9 +46,8 @@ function nextReportSeq() {
 }
 
 function sessionIDFromProperties(properties) {
-  return typeof properties?.sessionID === "string" && properties.sessionID
-    ? properties.sessionID
-    : undefined;
+  const id = properties?.sessionID ?? properties?.info?.id;
+  return typeof id === "string" && id ? id : undefined;
 }
 
 function sessionStatusKind(status) {
@@ -97,9 +97,9 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
   const sessionLifecycle = new Map();
   const activePrompts = new Map();
   const children = new Map();
-  const retiredChildren = new Set();
-  const serverCreatedSessions = new Set();
+  const deletedSessions = new Set();
   const activeClients = new Map();
+  const activeStatusRequests = new Set();
 
   const attachServerUrl = serverUrl instanceof URL ? serverUrl.toString() : undefined;
   const defaultDirectory = typeof directory === "string" && directory ? directory : undefined;
@@ -130,6 +130,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       }
 
       let client;
+      let timeout;
       let responseBuffer = "";
       let finished = false;
       const finish = (response) => {
@@ -137,6 +138,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           return;
         }
         finished = true;
+        clearTimeout(timeout);
         if (client) {
           activeClients.delete(client);
           client.destroy();
@@ -198,7 +200,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         finish();
         return;
       }
-      client.setTimeout(500, finish);
+      timeout = setTimeout(finish, 500);
+      timeout.unref?.();
       client.on("data", receive);
       client.on("error", finish);
       client.on("end", finishFromBuffer);
@@ -239,17 +242,6 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     );
     reportRequestChain = pending.catch(() => {});
     return pending;
-  }
-
-  function reportSession(sessionID, sessionStartSource) {
-    if (disposed || !sessionID) {
-      return Promise.resolve();
-    }
-    const params = { agent_session_id: sessionID };
-    if (sessionStartSource) {
-      params.session_start_source = sessionStartSource;
-    }
-    return reportRequest("pane.report_agent_session", params);
   }
 
   function reportState(state, sessionID, suppressCompletion = false) {
@@ -353,14 +345,6 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     };
   }
 
-  function layoutPaneIDs(layout) {
-    return new Set(
-      (Array.isArray(layout?.panes) ? layout.panes : [])
-        .map((pane) => pane?.pane_id)
-        .filter((paneID) => typeof paneID === "string" && paneID),
-    );
-  }
-
   async function acquirePanePlacement() {
     const previousPanePlacement = panePlacementChain;
     let releasePanePlacement = () => {};
@@ -371,37 +355,22 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     return releasePanePlacement;
   }
 
-  async function recoverPendingSplit(sessionID, allowWhileDisposing = false) {
-    const child = children.get(sessionID);
-    const previousPaneIDs = child?.pendingSplitPaneIDs;
-    const rootPaneID = process.env.HERDR_PANE_ID;
-    if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
-      return undefined;
-    }
-    const layoutResponse = await paneRequest(
-      "pane.layout",
-      { pane_id: rootPaneID },
-      allowWhileDisposing,
-    );
-    const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-    const newPaneIDs = [...layoutPaneIDs(layout)].filter(
-      (paneID) => !previousPaneIDs.has(paneID),
-    );
-    if (newPaneIDs.length !== 1) {
-      return undefined;
-    }
-    const paneID = newPaneIDs[0];
-    child.paneID = paneID;
-    child.pendingSplitPaneIDs = undefined;
-    return paneID;
-  }
-
   async function childSessionState(sessionID) {
     if (typeof client?.session?.status !== "function") {
       return "idle";
     }
+    if (disposing || disposed) return undefined;
+    const controller = new AbortController();
+    activeStatusRequests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+    const cancelled = new Promise((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+    });
     try {
-      const response = await client.session.status();
+      const response = await Promise.race([
+        client.session.status({ signal: controller.signal }),
+        cancelled,
+      ]);
       const statuses = response?.data;
       if (!statuses || typeof statuses !== "object") {
         return undefined;
@@ -410,6 +379,10 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       return status === undefined ? "idle" : stateFromSessionStatus(status);
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(timeout);
+      activeStatusRequests.delete(controller);
+      controller.abort();
     }
   }
 
@@ -453,9 +426,10 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       !child ||
       !info ||
       info.parentID !== currentRootSessionID ||
-      retiredChildren.has(sessionID) ||
+      deletedSessions.has(sessionID) ||
       !child.working ||
       child.paneID ||
+      child.splitUnconfirmed ||
       child.spawning
     ) {
       return;
@@ -463,7 +437,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
 
     child.spawning = true;
     try {
-      if (!(await serverAcceptsAttach()) || disposing || retiredChildren.has(sessionID)) {
+      if (!(await serverAcceptsAttach()) || disposing || deletedSessions.has(sessionID)) {
         return;
       }
 
@@ -477,50 +451,46 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           disposing ||
           !child.working ||
           child.paneID ||
-          retiredChildren.has(sessionID) ||
+          deletedSessions.has(sessionID) ||
           info.parentID !== currentRootSessionID
         ) {
           return;
         }
         directory = childDirectory(info);
-        if (child.pendingSplitPaneIDs) {
-          paneID = await recoverPendingSplit(sessionID);
-        } else {
-          const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
-          const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-          const target = splitTarget(layout);
-          if (
-            disposing ||
-            !target ||
-            !child.working ||
-            retiredChildren.has(sessionID)
-          ) {
-            return;
-          }
+        const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
+        const layout = responseResult(layoutResponse, "pane_layout")?.layout;
+        const target = splitTarget(layout);
+        if (
+          disposing ||
+          !target ||
+          !child.working ||
+          deletedSessions.has(sessionID) ||
+          info.parentID !== currentRootSessionID
+        ) {
+          return;
+        }
 
-          child.pendingSplitPaneIDs = layoutPaneIDs(layout);
-          const splitResponse = await paneRequest("pane.split", {
-            target_pane_id: target.paneID,
-            direction: target.direction,
-            ratio: target.ratio,
-            ...(directory ? { cwd: directory } : {}),
-            focus: false,
-            env: { [SUBAGENT_SESSION_ENV]: sessionID },
-          });
-          paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
-          if (typeof paneID === "string" && paneID) {
-            child.pendingSplitPaneIDs = undefined;
-          } else if (responseErrorCode(splitResponse)) {
-            child.pendingSplitPaneIDs = undefined;
-          } else {
-            paneID = await recoverPendingSplit(sessionID, disposing);
-          }
+        // Only the correlated split response can establish ownership. If it is
+        // lost, neither adopt a layout difference nor issue a duplicate split.
+        child.splitUnconfirmed = true;
+        const splitResponse = await paneRequest("pane.split", {
+          target_pane_id: target.paneID,
+          direction: target.direction,
+          ratio: target.ratio,
+          ...(directory ? { cwd: directory } : {}),
+          focus: false,
+          env: { [SUBAGENT_SESSION_ENV]: sessionID },
+        });
+        paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
+        if ((typeof paneID === "string" && paneID) || responseErrorCode(splitResponse)) {
+          child.splitUnconfirmed = false;
         }
         if (typeof paneID !== "string" || !paneID) {
           return;
         }
         child.paneID = paneID;
-        if (disposing || !child.working || retiredChildren.has(sessionID)) {
+        if (disposing || !child.working || deletedSessions.has(sessionID) ||
+            info.parentID !== currentRootSessionID) {
           await closeChildPane(sessionID, disposing);
           return;
         }
@@ -560,24 +530,17 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       if (children.get(sessionID) !== child) {
         return;
       }
-      if (child.working && !disposing && !retiredChildren.has(sessionID)) {
+      const selected = rootSessionFor(sessionID) === currentRootSessionID;
+      if (child.working && selected && !disposing && !deletedSessions.has(sessionID)) {
         if (!child.paneID) {
           await openChildPane(sessionID);
         }
         return;
       }
-      if (!child.paneID && child.pendingSplitPaneIDs) {
-        const releasePanePlacement = await acquirePanePlacement();
-        try {
-          await recoverPendingSplit(sessionID, allowWhileDisposing || disposing);
-        } finally {
-          releasePanePlacement();
-        }
-      }
       if (!child.paneID) {
         return;
       }
-      if (!disposing && !retiredChildren.has(sessionID)) {
+      if (selected && !disposing && !deletedSessions.has(sessionID)) {
         const liveState = await childSessionState(sessionID);
         if (child.working) {
           return;
@@ -650,7 +613,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       return "blocked";
     }
     activePrompts.delete(key);
-    return activePrompts.size > 0 ? "blocked" : "working";
+    return hasActivePrompts() ? "blocked" : "working";
   }
 
   async function retireChild(sessionID) {
@@ -658,7 +621,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       return;
     }
     clearPromptsForSession(sessionID);
-    retiredChildren.add(sessionID);
+    deletedSessions.add(sessionID);
     const child = children.get(sessionID);
     if (!child) {
       return;
@@ -667,7 +630,6 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     await reconcileChildPane(sessionID);
     if (
       !child.paneID &&
-      !child.pendingSplitPaneIDs &&
       children.get(sessionID) === child
     ) {
       children.delete(sessionID);
@@ -684,43 +646,39 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     return sessionID;
   }
 
-  function retireChildrenOutsideRoot(rootSessionID) {
-    for (const [childSessionID, child] of children) {
-      if (rootSessionFor(child.info.parentID) !== rootSessionID) {
-        void retireChild(childSessionID);
-      }
-    }
-  }
-
-  function retireAllChildren() {
-    for (const childSessionID of [...children.keys()]) {
-      void retireChild(childSessionID);
-    }
-  }
-
   function establishRootSession(sessionID) {
-    if (!sessionID) {
+    if (!sessionID || sessionID === currentRootSessionID) {
       return;
     }
-    serverCreatedSessions.delete(sessionID);
-    if (currentRootSessionID && currentRootSessionID !== sessionID) {
+    if (currentRootSessionID) {
       clearSessionLifecycle(currentRootSessionID);
-      clearPromptsForSession(currentRootSessionID);
     }
-    retireChildrenOutsideRoot(sessionID);
-    clearSessionLifecycle(sessionID);
     currentRootSessionID = sessionID;
+    if (hasActivePrompts()) void reportState("blocked", sessionID);
+    for (const childSessionID of children.keys()) {
+      void reconcileChildPane(childSessionID);
+    }
   }
 
-  function acceptsRootEvent(sessionID) {
-    if (!sessionID) {
-      return true;
+  async function syncRootSelection() {
+    const paneID = process.env.HERDR_PANE_ID;
+    const response = await paneRequest("pane.get", { pane_id: paneID });
+    const pane = responseResult(response, "pane_info")?.pane;
+    const session = pane?.agent_session;
+    if (disposing || disposed || pane?.pane_id !== paneID ||
+        session?.source !== SOURCE || session?.agent !== AGENT ||
+        session?.kind !== "id" || typeof session.value !== "string" ||
+        !session.value || deletedSessions.has(session.value)) {
+      return false;
     }
-    if (!currentRootSessionID) {
-      establishRootSession(sessionID);
-      return true;
-    }
-    return sessionID === currentRootSessionID;
+    // The TUI reports selection to Herdr. Server-global events only consume it.
+    establishRootSession(session.value);
+    return true;
+  }
+
+  function hasActivePrompts() {
+    return [...activePrompts.values()].some((sessionID) =>
+      !sessionID || rootSessionFor(sessionID) === currentRootSessionID);
   }
 
   function markSessionContinuing(sessionID, status) {
@@ -789,13 +747,16 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
 
   async function reportContinuing(state, sessionID, status) {
     markSessionContinuing(sessionID, status);
-    if (!unscopedErrorBlocked && activePrompts.size === 0) {
+    if (sessionID && sessionID === currentRootSessionID) {
+      unscopedErrorBlocked = false;
+    }
+    if (!unscopedErrorBlocked && !hasActivePrompts()) {
       await reportState(state, sessionID);
     }
   }
 
   async function reportIdleOrConfirmError(sessionID, suppressCompletion = false) {
-    if (unscopedErrorBlocked || activePrompts.size > 0) {
+    if (unscopedErrorBlocked || hasActivePrompts()) {
       return;
     }
     const lifecycle = sessionID ? sessionLifecycle.get(sessionID) : undefined;
@@ -815,6 +776,9 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       return;
     }
     disposing = true;
+    for (const controller of activeStatusRequests) {
+      controller.abort();
+    }
     for (const child of children.values()) {
       child.working = false;
     }
@@ -832,8 +796,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     sessionLifecycle.clear();
     activePrompts.clear();
     children.clear();
-    retiredChildren.clear();
-    serverCreatedSessions.clear();
+    deletedSessions.clear();
     currentRootSessionID = undefined;
     unscopedErrorBlocked = false;
     reportRequestChain = Promise.resolve();
@@ -845,13 +808,12 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       if (
         disposed || disposing ||
         (sessionID &&
-          (retiredChildren.has(sessionID) || children.has(sessionID)))
+          (deletedSessions.has(sessionID) || children.has(sessionID)))
       ) {
         return;
       }
-      establishRootSession(sessionID);
-      if (!unscopedErrorBlocked && activePrompts.size === 0) {
-        await reportState("working", sessionID);
+      if (await syncRootSelection() && sessionID === currentRootSessionID) {
+        await reportContinuing("working", sessionID, "working");
       }
     },
     event: async ({ event }) => {
@@ -863,101 +825,74 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       const sessionID = sessionIDFromProperties(properties);
       const info = properties.info;
 
-      if (type === "session.deleted" && info?.id && info.parentID) {
-        await retireChild(info.id);
+      if (type === "session.deleted" && sessionID) {
+        const descendants = [...children.keys()].filter((id) =>
+          rootSessionFor(id) === sessionID);
+        await Promise.all([sessionID, ...descendants].map(retireChild));
+        clearSessionLifecycle(sessionID);
+        clearPromptsForSession(sessionID);
+        if (sessionID === currentRootSessionID) currentRootSessionID = undefined;
         return;
       }
 
-      if (
-        (sessionID && retiredChildren.has(sessionID)) ||
-        (info?.id && retiredChildren.has(info.id))
-      ) {
+      if (sessionID && deletedSessions.has(sessionID)) {
         return;
       }
 
-      if (info?.id && info.parentID) {
-        if (!currentRootSessionID || rootSessionFor(info.parentID) === currentRootSessionID) {
-          const child = children.get(info.id) ?? {
-            info,
-            working: false,
-            spawning: false,
-            paneID: undefined,
-            pendingSplitPaneIDs: undefined,
-            reconcileChain: Promise.resolve(),
-          };
-          child.info = info;
-          children.set(info.id, child);
-          if (type === "session.created" && info.parentID === currentRootSessionID) {
-            child.working = true;
-            await reconcileChildPane(info.id);
-          }
-        } else {
-          await retireChild(info.id);
-        }
-        return;
-      }
-
-      if (sessionID && children.has(sessionID)) {
-        if (type === "session.deleted") {
-          await retireChild(sessionID);
-          return;
-        }
-        const childStatus = type === "session.status"
-          ? stateFromSessionStatus(properties.status)
-          : undefined;
-        const child = children.get(sessionID);
-        if (childStatus === "working") {
+      if ((type === "session.created" || type === "session.updated") && info?.id && info.parentID) {
+        const child = children.get(info.id) ?? {
+          info,
+          working: false,
+          spawning: false,
+          paneID: undefined,
+          splitUnconfirmed: false,
+          reconcileChain: Promise.resolve(),
+        };
+        child.info = info;
+        children.set(info.id, child);
+        if (type === "session.created") {
           child.working = true;
-          await reconcileChildPane(sessionID);
-        } else if (childStatus === "idle" || type === "session.idle") {
-          child.working = false;
-          await reconcileChildPane(sessionID);
         }
+        if (await syncRootSelection()) {
+          await reconcileChildPane(info.id);
+        }
+        return;
+      }
+
+      if (type === "session.created" || type === "session.updated") return;
+      if (!(type?.startsWith("session.") || CHILD_EVENT_STATES.has(type) ||
+            type === "tool.execute.before" || type === "tool.execute.after")) return;
+      const child = children.get(sessionID);
+      const childStatus = type === "session.status"
+        ? stateFromSessionStatus(properties.status)
+        : type === "session.idle" ? "idle" : undefined;
+      if (child && childStatus) child.working = childStatus === "working";
+      const selectionKnown = await syncRootSelection();
+      if (disposing || disposed) return;
+
+      if (child) {
+        if (childStatus && selectionKnown) await reconcileChildPane(sessionID);
         const state = updatePromptState(type, properties, sessionID)
           ?? CHILD_EVENT_STATES.get(type);
-        if (state && !unscopedErrorBlocked) {
+        if (state && selectionKnown && rootSessionFor(sessionID) === currentRootSessionID &&
+            !unscopedErrorBlocked) {
           await reportState(state, rootSessionFor(sessionID));
         }
         return;
       }
 
-      if (
-        type !== "session.created" &&
-        type !== "session.updated" &&
-        type !== "session.deleted" &&
-        !acceptsRootEvent(sessionID)
-      ) {
+      updatePromptState(type, properties, sessionID);
+      if (!selectionKnown || (sessionID && sessionID !== currentRootSessionID)) {
         return;
       }
 
-      updatePromptState(type, properties, sessionID);
-
       switch (type) {
-        case "session.created":
-          // Creation is server-global, so another attached client may own it.
-          // The TUI plugin reports the root selected in this pane.
-          if (sessionID) {
-            serverCreatedSessions.add(sessionID);
-          }
-          break;
-        case "session.updated":
-          if (
-            sessionID &&
-            !currentRootSessionID &&
-            !serverCreatedSessions.has(sessionID)
-          ) {
-            establishRootSession(sessionID);
-            await reportSession(sessionID);
-          }
-          break;
         case "session.status": {
           const state = stateFromSessionStatus(properties.status);
           if (state === "working") {
             await reportContinuing(state, sessionID, properties.status);
           } else if (state === "idle") {
             await reportIdleOrConfirmError(sessionID);
-          } else {
-            await reportSession(sessionID);
           }
           break;
         }
@@ -991,15 +926,6 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
           break;
         case "session.idle":
           await reportIdleOrConfirmError(sessionID);
-          break;
-        case "session.deleted":
-          serverCreatedSessions.delete(sessionID);
-          clearSessionLifecycle(sessionID);
-          clearPromptsForSession(sessionID);
-          if (sessionID && sessionID === currentRootSessionID) {
-            currentRootSessionID = undefined;
-            retireAllChildren();
-          }
           break;
         default:
           break;

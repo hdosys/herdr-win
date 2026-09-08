@@ -1,27 +1,64 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
 
 const requests: unknown[] = [];
 const activeDisposers: Array<() => void> = [];
 const requestWaiters: Array<() => void> = [];
 let importCounter = 0;
+let acknowledgement = "ok";
+let accepted = true;
+let reportedSessionID: unknown;
+let readbacks = 0;
+let inFlight = 0;
 
 mock.module("node:net", () => ({
   default: {
     createConnection(_path: string, onConnect: () => void) {
-      const handlers = new Map<string, () => void>();
+      const handlers = new Map<string, (data?: unknown) => void>();
+      let destroyed = false;
+      inFlight += 1;
       const client = {
         write(input: string) {
-          requests.push(JSON.parse(input.trim()));
+          const request = JSON.parse(input.trim());
+          if (request.method === "pane.get") {
+            readbacks += 1;
+            queueMicrotask(() => client.emit("data", `${JSON.stringify({ id: request.id, result: {
+              type: "pane_info", pane: { pane_id: "test:p1", agent_session: {
+                source: "herdr:opencode", agent: "opencode", kind: "id",
+                value: accepted ? reportedSessionID : "previous-session",
+              } },
+            } })}\n`));
+            return;
+          }
+          reportedSessionID = request.params.agent_session_id;
+          requests.push(request);
           requestWaiters.shift()?.();
-          queueMicrotask(() => client.emit("data"));
+          queueMicrotask(() => {
+            if (["close", "end", "error"].includes(acknowledgement)) {
+              client.emit(acknowledgement);
+            } else if (acknowledgement === "timeout") {
+              // The production wall-clock deadline owns termination.
+            } else {
+              const response = acknowledgement === "rejected"
+                ? { id: request.id, error: { code: "pane_not_found" } }
+                : { id: acknowledgement === "wrong-id" ? "another-request" : request.id,
+                    result: { type: "ok" } };
+              const data = `${JSON.stringify(response)}\n`;
+              client.emit("data", data.slice(0, 7));
+              client.emit("data", data.slice(7));
+              if (acknowledgement === "wrong-id") client.emit("end");
+            }
+          });
         },
         setTimeout() {},
-        on(event: string, handler: () => void) {
+        on(event: string, handler: (data?: unknown) => void) {
           handlers.set(event, handler);
         },
-        destroy() {},
-        emit(event: string) {
-          handlers.get(event)?.();
+        destroy() {
+          if (!destroyed) inFlight -= 1;
+          destroyed = true;
+        },
+        emit(event: string, data?: unknown) {
+          if (!destroyed) handlers.get(event)?.(data);
         },
       };
       queueMicrotask(onConnect);
@@ -33,6 +70,9 @@ mock.module("node:net", () => ({
 beforeEach(() => {
   requests.length = 0;
   requestWaiters.length = 0;
+  acknowledgement = "ok";
+  accepted = true;
+  readbacks = 0;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
@@ -55,6 +95,7 @@ function fakeApi() {
   const sessions = new Map<string, { id: string; parentID?: string }>();
   let current: { name: string; params?: { sessionID: string } } = { name: "home" };
   let dispose: (() => void) | undefined;
+  const listeners = new Map<string, (event: unknown) => void>();
   activeDisposers.push(() => dispose?.());
 
   return {
@@ -77,6 +118,12 @@ function fakeApi() {
           return () => {};
         },
       },
+      event: {
+        on(type: string, handler: (event: unknown) => void) {
+          listeners.set(type, handler);
+          return () => listeners.delete(type);
+        },
+      },
     },
     addSession(session: { id: string; parentID?: string }) {
       sessions.set(session.id, session);
@@ -86,6 +133,9 @@ function fakeApi() {
     },
     dispose() {
       dispose?.();
+    },
+    emit(type: string, sessionID?: string) {
+      listeners.get(type)?.({ type, properties: { sessionID } });
     },
   };
 }
@@ -110,19 +160,24 @@ test("reports a root session when only the local route changes", async () => {
   expect(requestParam(requests[0], "seq")).toBeUndefined();
 });
 
-test("retries an initial selection while Herdr detects the process", async () => {
+test("receipt alone retries until the selected session is read back", async () => {
+  accepted = false;
   const plugin = await loadPlugin();
   const tui = fakeApi();
   tui.addSession({ id: "session-a" });
   tui.select("session-a");
 
   await plugin.tui(tui.api);
-  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(readbacks).toBe(1);
+  accepted = true;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await new Promise((resolve) => setTimeout(resolve, 150));
 
   expect(requests.map((request) => requestParam(request, "agent_session_id"))).toEqual([
     "session-a",
     "session-a",
   ]);
+  expect(readbacks).toBe(2);
 });
 
 test("does not report root sessions not selected by this TUI", async () => {
@@ -182,6 +237,73 @@ test("stops route polling when the TUI plugin is disposed", async () => {
   await new Promise((resolve) => setTimeout(resolve, 125));
 
   expect(requests).toHaveLength(0);
+});
+
+test.each(["close", "end", "error", "wrong-id", "rejected", "timeout"])(
+  "%s is not a selection acknowledgement", async (mode) => {
+    acknowledgement = mode;
+    const plugin = await loadPlugin();
+    const tui = fakeApi();
+    tui.addSession({ id: "session-a" });
+    tui.select("session-a");
+    await plugin.tui(tui.api);
+    tui.dispose();
+    expect(requests).toHaveLength(1);
+    expect(readbacks).toBe(0);
+    expect(inFlight).toBe(0);
+  },
+);
+
+test("exhausted delivery resumes on selected-session activity, not a retry daemon", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    acknowledgement = "rejected";
+    const plugin = await loadPlugin();
+    const tui = fakeApi();
+    tui.addSession({ id: "session-a" });
+    tui.select("session-a");
+    await plugin.tui(tui.api);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      now += 2_000;
+      await new Promise((resolve) => setTimeout(resolve, 125));
+    }
+    expect(requests).toHaveLength(4);
+    now += 60_000;
+    tui.emit("session.status", "foreign-session");
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    expect(requests).toHaveLength(4);
+    acknowledgement = "ok";
+    tui.emit("session.status", "session-a");
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    expect(requests).toHaveLength(5);
+    expect(readbacks).toBe(1);
+    tui.emit("session.status", "session-a");
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    expect(requests).toHaveLength(5);
+    tui.emit("server.connected");
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    expect(requests).toHaveLength(6);
+    tui.dispose();
+    expect(inFlight).toBe(0);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("disposal cancels the pending selection request", async () => {
+  acknowledgement = "timeout";
+  const plugin = await loadPlugin();
+  const tui = fakeApi();
+  tui.addSession({ id: "session-a" });
+  tui.select("session-a");
+  const dispatched = waitForNextRequest();
+  const starting = plugin.tui(tui.api);
+  await dispatched;
+  tui.dispose();
+  await starting;
+  expect(inFlight).toBe(0);
+  expect(readbacks).toBe(0);
 });
 
 function requestParam(request: unknown, name: string): unknown {

@@ -8,6 +8,8 @@ const methodResults = new Map<string, unknown[]>();
 let autoAcknowledge = true;
 let importCounter = 0;
 let originalFetch: typeof globalThis.fetch;
+let selectedRootSessionID: string | undefined;
+let selectionAvailable = true;
 
 type FakeClient = {
   destroyed: boolean;
@@ -22,6 +24,21 @@ mock.module("node:net", () => ({
         destroyed: false,
         write(input: string) {
           const request = JSON.parse(input.trim());
+          if (request.method === "pane.get") {
+            const result = selectionAvailable ? {
+              type: "pane_info",
+              pane: {
+                pane_id: "test:p1",
+                ...(selectedRootSessionID ? { agent_session: {
+                  source: "herdr:opencode", agent: "opencode", kind: "id",
+                  value: selectedRootSessionID,
+                } } : {}),
+              },
+            } : { type: "ok" };
+            queueMicrotask(() => client.emit("data", `${JSON.stringify({ id: request.id, result })}\n`));
+            return;
+          }
+          clients.push(client);
           requests.push(request);
           requestWaiters.shift()?.();
           if (autoAcknowledge) {
@@ -43,7 +60,6 @@ mock.module("node:net", () => ({
           handlers.get(event)?.(data);
         },
       };
-      clients.push(client);
       queueMicrotask(onConnect);
       return client;
     },
@@ -56,6 +72,8 @@ beforeEach(() => {
   requestWaiters.length = 0;
   methodResults.clear();
   autoAcknowledge = true;
+  selectedRootSessionID = "root-session";
+  selectionAvailable = true;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
@@ -224,6 +242,7 @@ test("ignores session.updated once the current root is established", async () =>
 });
 
 test("does not classify server activity in another root session as a selection", async () => {
+  selectedRootSessionID = "visible-session";
   const plugin = await loadPlugin();
 
   await plugin["chat.message"]({ sessionID: "visible-session" });
@@ -231,15 +250,14 @@ test("does not classify server activity in another root session as a selection",
 
   expect(requests.map(requestMethod)).toEqual([
     "pane.report_agent",
-    "pane.report_agent",
   ]);
   expect(requests.map(requestSessionID)).toEqual([
     "visible-session",
-    "attached-client-session",
   ]);
 });
 
 test("does not classify server-global root creation as a local selection", async () => {
+  selectedRootSessionID = undefined;
   const plugin = await loadPlugin();
 
   await plugin.event({
@@ -248,6 +266,10 @@ test("does not classify server-global root creation as a local selection", async
   await plugin.event({
     event: { type: "session.updated", properties: { sessionID: "attached-session" } },
   });
+  await plugin["chat.message"]({ sessionID: "attached-session" });
+
+  expect(requests).toHaveLength(0);
+  selectedRootSessionID = "attached-session";
   await plugin["chat.message"]({ sessionID: "attached-session" });
 
   expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
@@ -374,6 +396,7 @@ test("error without follow-up reports blocked through bounded fallback", async (
 });
 
 test("unrelated status cannot cancel another session pending error", async () => {
+  selectedRootSessionID = "first-session";
   const plugin = await loadPlugin();
 
   await plugin.event(apiErrorEvent("first-session"));
@@ -399,7 +422,7 @@ test("session deletion clears a pending error fallback", async () => {
     await plugin.event({
       event: {
         type: "session.deleted",
-        properties: { sessionID: "root-session" },
+        properties: { info: { id: "root-session" } },
       },
     });
 
@@ -415,7 +438,9 @@ test("new session retires old pending lifecycle and stale events", async () => {
   vi.useFakeTimers();
   try {
     const plugin = await loadPlugin();
+    selectedRootSessionID = "old-session";
     await plugin.event(apiErrorEvent("old-session"));
+    selectedRootSessionID = "new-session";
     await plugin["chat.message"]({ sessionID: "new-session" });
 
     await plugin.event(sessionStatusEvent("old-session", { type: "idle" }));
@@ -437,7 +462,7 @@ test("new session retires old pending lifecycle and stale events", async () => {
   }
 });
 
-test("unscoped error remains blocked across current root busy", async () => {
+test("owned busy clears an unscoped error but not an outstanding question", async () => {
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
@@ -448,10 +473,20 @@ test("unscoped error remains blocked across current root busy", async () => {
   requests.length = 0;
 
   await plugin.event(apiErrorEvent());
-  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
-
+  await plugin.event(sessionStatusEvent("foreign-root", { type: "busy" }));
   expect(requests.map(requestState)).toEqual(["blocked"]);
-  expect(requests.map(requestSessionID)).toEqual([undefined]);
+  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
+  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
+  await plugin.event({ event: { type: "question.asked", properties: {
+    id: "question-1", sessionID: "root-session",
+  } } });
+  await plugin.event(apiErrorEvent());
+  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
+  expect(requests.map(requestState)).toEqual(["blocked", "working", "blocked", "blocked"]);
+  await plugin.event({ event: { type: "question.replied", properties: {
+    requestID: "question-1", sessionID: "root-session",
+  } } });
+  expect(requests.map(requestState).at(-1)).toBe("working");
 });
 
 test("dispose cancels pending fallback and ignores later events", async () => {
@@ -470,31 +505,39 @@ test("dispose cancels pending fallback and ignores later events", async () => {
   }
 });
 
-test("session.updated establishes only the initial current session", async () => {
+test("SDK lifecycle info IDs never establish selection and deletion releases the old root", async () => {
+  selectedRootSessionID = undefined;
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
       type: "session.updated",
-      properties: { sessionID: "startup-root" },
+      properties: { info: { id: "startup-root" } },
     },
   });
   await plugin.event({
     event: {
       type: "session.updated",
-      properties: { sessionID: "background-session" },
+      properties: { info: { id: "background-session" } },
     },
   });
+  expect(requests).toHaveLength(0);
+  selectedRootSessionID = "startup-root";
   await plugin.event(sessionStatusEvent("startup-root", { type: "busy" }));
+  await plugin.event(sessionStatusEvent("background-session", { type: "busy" }));
+  await plugin.event({ event: { type: "session.deleted", properties: { info: { id: "startup-root" } } } });
+  await plugin.event(sessionStatusEvent("startup-root", { type: "busy" }));
+  selectedRootSessionID = "background-session";
   await plugin.event(sessionStatusEvent("background-session", { type: "busy" }));
 
   expect(requests.map(requestMethod)).toEqual([
-    "pane.report_agent_session",
+    "pane.report_agent",
     "pane.report_agent",
   ]);
-  expect(requests.map(requestSessionID)).toEqual(["startup-root", "startup-root"]);
+  expect(requests.map(requestSessionID)).toEqual(["startup-root", "background-session"]);
 });
 
 test("background session.updated cannot steal a pending terminal root", async () => {
+  selectedRootSessionID = "root-a";
   const plugin = await loadPlugin();
   await plugin.event(apiErrorEvent("root-a"));
   await plugin.event({
@@ -510,7 +553,8 @@ test("background session.updated cannot steal a pending terminal root", async ()
   expect(requests.map(requestSessionID)).toEqual(["root-a"]);
 });
 
-test("chat.message establishes new root ownership", async () => {
+test("chat.message consumes only the selection read from the pane owner", async () => {
+  selectedRootSessionID = "root-a";
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
@@ -520,13 +564,14 @@ test("chat.message establishes new root ownership", async () => {
   });
   await plugin["chat.message"]({ sessionID: "root-b" });
   await plugin.event(sessionStatusEvent("root-a", { type: "busy" }));
+  selectedRootSessionID = "root-b";
   await plugin.event(sessionStatusEvent("root-b", { type: "busy" }));
 
   expect(requests.map(requestMethod)).toEqual([
     "pane.report_agent",
     "pane.report_agent",
   ]);
-  expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-a", "root-b"]);
 });
 
 test("tiles five concurrent direct children across the complete tab", async () => {
@@ -934,7 +979,7 @@ test("dispose lets an in-flight child split report its pane before cleanup", asy
   ]);
 });
 
-test("recovers pane ownership when a successful split response is lost", async () => {
+test("a lost split response never adopts or closes an independently created pane", async () => {
   const plugin = await loadPlugin({
     directory: "C:\\repo",
     serverUrl: new URL("http://127.0.0.1:4096"),
@@ -964,33 +1009,15 @@ test("recovers pane ownership when a successful split response is lost", async (
   });
   await splitDispatched;
 
-  const recoveryLayoutDispatched = waitForNextRequest();
   clients[1]?.emit("close");
-  await recoveryLayoutDispatched;
-  const startDispatched = waitForNextRequest();
-  acknowledgeRequest(2, 2, {
-    result: {
-      type: "pane_layout",
-      layout: {
-        panes: [
-          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
-        ],
-      },
-    },
-  });
-  await startDispatched;
-  acknowledgeRequest(3, 3, {
-    result: {
-      type: "agent_started",
-      agent: { pane_id: "test:p2" },
-      argv: [],
-    },
-  });
   await created;
-
-  const closeDispatched = waitForNextRequest();
-  const retired = plugin.event({
+  autoAcknowledge = true;
+  enqueueResult("pane.layout", { type: "pane_layout", layout: { panes: [
+    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
+    { pane_id: "foreign:p2", rect: { width: 100, height: 50 } },
+  ] } });
+  await plugin.event(sessionStatusEvent("child-session", { type: "busy" }));
+  await plugin.event({
     event: {
       type: "session.deleted",
       properties: {
@@ -999,19 +1026,90 @@ test("recovers pane ownership when a successful split response is lost", async (
       },
     },
   });
-  await closeDispatched;
-  acknowledgeRequest(4, 4);
-  await retired;
+  await plugin.dispose();
 
   expect(requests.map(requestMethod)).toEqual([
     "pane.layout",
     "pane.split",
-    "pane.layout",
-    "agent.start",
-    "pane.close",
   ]);
-  expect(requestParam(requests[3], "pane_id")).toBe("test:p2");
-  expect(requestParam(requests[4], "pane_id")).toBe("test:p2");
+});
+
+test("dispose aborts a stalled SDK status request and closes only its known child", async () => {
+  let signal: AbortSignal | undefined;
+  let started!: () => void;
+  const statusStarted = new Promise<void>((resolve) => { started = resolve; });
+  const plugin = await loadPlugin({
+    directory: "C:\\repo", serverUrl: new URL("http://127.0.0.1:4096"),
+    client: { session: { status: (options: { signal: AbortSignal }) => {
+      signal = options.signal;
+      started();
+      return new Promise(() => {});
+    } } },
+  });
+  await openDirectChild(plugin);
+  requests.length = 0;
+  const idle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  await statusStarted;
+  await plugin.dispose();
+  await idle;
+  expect(signal?.aborted).toBe(true);
+  expect(requests.map(requestMethod)).toEqual(["pane.close"]);
+  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
+}, 1500);
+
+test("a stalled SDK status times out without treating unknown state as idle", async () => {
+  let signal: AbortSignal | undefined;
+  const plugin = await loadPlugin({
+    directory: "C:\\repo", serverUrl: new URL("http://127.0.0.1:4096"),
+    client: { session: { status: (options: { signal: AbortSignal }) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    } } },
+  });
+  await openDirectChild(plugin);
+  requests.length = 0;
+  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+  expect(signal?.aborted).toBe(true);
+  expect(requests).toHaveLength(0);
+  await plugin.dispose();
+}, 1500);
+
+test("A/B/A selection preserves live child prompts and ignores foreign chat", async () => {
+  const plugin = await loadPlugin();
+  await plugin.event({ event: { type: "session.created", properties: {
+    info: { id: "child-session", parentID: "root-session" },
+  } } });
+  await plugin["chat.message"]({ sessionID: "foreign-root" });
+  expect(requests).toHaveLength(0);
+  selectedRootSessionID = "other-root";
+  await plugin["chat.message"]({ sessionID: "other-root" });
+  await plugin.event({ event: { type: "question.asked", properties: {
+    id: "q1", sessionID: "child-session",
+  } } });
+  expect(requests.map(requestState)).toEqual(["working"]);
+  selectedRootSessionID = "root-session";
+  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
+  expect(requests.map(requestState)).toEqual(["working", "blocked"]);
+  await plugin.event({ event: { type: "question.asked", properties: {
+    id: "q2", sessionID: "child-session",
+  } } });
+  await plugin.event({ event: { type: "question.replied", properties: {
+    requestID: "q1", sessionID: "child-session",
+  } } });
+  await plugin.event({ event: { type: "question.replied", properties: {
+    requestID: "q2", sessionID: "child-session",
+  } } });
+  expect(requests.map(requestState)).toEqual(["working", "blocked", "blocked", "blocked", "working"]);
+  expect(requests.map(requestSessionID)).toEqual(["other-root", "root-session", "root-session", "root-session", "root-session"]);
+});
+
+test("an unavailable selection never starts children or reports a foreign root", async () => {
+  selectionAvailable = false;
+  const plugin = await loadPlugin({ serverUrl: new URL("http://127.0.0.1:4096") });
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  await openDirectChild(plugin);
+  expect(requests).toHaveLength(0);
+  await plugin.dispose();
 });
 
 test("retains pane ownership when close is not acknowledged", async () => {
@@ -1078,7 +1176,7 @@ test("does not split when the root OpenCode server is not externally reachable",
   expect(requests).toHaveLength(0);
 });
 
-test("same-root chat cannot clear an unscoped error block", async () => {
+test("an accepted same-root turn clears an unscoped error block", async () => {
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
@@ -1091,11 +1189,12 @@ test("same-root chat cannot clear an unscoped error block", async () => {
   await plugin.event(apiErrorEvent());
   await plugin["chat.message"]({ sessionID: "root-session" });
 
-  expect(requests.map(requestState)).toEqual(["blocked"]);
-  expect(requests.map(requestSessionID)).toEqual([undefined]);
+  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
+  expect(requests.map(requestSessionID)).toEqual([undefined, "root-session"]);
 });
 
 test("old child reply is dropped after root replacement", async () => {
+  selectedRootSessionID = "old-root";
   const plugin = await loadPlugin();
   await plugin["chat.message"]({ sessionID: "old-root" });
   requests.length = 0;
@@ -1108,6 +1207,7 @@ test("old child reply is dropped after root replacement", async () => {
       },
     },
   });
+  selectedRootSessionID = "new-root";
   await plugin["chat.message"]({ sessionID: "new-root" });
   await plugin.event({
     event: {
@@ -1183,7 +1283,8 @@ test("no-root deleted child stays retired through trailing activity", async () =
   expect(requests).toHaveLength(0);
 });
 
-test("initial root retires children learned for another parent", async () => {
+test("initial selected root filters children learned for another parent", async () => {
+  selectedRootSessionID = undefined;
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
@@ -1194,12 +1295,8 @@ test("initial root retires children learned for another parent", async () => {
       },
     },
   });
-  await plugin.event({
-    event: {
-      type: "session.updated",
-      properties: { sessionID: "new-root" },
-    },
-  });
+  selectedRootSessionID = "new-root";
+  await plugin.event({ event: { type: "session.updated", properties: { info: { id: "new-root" } } } });
   await plugin.event({
     event: {
       type: "question.replied",
@@ -1207,12 +1304,11 @@ test("initial root retires children learned for another parent", async () => {
     },
   });
 
-  expect(requests.map(requestMethod)).toEqual(["pane.report_agent_session"]);
-  expect(requests.map(requestSessionID)).toEqual(["new-root"]);
-  expect(requests.map(requestState)).toEqual([undefined]);
+  expect(requests).toHaveLength(0);
 });
 
-test("initial status root retires children learned for another parent", async () => {
+test("initial selected root ignores other children without adopting their chat", async () => {
+  selectedRootSessionID = undefined;
   const plugin = await loadPlugin();
   await plugin.event({
     event: {
@@ -1223,6 +1319,7 @@ test("initial status root retires children learned for another parent", async ()
       },
     },
   });
+  selectedRootSessionID = "new-root";
   await plugin.event(sessionStatusEvent("new-root", { type: "busy" }));
   await plugin.event({
     event: {
@@ -1323,6 +1420,7 @@ test("retired nested child prompts cannot target the newly selected root", async
   ]) {
     await plugin.event({ event: { type: "session.created", properties: { info } } });
   }
+  selectedRootSessionID = "other-root";
   await plugin["chat.message"]({ sessionID: "other-root" });
   await plugin.event({
     event: { type: "permission.asked", properties: { sessionID: "nested-session" } },

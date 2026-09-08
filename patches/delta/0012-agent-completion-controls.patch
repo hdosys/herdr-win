@@ -1,10 +1,10 @@
-From 48e19b96f612c5d05442b1542aeb8a8a1e0f8186 Mon Sep 17 00:00:00 2001
+From 047b50f27aabb7d0e73ba93b57efe28942c3378d Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 27 Aug 2026 01:46:36 +0200
 Subject: [PATCH 10/13] feat(agent): add completion alert controls
 
 ---
- docs/next/CHANGELOG.md                        | 15 ++++++++
+ docs/next/CHANGELOG.md                        |  2 +
  docs/next/api/herdr-api.schema.json           |  4 ++
  .../src/content/docs/configuration.mdx        |  9 +++--
  .../website/src/content/docs/socket-api.mdx   |  4 +-
@@ -23,34 +23,23 @@ Subject: [PATCH 10/13] feat(agent): add completion alert controls
  src/config/write.rs                           |  5 +++
  src/events.rs                                 |  1 +
  src/server/headless/tests/mod.rs              |  2 +
- 19 files changed, 140 insertions(+), 20 deletions(-)
+ 19 files changed, 127 insertions(+), 20 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index 1c5468f11349b0d23ba1c7d783216d9f06d7fe1d..5fdf7cf00f59f8a082505b142605d1fb25f741df 100644
+index 6c69d7e51bfa5dc240cdd8e742868f4da09dc240..5fdf7cf00f59f8a082505b142605d1fb25f741df 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
-@@ -2,6 +2,21 @@
- 
- ## Unreleased
- 
-+### Added
-+- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
-+
-+### Changed
-+- Pane and workspace metadata reports can atomically update and retain up to 64 custom tokens while preserving the existing key, value, source, and TTL bounds.
-+- Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
+@@ -8,8 +8,10 @@
+ ### Changed
+ - Pane and workspace metadata reports can atomically update and retain up to 64 custom tokens while preserving the existing key, value, source, and TTL bounds.
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
 +- Agent completion alerts follow the upstream enabled default again and can be disabled from Settings > completion or with `ui.notify_on_agent_completion = false`; attention-required notifications remain enabled.
-+
-+### Fixed
-+- Cancelling an OpenCode response no longer reports an error that asks for attention.
-+- Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
-+- Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
-+- Full-lifecycle agent sessions now regain hook authority after a temporary foreground takeover ends instead of remaining permanently stale. (#1033)
-+- Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
-+- Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
- ## [0.9.0] - 2026-09-07
  
- ### Added
+ ### Fixed
++- Cancelling an OpenCode response no longer reports an error that asks for attention.
+ - Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
+ - Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
+ - Full-lifecycle agent sessions now regain hook authority after a temporary foreground takeover ends instead of remaining permanently stale. (#1033)
 diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
 index 4532e918d04431e34413c14326df3ef1ef6755c9..64be90c2f9fa7d31b930685b7c8f6079605167a3 100644
 --- a/docs/next/api/herdr-api.schema.json

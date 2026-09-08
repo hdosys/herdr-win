@@ -1,11 +1,12 @@
-From ced7b845014948f1eddcf3291ba84efc8812c7de Mon Sep 17 00:00:00 2001
+From b9784488288f346491bc926ef4ff747f9895ac1f Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
 Subject: [PATCH 7/13] feat(session): auto-start configured agent
 
 Refs herdrdev/herdr#321
 ---
- CHANGELOG.md                                  |  11 +
+ CHANGELOG.md                                  |   1 +
+ docs/next/CHANGELOG.md                        |   4 +
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
  src/app/agent_resume.rs                       |  55 +---
@@ -27,30 +28,40 @@ Refs herdrdev/herdr#321
  src/platform/windows.rs                       | 234 +++++++--------
  src/server/headless.rs                        |   2 +-
  src/terminal/runtime.rs                       |   4 +
- 22 files changed, 780 insertions(+), 215 deletions(-)
+ 23 files changed, 774 insertions(+), 215 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..639c78a827c9520d6f23baa7401cc158ecf9badb 100644
+index 2865c99c4604f262eaf794e00244f9401d27c9ad..639c78a827c9520d6f23baa7401cc158ecf9badb 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -2,6 +2,17 @@
+@@ -7,6 +7,7 @@
+ - Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
+ 
+ ### Fixed
++- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
+ - Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
+ - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
+ 
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index 11437cc7cff45119a1084733b32ec1b7a5a1df2b..8b9d2fdaed9e11e67b5b5fe21348d2765119fdc0 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -2,11 +2,15 @@
  
  ## Unreleased
  
 +### Added
-+- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits that evenly tile the complete tab across both axes, then close when the child session becomes idle or is deleted.
-+- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
++- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
 +
-+### Fixed
-+- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
-+- Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
-+- Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
-+
-+### Changed
-+- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
- ## [0.9.0] - 2026-09-07
+ ### Changed
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
  
- ### Added
+ ### Fixed
+ - Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
++- Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
+ - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
+ - Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ ## [0.9.0] - 2026-09-07
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
 index 8503373d75c7f2c7fa162d427e8c4599660282ce..6fa1c411cb663f45f665406c26dc41ffac3f0a13 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx

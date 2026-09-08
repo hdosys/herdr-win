@@ -1,10 +1,12 @@
-From 125a95ab548369ec4151890c66b814b8e3453cfc Mon Sep 17 00:00:00 2001
+From b450b118a20c0e0a831f43d63a80b8d1bfd2377c Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 17:49:01 +0200
 Subject: [PATCH 6/13] fix(worktree): scope Git trust to selected paths
 
 Refs herdrdev/herdr#3044
 ---
+ CHANGELOG.md                      |  1 +
+ docs/next/CHANGELOG.md            |  2 ++
  src/app/api/worktrees.rs          |  4 +++-
  src/app/api/worktrees/deferred.rs | 22 +++++++++++++---------
  src/app/runtime.rs                |  8 ++++++--
@@ -13,8 +15,33 @@ Refs herdrdev/herdr#3044
  src/pty/actor.rs                  | 30 +++++++++++++++++++++++++++++-
  src/terminal/runtime.rs           |  4 ++--
  src/worktree.rs                   | 12 ++++++------
- 8 files changed, 85 insertions(+), 26 deletions(-)
+ 10 files changed, 88 insertions(+), 26 deletions(-)
 
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index ba2ce0eddf76597aaa90354568f5fdf52eb731a7..2865c99c4604f262eaf794e00244f9401d27c9ad 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -8,6 +8,7 @@
+ 
+ ### Fixed
+ - Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
++- Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
+ 
+ ### Changed
+ - `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index b8d3017c5958990eccb2ad34de8f6cb6c15a92e0..11437cc7cff45119a1084733b32ec1b7a5a1df2b 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -6,6 +6,8 @@
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
+ 
+ ### Fixed
++- Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
++- Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
+ - Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ ## [0.9.0] - 2026-09-07
+ 
 diff --git a/src/app/api/worktrees.rs b/src/app/api/worktrees.rs
 index 71f2e03a1ef6e12730a75b4a1bc8a9e297104fce..5406c0b2ae471156d027e3644a16bf6aca358c9e 100644
 --- a/src/app/api/worktrees.rs

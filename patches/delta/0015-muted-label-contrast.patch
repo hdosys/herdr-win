@@ -1,4 +1,4 @@
-From 5aa2f24cc049ce4a36e0b165f3191354e5878303 Mon Sep 17 00:00:00 2001
+From 54c220d912364804e34766af0df4819dd3aab315 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 30 Aug 2026 17:21:35 +0200
 Subject: [PATCH 12/13] fix(ui): keep muted labels readable

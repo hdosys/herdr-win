@@ -1,10 +1,11 @@
-From 9e00bce5f01c0769506d6df4508301b9fc781ecc Mon Sep 17 00:00:00 2001
+From 6daa60b26362d5c200363f8efc4a932982a73a13 Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
 Subject: [PATCH 4/13] fix(opencode): preserve truthful lifecycle state
 
 Defer root-session errors until idle or a bounded fallback, cancel them when explicit continuing status follows, and prevent terminal blocked state from being overwritten by legacy idle events. Keep outstanding root and child prompts blocked until their exact replies arrive so unrelated busy or idle events cannot erase user-waiting state.
 ---
+ CHANGELOG.md                                  |    1 +
  src/agent_resume.rs                           |   23 +-
  src/app/agents.rs                             |   13 +-
  .../assets/opencode/herdr-agent-state.js      |  959 +++++++++--
@@ -12,8 +13,20 @@ Defer root-session errors until idle or a bounded fallback, cancel them when exp
  .../assets/opencode/herdr-tui-session.js      |  123 +-
  .../assets/opencode/herdr-tui-session.test.ts |  157 +-
  src/integration/mod.rs                        |    2 +-
- 7 files changed, 2488 insertions(+), 220 deletions(-)
+ 8 files changed, 2489 insertions(+), 220 deletions(-)
 
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 81f8791d30799c5da74ad53ea2fab855c058ef61..ba2ce0eddf76597aaa90354568f5fdf52eb731a7 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,6 +3,7 @@
+ ## Unreleased
+ 
+ ### Added
++- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits that evenly tile the complete tab across both axes, then close when the child session becomes idle or is deleted.
+ - Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
+ 
+ ### Fixed
 diff --git a/src/agent_resume.rs b/src/agent_resume.rs
 index 075c396fe6c3af0267f157756c5544ba739e10a0..1e9ef6cdef2188debaebfc6750de5430b7e50d78 100644
 --- a/src/agent_resume.rs

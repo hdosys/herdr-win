@@ -1,4 +1,4 @@
-From 99640d6816b4b0f2bc6e79b17beb05993dfaca5d Mon Sep 17 00:00:00 2001
+From 5a80a7de28e0083b86f3e74867f5eff1e04ef901 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/13] feat(windows): preserve terminal appearance
@@ -7,7 +7,7 @@ Transport bounded host color and appearance events, keep software and native cur
 
 Refs herdrdev/herdr#2786
 ---
- docs/next/CHANGELOG.md                        |   1 +
+ docs/next/CHANGELOG.md                        |   3 +
  .../src/content/docs/configuration.mdx        |   2 +-
  .../src/content/docs/ja/configuration.mdx     |   2 +-
  .../src/content/docs/zh-cn/configuration.mdx  |   2 +-
@@ -51,13 +51,22 @@ Refs herdrdev/herdr#2786
  src/server/render_stream.rs                   |  76 ++-
  src/terminal_modes.rs                         |  15 +-
  src/terminal_theme.rs                         |  90 ++--
- 44 files changed, 1543 insertions(+), 547 deletions(-)
+ 44 files changed, 1545 insertions(+), 547 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..1c5468f11349b0d23ba1c7d783216d9f06d7fe1d 100644
+index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..8e363b1a3d17da11a97da751f12f03b6e099ed33 100644
 --- a/docs/next/CHANGELOG.md
 +++ b/docs/next/CHANGELOG.md
-@@ -251,6 +251,7 @@
+@@ -2,6 +2,8 @@
+ 
+ ## Unreleased
+ 
++### Changed
++- Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
+ ## [0.9.0] - 2026-09-07
+ 
+ ### Added
+@@ -251,6 +253,7 @@
  
  ### Changed
  - Agent commands now accept only a unique live agent name or the pane ID currently hosting that agent. Names are cleared when the occupant exits, is released, or is replaced. The old top-level `wait` commands were replaced by `agent wait` and `pane wait-output`, and `agent send` was replaced by `agent send-keys`.

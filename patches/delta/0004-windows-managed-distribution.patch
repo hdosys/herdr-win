@@ -1,10 +1,11 @@
-From 60726b824972a550788ef693e56131d9c8f7589e Mon Sep 17 00:00:00 2001
+From d295122fc991298efc8713502e5668c6f854b213 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 14:49:59 +0200
 Subject: [PATCH 3/13] feat(windows): manage fork distribution
 
 ---
  .gitattributes                                |    2 +
+ CHANGELOG.md                                  |    6 +
  Cargo.toml                                    |   10 +-
  README.zh-CN.md                               |    2 +-
  build.rs                                      |  110 +-
@@ -74,7 +75,7 @@ Subject: [PATCH 3/13] feat(windows): manage fork distribution
  tests/cli/harness.rs                          |    2 +-
  tests/cli/sessions.rs                         |   24 +-
  tests/support/mod.rs                          |   14 +
- 70 files changed, 12337 insertions(+), 3346 deletions(-)
+ 71 files changed, 12343 insertions(+), 3346 deletions(-)
  delete mode 100644 distribution/install.cmd
  delete mode 100644 distribution/install.ps1
  create mode 100644 packaging/windows/installer/artwork/README.md
@@ -109,6 +110,23 @@ index 4158df58b6c743cab622deee75278385cc279176..3b2680fb7bd1bcb1ff32ebcbc4365c20
  packaging/windows/licenses/* binary
 +# Unified diffs use a single space for blank context lines.
 +vendor/patches/**/*.patch whitespace=-blank-at-eol
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 98d6dcc2de4d6b0fd05a7ad76a2fdbc7c6125829..81f8791d30799c5da74ad53ea2fab855c058ef61 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,12 @@
+ 
+ ## Unreleased
+ 
++### Added
++- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
++
++### Fixed
++- Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
++
+ ### Changed
+ - `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
+ ## [0.9.0] - 2026-09-07
 diff --git a/Cargo.toml b/Cargo.toml
 index df637e6a347db0cde71d6116a903215292ca9bf3..f90608df0385d1dd0d4d87395718a9d2179cde98 100644
 --- a/Cargo.toml

@@ -1,13 +1,26 @@
-From 647d37c4c5383251929bc59282b24e324e1d42c3 Mon Sep 17 00:00:00 2001
+From ca471ea9d0561abcd5857098bb30a10d963ec59e Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 23 Aug 2026 00:13:32 +0200
 Subject: [PATCH 8/13] fix(agent): restore authority after transient takeover
 
 Refs herdrdev/herdr#1033
 ---
- src/terminal/state.rs | 71 +++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 69 insertions(+), 2 deletions(-)
+ docs/next/CHANGELOG.md |  1 +
+ src/terminal/state.rs  | 71 ++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 70 insertions(+), 2 deletions(-)
 
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index 8b9d2fdaed9e11e67b5b5fe21348d2765119fdc0..b2c65244cf3c107a4ac400b4c95f57079b7afef8 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -11,6 +11,7 @@
+ ### Fixed
+ - Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
+ - Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
++- Full-lifecycle agent sessions now regain hook authority after a temporary foreground takeover ends instead of remaining permanently stale. (#1033)
+ - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
+ - Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ ## [0.9.0] - 2026-09-07
 diff --git a/src/terminal/state.rs b/src/terminal/state.rs
 index dc28af10650258fd3abde28241f8ab9cce207375..5d333c0488d9baf42ec0fdb26fb983594f812f8c 100644
 --- a/src/terminal/state.rs

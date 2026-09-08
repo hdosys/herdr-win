@@ -1,11 +1,13 @@
-From b11eb2e05b5f345ec92cade71cf790afce9714c9 Mon Sep 17 00:00:00 2001
+From 068c6c8a49587f6ee9868fbea0b3cb2d2b6e3ff6 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 12:00:13 +0200
 Subject: [PATCH 2/13] feat(remote): support Windows SSH hosts
 
 ---
+ CHANGELOG.md                                  |    2 +
  Cargo.lock                                    |  213 --
  Cargo.toml                                    |    4 +-
+ docs/next/CHANGELOG.md                        |    3 +
  docs/next/api/herdr-api.schema.json           |    7 +
  .../src/content/docs/cli-reference.mdx        |    6 +-
  .../src/content/docs/connecting-machines.mdx  |    4 +-
@@ -57,7 +59,7 @@ Subject: [PATCH 2/13] feat(remote): support Windows SSH hosts
  src/server/headless/tests/mod.rs              |    2 +
  src/ui/panes.rs                               |   21 +-
  src/update.rs                                 |    2 +
- 53 files changed, 6561 insertions(+), 1017 deletions(-)
+ 55 files changed, 6566 insertions(+), 1017 deletions(-)
  create mode 100644 scripts/windows_interactive_server_launch_probe.ps1
  create mode 100644 scripts/windows_interactive_server_probe_job.cs
  create mode 100644 src/distribution.rs
@@ -69,6 +71,19 @@ Subject: [PATCH 2/13] feat(remote): support Windows SSH hosts
  create mode 100644 src/remote/windows_package_local_payload.ps1
  create mode 100644 src/remote/windows_payload_layout.ps1
 
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..98d6dcc2de4d6b0fd05a7ad76a2fdbc7c6125829 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,8 @@
+ 
+ ## Unreleased
+ 
++### Changed
++- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
+ ## [0.9.0] - 2026-09-07
+ 
+ ### Added
 diff --git a/Cargo.lock b/Cargo.lock
 index 08fe5cc63f68dd2aeaf3ad9a4ee039e27c5ca9ff..5400baa20d394bf579197200f0788d6180c2b393 100644
 --- a/Cargo.lock
@@ -361,6 +376,20 @@ index d28ba46b24da6d6206eabdbee8efaf298ca9c5ef..df637e6a347db0cde71d6116a9032152
      "Win32_System_Threading",
      "Win32_UI_Input_Ime",
      "Win32_UI_Input_KeyboardAndMouse",
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index 8e363b1a3d17da11a97da751f12f03b6e099ed33..b8d3017c5958990eccb2ad34de8f6cb6c15a92e0 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -4,6 +4,9 @@
+ 
+ ### Changed
+ - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
++
++### Fixed
++- Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
+ ## [0.9.0] - 2026-09-07
+ 
+ ### Added
 diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
 index b3990e96975f7436eecb3d4aac97d9ffb3599721..3dbfcf198ad295d2df12ca7c0da56f14a832701b 100644
 --- a/docs/next/api/herdr-api.schema.json

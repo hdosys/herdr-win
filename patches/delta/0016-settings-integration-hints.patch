@@ -1,4 +1,4 @@
-From 27c49be4db02ddf02a04d961895350d5bd3650a5 Mon Sep 17 00:00:00 2001
+From d0ebc7e15ce37da57368aa52b6b8a35098fbba07 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 30 Aug 2026 17:33:23 +0200
 Subject: [PATCH 13/13] fix(settings): show valid integration hints

@@ -5,8 +5,10 @@ use std::os::unix::net::UnixStream;
 use std::thread;
 use std::time::Duration;
 
-pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
-    ensure_remote_server_running()?;
+pub(crate) fn run_remote_client_bridge(allow_start: bool) -> io::Result<()> {
+    if allow_start {
+        ensure_remote_server_running()?;
+    }
 
     let socket_path = crate::server::socket_paths::client_socket_path();
     let stream = UnixStream::connect(&socket_path).map_err(|err| {

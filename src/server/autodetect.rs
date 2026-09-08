@@ -392,9 +392,8 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, unix))]
-mod tests {
-    #[cfg(windows)]
+#[cfg(all(test, windows))]
+mod windows_tests {
     #[test]
     fn shell_readiness_checks_generation_and_codecs_not_private_versions() {
         use crate::protocol::endpoint::*;
@@ -423,7 +422,53 @@ mod tests {
             crate::protocol::FramingError::UnexpectedEof
         ))
         .unwrap());
+
+        use interprocess::local_socket::traits::Listener as _;
+        let root =
+            std::env::temp_dir().join(format!("herdr-inactive-readiness-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("client.sock");
+        let listener = crate::ipc::bind_local_listener(&path).unwrap();
+        let (release, released) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let message: crate::protocol::ClientMessage = crate::protocol::read_message(
+                &mut crate::ipc::LocalStreamDeadlineReader::new(
+                    &mut stream,
+                    std::time::Duration::from_secs(2),
+                ),
+                crate::protocol::MAX_FRAME_SIZE,
+            )
+            .unwrap();
+            let crate::protocol::ClientMessage::EndpointControl { kind, data } = message else {
+                panic!("readiness must use the endpoint handshake")
+            };
+            assert_eq!(kind, ENDPOINT_HELLO_KIND);
+            let hello: EndpointClientHello = serde_json::from_str(&data).unwrap();
+            assert!(!hello.surface_active);
+            let mut welcome = EndpointServerWelcome::compatible(Vec::new());
+            welcome.server_version = "older-compatible-build".into();
+            crate::protocol::write_message(
+                &mut stream,
+                &crate::protocol::ServerMessage::EndpointControl {
+                    kind: ENDPOINT_WELCOME_KIND.into(),
+                    data: serde_json::to_string(&welcome).unwrap(),
+                },
+            )
+            .unwrap();
+            let _ = released.recv_timeout(std::time::Duration::from_secs(2));
+        });
+        let ready =
+            super::client_protocol_accepts_hello(&path, std::time::Duration::from_millis(250));
+        let _ = release.send(());
+        peer.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(ready.unwrap());
     }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
     use super::*;
     use std::ffi::OsStr;
     use std::io::{BufRead, BufReader, Write};

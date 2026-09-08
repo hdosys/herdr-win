@@ -13,6 +13,17 @@ pub(crate) use attach::*;
 pub(crate) use host_unix::run_remote_client_bridge;
 pub(crate) use saved::*;
 
+pub(crate) fn bridge_allows_start(args: &[String]) -> std::io::Result<bool> {
+    match args {
+        [] => Ok(true),
+        [flag] if flag == "--connect-only" => Ok(false),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid remote bridge arguments",
+        )),
+    }
+}
+
 #[cfg(windows)]
 pub(crate) use windows::run_remote_client_bridge;
 pub(crate) use windows::{

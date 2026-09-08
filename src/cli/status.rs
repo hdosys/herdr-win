@@ -293,17 +293,22 @@ struct UpdateStatusJson {
 }
 
 fn client_status_json() -> ClientStatusJson {
+    let mut endpoint_capabilities = vec![
+        crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
+        crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
+        crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
+        crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY,
+    ];
+    if cfg!(windows) {
+        endpoint_capabilities.push(crate::protocol::endpoint::WINDOWS_REMOTE_HOST_CAPABILITY);
+    }
     ClientStatusJson {
         version: crate::build_info::version(),
         herdr_version: crate::build_info::BASE_VERSION,
         build_id: crate::build_info::build_id(),
         protocol: crate::protocol::PROTOCOL_VERSION,
         endpoint_protocol_generation: crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-        endpoint_capabilities: vec![
-            crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
-            crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
-            crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
-        ],
+        endpoint_capabilities,
         binary: current_exe_label(),
         session: crate::session::active_name(),
     }
@@ -440,6 +445,15 @@ mod tests {
                 .unwrap_or(serde_json::Value::Null)
         );
         assert!(value.get("channel").is_none());
+        assert_eq!(
+            value["endpoint_capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|capability| capability
+                    == crate::protocol::endpoint::WINDOWS_REMOTE_HOST_CAPABILITY),
+            cfg!(windows)
+        );
     }
 
     fn running_server(

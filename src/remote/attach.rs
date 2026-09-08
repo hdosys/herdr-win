@@ -89,7 +89,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         override_binary,
         require_surface_interest,
     )?;
-    let remote_command = remote_bridge_command(&remote_herdr, &session_name)?;
+    let remote_command = remote_bridge_command(&remote_herdr, &session_name, false)?;
 
     remote_ssh.progress(format_args!(
         "Opening the remote session on {}; starting its Herdr server if needed...",
@@ -132,7 +132,8 @@ pub(crate) fn prepare_saved_ssh(target: &str, session_name: &str) -> io::Result<
 
     // The bridge already owns daemon startup. EOF closes only this temporary attachment,
     // leaving the named server running even when no local TUI is open yet.
-    let output = ssh.user_shell_output(&remote_bridge_command(&remote_herdr, session_name)?)?;
+    let output =
+        ssh.user_shell_output(&remote_bridge_command(&remote_herdr, session_name, false)?)?;
     if !output.status.success() {
         return Err(command_failed("remote server startup failed", &output));
     }
@@ -1021,11 +1022,7 @@ fn windows_install_script(
     session_name: &str,
 ) -> String {
     let root = windows_sidecar_root(remote_herdr);
-    let session = if session_name == crate::session::DEFAULT_SESSION_NAME {
-        ""
-    } else {
-        session_name
-    };
+    let session = session_name;
     let (existing_herdr, existing_sidecar) = stop_remote
         .map(|remote| (remote.shell_path.as_str(), remote.remote_sidecar))
         .unwrap_or(("", false));
@@ -1374,11 +1371,12 @@ fn can_reuse_detected_windows_herdr(
 ) -> bool {
     override_payload.is_none()
         && (!exact_identity || detected.matches_current)
-        && detected
-            .remote_herdr
-            .client
-            .as_ref()
-            .is_some_and(|client| client.supports_endpoint_requirement(require_surface_interest))
+        && detected.remote_herdr.client.as_ref().is_some_and(|client| {
+            client.supports_endpoint_requirement(require_surface_interest)
+                && client.endpoint_capabilities.iter().any(|capability| {
+                    capability == crate::protocol::endpoint::WINDOWS_REMOTE_HOST_CAPABILITY
+                })
+        })
 }
 
 fn approve_windows_replacement(
@@ -2758,7 +2756,7 @@ fn probe_remote_endpoint(
     let path = local_forward_socket_path(ssh.target(), &ssh.session_name);
     let _bridge = SshStdioBridge::start(
         ssh.target.clone(),
-        remote_bridge_command(remote_herdr, &ssh.session_name)?,
+        remote_bridge_command(remote_herdr, &ssh.session_name, true)?,
         path.clone(),
         None,
         true,
@@ -2814,6 +2812,7 @@ impl RemoteClientStatusJson {
                     crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
                     crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
                     crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
+                    crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY,
                 ]
                 .iter()
                 .all(|required| {
@@ -3279,37 +3278,53 @@ fn confirm_remote_install(
 }
 
 fn remote_session_command(remote_herdr: &RemoteHerdr, session_name: &str, args: &str) -> String {
-    let mut command = remote_herdr.shell_path.clone();
-    if session_name != crate::session::DEFAULT_SESSION_NAME {
-        command.push_str(" --session ");
-        command.push_str(&shell_quote(session_name));
-    }
-    command.push(' ');
-    command.push_str(args);
-    command
+    format!(
+        "{} --session {} {args}",
+        remote_herdr.shell_path,
+        shell_quote(session_name)
+    )
 }
 
 pub(super) fn remote_bridge_command(
     remote_herdr: &RemoteHerdr,
     session_name: &str,
+    connect_only: bool,
 ) -> io::Result<String> {
+    if connect_only
+        && !remote_herdr.client.as_ref().is_some_and(|client| {
+            client
+                .endpoint_capabilities
+                .iter()
+                .any(|cap| cap == crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY)
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "remote binary lacks connect-only bridge support; update it interactively",
+        ));
+    }
     match remote_herdr.shell {
-        RemoteShell::Posix => {
-            let mut command = format!("exec {}", remote_herdr.shell_path);
-            if session_name != crate::session::DEFAULT_SESSION_NAME {
-                command.push_str(" --session ");
-                command.push_str(&shell_quote(session_name));
-            }
-            command.push_str(" remote-client-bridge");
-            Ok(command)
-        }
+        RemoteShell::Posix => Ok(format!(
+            "exec {}",
+            remote_session_command(
+                remote_herdr,
+                session_name,
+                if connect_only {
+                    "remote-client-bridge --connect-only"
+                } else {
+                    "remote-client-bridge"
+                }
+            )
+        )),
         RemoteShell::WindowsPowerShell => {
-            let mut arguments = Vec::new();
-            if session_name != crate::session::DEFAULT_SESSION_NAME {
-                arguments.push("--session".to_string());
-                arguments.push(session_name.to_string());
+            let mut arguments = vec![
+                "--session".to_string(),
+                session_name.to_string(),
+                "remote-client-bridge".to_string(),
+            ];
+            if connect_only {
+                arguments.push("--connect-only".into());
             }
-            arguments.push("remote-client-bridge".to_string());
             super::windows::streaming_herdr_command(
                 &remote_herdr.shell_path,
                 &arguments,
@@ -3349,9 +3364,7 @@ fn remote_herdr_output(
 
 fn scoped_remote_arguments(session_name: Option<&str>, arguments: &[&str]) -> Vec<String> {
     let mut scoped = Vec::new();
-    if let Some(session_name) =
-        session_name.filter(|name| *name != crate::session::DEFAULT_SESSION_NAME)
-    {
+    if let Some(session_name) = session_name {
         scoped.push("--session".to_string());
         scoped.push(session_name.to_string());
     }
@@ -3888,7 +3901,7 @@ mod tests {
         });
         let bridge = SshStdioBridge::start(
             "example".to_string(),
-            remote_bridge_command(&remote_herdr, "default").unwrap(),
+            remote_bridge_command(&remote_herdr, "default", false).unwrap(),
             socket.clone(),
             None,
             false,
@@ -3947,7 +3960,7 @@ mod tests {
         });
         let bridge = SshStdioBridge::start(
             "example".to_string(),
-            remote_bridge_command(&remote_herdr, "default").unwrap(),
+            remote_bridge_command(&remote_herdr, "default", false).unwrap(),
             socket.clone(),
             None,
             false,
@@ -4173,6 +4186,7 @@ mod tests {
                 crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into(),
                 crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
                 crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY.into(),
+                crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY.into(),
             ],
         };
         assert!(status.supports_endpoint_requirement(true));
@@ -4201,7 +4215,7 @@ mod tests {
             );
             assert_eq!(
                 remote_session_command(&herdr, crate::session::DEFAULT_SESSION_NAME, command),
-                format!("{} {command}", herdr.shell_path)
+                format!("{} --session default {command}", herdr.shell_path)
             );
         }
         assert!(
@@ -4555,8 +4569,9 @@ mod tests {
             arch: "x86_64",
         });
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME).unwrap(),
-            "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, false)
+                .unwrap(),
+            "exec \"$HOME/.local/bin/herdr\" --session default remote-client-bridge"
         );
     }
 
@@ -4570,8 +4585,9 @@ mod tests {
             .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME).unwrap(),
-            "exec /usr/bin/herdr remote-client-bridge"
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, false)
+                .unwrap(),
+            "exec /usr/bin/herdr --session default remote-client-bridge"
         );
     }
 
@@ -4586,8 +4602,9 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME).unwrap(),
-            "exec '/opt/herdr bin/herdr' remote-client-bridge"
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, false)
+                .unwrap(),
+            "exec '/opt/herdr bin/herdr' --session default remote-client-bridge"
         );
     }
 
@@ -4602,8 +4619,9 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME).unwrap(),
-            "exec /opt/homebrew/bin/herdr remote-client-bridge"
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, false)
+                .unwrap(),
+            "exec /opt/homebrew/bin/herdr --session default remote-client-bridge"
         );
         assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
     }
@@ -4689,8 +4707,9 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME).unwrap(),
-            "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, false)
+                .unwrap(),
+            "exec '/opt/herdr'\\''s/bin/herdr' --session default remote-client-bridge"
         );
     }
 
@@ -4750,13 +4769,13 @@ mod tests {
 
     #[test]
     fn saved_machine_setup_handoffs_old_server_missing_presentation_fence() {
-        // Captured from Rohan after installing a new binary while the old daemon stayed alive.
+        // Installed broker capabilities cannot substitute for the running server's negotiation.
         let installed = parse_client_status_json(
-            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check"]}"#,
+            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check","remote_connect_only"]}"#,
         )
         .unwrap();
         let running_binary = parse_client_status_json(
-            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","health_check"]}"#,
+            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","health_check","remote_connect_only"]}"#,
         )
         .unwrap();
         assert!(installed.supports_endpoint_requirement(true));
@@ -4950,7 +4969,9 @@ mod tests {
             endpoint_protocol_generation: Some(
                 crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
             ),
-            endpoint_capabilities: Vec::new(),
+            endpoint_capabilities: vec![
+                crate::protocol::endpoint::WINDOWS_REMOTE_HOST_CAPABILITY.into()
+            ],
         });
         assert!(can_reuse_detected_windows_herdr(
             &detected, None, false, true
@@ -4975,6 +4996,16 @@ mod tests {
             .as_ref()
             .unwrap()
             .matches_deployment_identity());
+        detected
+            .remote_herdr
+            .client
+            .as_mut()
+            .unwrap()
+            .endpoint_capabilities
+            .clear();
+        assert!(!can_reuse_detected_windows_herdr(
+            &detected, None, false, false
+        ));
     }
 
     #[test]
@@ -5011,33 +5042,51 @@ mod tests {
 
     #[test]
     fn saved_windows_commands_preserve_session_shell_and_sidecar() {
-        let ssh = RemoteSsh::new_noninteractive("host".into(), "saved work".into());
-        assert!(ssh.command().get_args().any(|arg| arg == "BatchMode=yes"));
-        for shell in [
-            super::super::windows::WindowsSshShell::Cmd,
-            super::super::windows::WindowsSshShell::Pwsh,
-        ] {
-            let remote = RemoteHerdr::for_windows(
-                RemotePlatform::windows("AMD64").unwrap(),
-                r"C:\Users\dev",
-                None,
-                shell,
-            );
-            let bridge = remote_bridge_command(&remote, &ssh.session_name).unwrap();
-            assert!(bridge.contains("saved work"));
-            assert!(bridge.contains("remote-client-bridge"));
-            assert!(bridge.contains("HERDR_REMOTE_SIDECAR_V1"));
-            assert!(!bridge.contains("/bin/sh") && !bridge.contains("/dev/null"));
-            let install = windows_install_script(
-                &remote,
-                r"C:\Users\dev\.herdr\payload.zip",
-                &"a".repeat(64),
-                Some(&remote),
-                &ssh.session_name,
-            );
-            assert!(install.contains("-SessionName 'saved work'"));
-            assert!(install.contains("-ExistingHerdr 'C:\\Users\\dev\\.herdr\\remote\\herdr.exe'"));
-            assert!(install.contains("-ExistingSidecar $true"));
+        for session in ["saved-work", crate::session::DEFAULT_SESSION_NAME] {
+            let ssh = RemoteSsh::new_noninteractive("host".into(), session.into());
+            assert!(ssh.command().get_args().any(|arg| arg == "BatchMode=yes"));
+            for shell in [
+                super::super::windows::WindowsSshShell::Cmd,
+                super::super::windows::WindowsSshShell::Pwsh,
+            ] {
+                let mut remote = RemoteHerdr::for_windows(
+                    RemotePlatform::windows("AMD64").unwrap(),
+                    r"C:\Users\dev",
+                    None,
+                    shell,
+                );
+                assert!(remote_bridge_command(&remote, &ssh.session_name, true).is_err());
+                remote.client = Some(RemoteClientStatusJson {
+                    binary: Some(remote.shell_path.clone()),
+                    version: Some(current_version()),
+                    protocol: Some(CURRENT_PROTOCOL),
+                    endpoint_protocol_generation: Some(
+                        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                    ),
+                    endpoint_capabilities: vec![
+                        crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY.into(),
+                    ],
+                });
+                let bridge = remote_bridge_command(&remote, &ssh.session_name, true).unwrap();
+                assert!(bridge.contains("--connect-only"));
+                assert!(bridge.contains(session));
+                assert!(bridge.contains("--session"));
+                assert!(bridge.contains("remote-client-bridge"));
+                assert!(bridge.contains("HERDR_REMOTE_SIDECAR_V1"));
+                assert!(!bridge.contains("/bin/sh") && !bridge.contains("/dev/null"));
+                let install = windows_install_script(
+                    &remote,
+                    r"C:\Users\dev\.herdr\payload.zip",
+                    &"a".repeat(64),
+                    Some(&remote),
+                    &ssh.session_name,
+                );
+                assert!(install.contains(&format!("-SessionName '{session}'")));
+                assert!(
+                    install.contains("-ExistingHerdr 'C:\\Users\\dev\\.herdr\\remote\\herdr.exe'")
+                );
+                assert!(install.contains("-ExistingSidecar $true"));
+            }
         }
     }
 

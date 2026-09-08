@@ -27,6 +27,8 @@ pub const PRESENTATION_EFFECTS_READY_KIND: &str = "endpoint.presentation.ready.v
 pub const HEALTH_CHECK_CAPABILITY: &str = "health_check";
 pub const HEALTH_PING_KIND: &str = "endpoint.health.ping.v1";
 pub const HEALTH_PONG_KIND: &str = "endpoint.health.pong.v1";
+pub const WINDOWS_REMOTE_HOST_CAPABILITY: &str = "windows_remote_host";
+pub const REMOTE_CONNECT_ONLY_CAPABILITY: &str = "remote_connect_only";
 pub const SURFACE_CURSOR_COLOR_CAPABILITY: &str = "surface_cursor_color";
 pub const SURFACE_CURSOR_COLOR_KIND: &str = "shell.surface.cursor-color.v1";
 

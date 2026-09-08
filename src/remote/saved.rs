@@ -25,7 +25,7 @@ pub(crate) fn connect_saved_ssh(
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
-        super::attach::remote_bridge_command(&remote_herdr, session)?,
+        super::attach::remote_bridge_command(&remote_herdr, session, true)?,
         path.clone(),
         ssh.options(),
         true,

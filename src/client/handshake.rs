@@ -298,7 +298,7 @@ mod tests {
                 "herdr-handshake-deadline-{}-{count}",
                 std::process::id()
             ));
-            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir(&root).unwrap();
             let path = root.join("client.sock");
             let listener = crate::ipc::bind_local_listener(&path).unwrap();
             let prefix = encoded[..count].to_vec();
@@ -320,7 +320,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    matches!(result, Err(ClientError::Protocol(protocol::FramingError::Io(ref error))) if error.kind() == io::ErrorKind::TimedOut),
+                    matches!(result, Err(ClientError::ConnectionLost(ref error)) if error.kind() == io::ErrorKind::TimedOut),
                     "result: {result:?}"
                 );
             }

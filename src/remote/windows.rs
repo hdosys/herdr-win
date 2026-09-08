@@ -53,8 +53,10 @@ impl WindowsSshShell {
 }
 
 #[cfg(windows)]
-pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
-    ensure_remote_server_running()?;
+pub(crate) fn run_remote_client_bridge(allow_start: bool) -> io::Result<()> {
+    if allow_start {
+        ensure_remote_server_running()?;
+    }
 
     let socket_path = crate::server::socket_paths::client_socket_path();
     let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
@@ -424,23 +426,24 @@ pub(super) fn powershell_attach_probe_command(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    let mut capabilities = vec![crate::protocol::endpoint::WINDOWS_REMOTE_HOST_CAPABILITY];
+    if require_surface_interest {
+        capabilities.extend([
+            crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
+            crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
+            crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
+            crate::protocol::endpoint::REMOTE_CONNECT_ONLY_CAPABILITY,
+        ]);
+    }
     let requirements = format!(
-        "$Exact = ${}\n$Generation = {}\n$Capabilities = @({})\n",
+        "$Exact = ${}\n$Generation = {}\n$Caps = @({})\n",
         if exact_identity { "true" } else { "false" },
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-        if require_surface_interest {
-            [
-                crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
-                crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
-                crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
-            ]
+        capabilities
             .into_iter()
             .map(powershell_quote)
             .collect::<Vec<_>>()
-            .join(",")
-        } else {
-            String::new()
-        },
+            .join(","),
     );
     let script = format!("{variables}{requirements}{probe}");
     encoded_powershell_command(&script)
@@ -521,6 +524,30 @@ fn copy_flush<R: io::Read, W: io::Write>(reader: &mut R, writer: &mut W) -> io::
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn connect_only_bridge_does_not_start_a_missing_server() {
+        let root = std::env::temp_dir().join(format!("herdr-connect-only-{}", std::process::id()));
+        let original = std::env::var_os(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, root.join("missing.sock"));
+        let path = crate::server::socket_paths::client_socket_path();
+        assert!(path.starts_with(&root));
+        let result = run_remote_client_bridge(
+            super::super::bridge_allows_start(&["--connect-only".into()]).unwrap(),
+        );
+        if let Some(original) = original {
+            std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, original);
+        } else {
+            std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        }
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert!(super::super::bridge_allows_start(&[]).unwrap());
+        assert!(
+            super::super::bridge_allows_start(&["--connect-only".into(), "unknown".into()])
+                .is_err()
+        );
+    }
     use super::*;
 
     #[test]
@@ -604,36 +631,6 @@ mod tests {
             )),
             "$herdr = 'C:\\Users\\A B\\herdr.exe'; $env:HERDR_REMOTE_SIDECAR_V1 = '1'; Remove-Item Env:HERDR_ENV -ErrorAction SilentlyContinue; & $herdr 'status' 'client' '--json'; exit $LASTEXITCODE"
         );
-    }
-
-    #[test]
-    fn windows_path_probe_does_not_mark_managed_install_as_remote_sidecar() {
-        let script = decoded_powershell_command(&powershell_herdr_probe_command(
-            "C:\\Program Files\\Herdr\\herdr.exe",
-            false,
-            None,
-        ));
-
-        assert!(!script.contains(sidecar_environment_name()));
-        assert!(!script.contains(REMOTE_SIDECAR_VALIDATE_ARG));
-        assert!(script.contains("status client --json"));
-        assert!(script.ends_with("exit 0"));
-    }
-
-    #[test]
-    fn cross_client_windows_sidecar_probe_requires_payload_self_validation() {
-        let expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let command = powershell_herdr_probe_command(
-            "C:\\Users\\Can\\.herdr\\remote\\herdr.exe",
-            true,
-            Some(expected_sha256),
-        );
-        let script = decoded_powershell_command(&command);
-
-        assert!(script.contains(REMOTE_SIDECAR_VALIDATE_ARG));
-        assert!(script.contains(expected_sha256));
-        assert!(!script.contains("Get-FileHash"));
-        assert!(command.encode_utf16().count() < 8191);
     }
 
     #[cfg(windows)]

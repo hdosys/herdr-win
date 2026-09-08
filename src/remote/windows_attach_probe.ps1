@@ -30,29 +30,29 @@ function Get-Candidate([string]$Path, [bool]$Sidecar) {
     } catch {
         return $null
     }
-    $matches = (
+    $same = (
         [string]$client.version -ceq $Runtime -and
         [uint32]$client.protocol -eq $Protocol
     )
     if ($Sidecar) {
         $a = @($V)
-        if ($matches -and $null -ne $Hash) {
+        if ($same -and $null -ne $Hash) {
             $a += $Hash
         }
         & $Path @a | Out-Null
-        if ($LASTEXITCODE -ne 0 -and $matches -and $null -ne $Hash) {
+        if ($LASTEXITCODE -ne 0 -and $same -and $null -ne $Hash) {
             & $Path $V | Out-Null
-            $matches = $false
+            $same = $false
         }
         if ($LASTEXITCODE -ne 0) {
             return $null
         }
     }
     $eligible = [uint32]$client.endpoint_protocol_generation -eq $Generation
-    foreach ($capability in $Capabilities) {
-        $eligible = $eligible -and ($client.endpoint_capabilities -contains $capability)
+    foreach ($cap in $Caps) {
+        $eligible = $eligible -and ($client.endpoint_capabilities -contains $cap)
     }
-    if ($Exact) { $eligible = $eligible -and $matches }
+    if ($Exact) { $eligible = $eligible -and $same }
     $a = @($Session) + @('status', 'server', '--json')
     $lines = @(& $Path @a)
     if ($LASTEXITCODE -ne 0) {
@@ -66,7 +66,7 @@ function Get-Candidate([string]$Path, [bool]$Sidecar) {
     return [pscustomobject]@{
         path = $Path
         sidecar = $Sidecar
-        matches_current = $matches
+        matches_current = $same
         eligible = $eligible
         client = $client
         server = $server
@@ -75,19 +75,19 @@ function Get-Candidate([string]$Path, [bool]$Sidecar) {
 
 $path = $null
 if ($AllowPath) {
-    $commands = @(Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue)
-    if ($commands.Count -gt 0) {
-        $path = Get-Candidate ([string]$commands[0].Source) $false
+    $cmd = @(Get-Command -Name 'herdr.exe' -CommandType Application -ErrorAction SilentlyContinue)
+    if ($cmd.Count -gt 0) {
+        $path = Get-Candidate ([string]$cmd[0].Source) $false
     }
 }
-$sidecarPath = [IO.Path]::Combine(
+$sp = [IO.Path]::Combine(
     $env:USERPROFILE,
     '.herdr',
     'remote',
     'herdr.exe'
 )
 $sidecar = if ($null -eq $path -or -not $path.eligible) {
-    Get-Candidate $sidecarPath $true
+    Get-Candidate $sp $true
 } else {
     $null
 }

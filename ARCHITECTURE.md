@@ -117,9 +117,15 @@ behavior; code and tests remain the detailed implementation truth.
   selection. It preserves actionable terminal failures without surfacing transient
   errors during an active retry, keeps child prompt state scoped to the selected
   root, and ignores server-global session creation as local ownership evidence.
-  Local chat selection binds the root while an initial update without a preceding
-  creation may recover startup selection; foreign, retired, and trailing child
-  events cannot replace it. Direct child panes attach only to the ephemeral
+  The pane-local TUI route is the sole selection reporter. The server plugin reads
+  the accepted session through `pane.get`; chat, status, and lifecycle events never
+  infer selection. The TUI confirms delivery through correlated response framing
+  and exact session readback. Exhausted delivery may resume on selected-session
+  activity or reconnection, not a background retry service. Root changes filter
+  live children and their prompts temporarily; only deletion retires their identity.
+  A split response must identify the owned pane. An unconfirmed split is neither
+  repeated nor recovered through layout differences. SDK status reconciliation is
+  abortable and bounded, including disposal. Direct child panes attach only to the ephemeral
   loopback server supplied by Herdr's existing managed OpenCode launch argv. The
   integration verifies that endpoint before splitting and fails closed when a bare
   OpenCode process exposes only its internal worker transport.

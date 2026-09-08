@@ -269,7 +269,7 @@ configuration repository.
   `scripts/package_windows_installer.ps1`, focused identity tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Generate one issue-reference triage report.** Extract
+- **Status: done. Generate one issue-reference triage report.** Extract
   qualified issue keys, subject, current source owner, and final reachable commit
   from the maintained mailboxes and release history, then join each key with a
   captured issue title and one concise behavior summary. Evidence: four
@@ -280,6 +280,14 @@ configuration repository.
   replace broad pickaxe and duplicate-history review with one deterministic,
   read-only inventory before upstream triage. Owner: a repository report command
   beside the delta workflow and the upstream issue triage procedure.
+  Implemented `delta_workflow.py issue-report`: deterministic local mailbox JSON,
+  qualified references, touched paths, source commit and immutable mailbox hash.
+  An explicit ledger input joins only captured title/local outcome fields; missing
+  fields stay unknown. No history scan, upstream query, or maintained report index.
+  Mailbox source commits are reported without inventing reachability or release
+  status. Focused fixtures cover deduplication, missing references, and private
+  draft exclusion. The real read-only inventory covered 13 mailboxes in 1.302
+  seconds; it does not replace authorized verification of upstream or release state.
 
 - **Status: done. Give Candidate one exact vendored `portable-pty` unit-test
   path.** `--portable-pty-test-filter` now runs the library manifest with every
@@ -319,7 +327,7 @@ configuration repository.
   network activity; publication remains required afterward. Owner:
   `scripts/local_windows_installer.py`, its focused test, and `CONTRIBUTING.md`.
 
-- **Status: proposed. Reuse one caller-owned prefix cache during a stable-refresh
+- **Status: done. Reuse one caller-owned prefix cache during a stable-refresh
   correction cycle.** The mandatory 13-prefix pass took 718.804 seconds, including
   repeated single-crate checks around 40 seconds; earlier failed decomposition
   attempts also repeated cold Zig setup. Allow the existing prefix command to reuse
@@ -328,7 +336,14 @@ configuration repository.
   dependency work without weakening prefix independence or adding persistent queue
   state. Owner: `scripts/delta_workflow.py` and its refresh procedure. Its Windows
   extended-path cleanup already removed the demonstrated over-260-character Zig
-  residuals successfully.
+  residuals successfully. `compile-prefixes --work-dir` now retains the source
+  checkout and Cargo target across corrections, including compile failures.
+  Git owns repository/base identity; reuse rejects foreign directories, changed
+  source, and unfinished replay. Every prefix still runs with its exact tree ID.
+  Synthetic two-prefix checks proved persistent native and Cargo cache paths across
+  two successful invocations and an intervening compile failure. Native build time
+  savings are not yet measured; no actual source compilation was needed for this
+  workflow-only acceptance. Explicit caller cleanup ends the one-refresh lifecycle.
 
 - **Status: proposed. Document bounded recovery of demonstrably incomplete native
   caches.** A recovered checkout had empty Zig package directories and stale compiled

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -26,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 PATCH_RE = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 TASK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+ISSUE_RE = re.compile(r"(?<![\w/.-])[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*(?![\w])")
 INTEGRATION_ASSET_RE = re.compile(
     r'include_str!\("(?P<path>assets/(?P<integration>[^"/]+)/[^"\)]+)"\)'
 )
@@ -446,7 +450,19 @@ def validate_changed_integration_asset_versions(
 
 
 @contextmanager
-def _prefix_replay_directory():
+def _prefix_replay_directory(work_dir: Path | None = None):
+    if work_dir is not None:
+        if not work_dir.is_absolute():
+            raise DeltaWorkflowError("--work-dir must be an absolute caller-owned path")
+        for part in (work_dir, *work_dir.parents):
+            if part.is_symlink() or part.is_junction():
+                raise DeltaWorkflowError("--work-dir must not traverse a link or junction")
+        path = work_dir.resolve()
+        if not path.parent.is_dir():
+            raise DeltaWorkflowError("--work-dir parent must already exist")
+        path.mkdir(exist_ok=True)
+        yield path
+        return
     path = Path(tempfile.mkdtemp(prefix="herdr-delta-prefixes-"))
     try:
         yield path
@@ -474,25 +490,54 @@ def compile_delta_prefixes(
         "cargo", "check", "--locked", "--bins", "--target", "x86_64-pc-windows-msvc",
     ),
     target_dir: Path | None = None,
+    work_dir: Path | None = None,
 ) -> tuple[str, ...]:
     """Replay and compile each ordered mailbox prefix for an explicit refresh."""
 
     project_root = project_root.resolve()
     if not check_command:
         raise DeltaWorkflowError("prefix compile command must not be empty")
+    if work_dir is not None and target_dir is not None:
+        raise DeltaWorkflowError("use --work-dir or --target-dir, not both")
+    if work_dir is not None and (
+        work_dir.resolve().is_relative_to(project_root)
+        or project_root.is_relative_to(work_dir.resolve())
+    ):
+        raise DeltaWorkflowError("--work-dir must be separate from the control checkout")
     base = _read_base(project_root)
     mailboxes = _read_series(project_root)
     replay_environment = {
         "GIT_COMMITTER_NAME": "herdr-win replay",
         "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
     }
-    with _prefix_replay_directory() as temporary:
+    with _prefix_replay_directory(work_dir) as temporary:
         checkout = temporary / "source"
-        _run_git(
-            project_root,
-            ["clone", "--shared", "--no-checkout", str(project_root), str(checkout)],
-        )
-        _run_git(project_root, ["checkout", "--detach", base], cwd=checkout)
+        if not any(temporary.iterdir()):
+            _run_git(
+                project_root,
+                ["clone", "--shared", "--no-checkout", str(project_root), str(checkout)],
+            )
+            _run_git(project_root, ["update-ref", "refs/herdr-prefix-base", base], cwd=checkout)
+        else:
+            if any(path.name not in {"source", "target"} for path in temporary.iterdir()):
+                raise DeltaWorkflowError("prefix workspace contains foreign entries; preserve it")
+            if not (checkout / ".git").is_dir() or any(
+                path.is_symlink() or path.is_junction()
+                for path in (checkout, checkout / ".git", temporary / "target")
+            ):
+                raise DeltaWorkflowError("prefix workspace is not an owned standalone checkout")
+            origin = _run_git(project_root, ["remote", "get-url", "origin"], cwd=checkout).stdout.strip()
+            saved_base = _run_git(project_root, ["rev-parse", "refs/herdr-prefix-base"], cwd=checkout).stdout.strip()
+            if origin != str(project_root) or saved_base != base:
+                raise DeltaWorkflowError("prefix workspace repository or BASE differs; preserve it")
+            if _run_git(project_root, ["status", "--porcelain", "--untracked-files=all"], cwd=checkout).stdout.strip():
+                raise DeltaWorkflowError("prefix checkout has changes; preserve and inspect it")
+            if any((checkout / ".git" / marker).exists() for marker in (
+                "rebase-apply", "rebase-merge", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+            )):
+                raise DeltaWorkflowError("prefix replay is unfinished; preserve and inspect it")
+        # Never force/reset/clean: Git refuses to overwrite changes or unknown files.
+        _run_git(project_root, ["checkout", "--no-overwrite-ignore", "--detach", base], cwd=checkout)
         environment = os.environ.copy()
         environment.update(
             {
@@ -505,6 +550,8 @@ def compile_delta_prefixes(
             }
         )
         for prefix, mailbox in enumerate(mailboxes, start=1):
+            if _run_git(project_root, ["status", "--porcelain", "--untracked-files=all"], cwd=checkout).stdout.strip():
+                raise DeltaWorkflowError("prefix checkout has changes; preserve and inspect it")
             _run_git(
                 project_root,
                 ["am", "--3way", str(project_root / "patches" / "delta" / mailbox)],
@@ -513,7 +560,9 @@ def compile_delta_prefixes(
             )
             environment["HERDR_DELTA_PREFIX"] = str(prefix)
             environment["HERDR_DELTA_MAILBOX"] = mailbox
-            print(f"compiling-prefix: {prefix}/{len(mailboxes)} {mailbox}", flush=True)
+            tree = _run_git(project_root, ["rev-parse", "HEAD^{tree}"], cwd=checkout).stdout.strip()
+            environment["HERDR_DELTA_TREE"] = tree
+            print(f"compiling-prefix: {prefix}/{len(mailboxes)} {mailbox} tree={tree}", flush=True)
             compile_started = time.monotonic()
             try:
                 result = subprocess.run(
@@ -536,12 +585,74 @@ def compile_delta_prefixes(
                 raise DeltaWorkflowError(
                     f"delta prefix through {mailbox} failed to compile: {detail}"
                 )
+            if _run_git(project_root, ["status", "--porcelain", "--untracked-files=all"], cwd=checkout).stdout.strip():
+                raise DeltaWorkflowError("prefix check changed source; preserve and inspect it")
             print(
                 f"compiled-prefix: {prefix}/{len(mailboxes)} {mailbox} "
                 f"elapsed_seconds={time.monotonic() - compile_started:.3f}",
                 flush=True,
             )
     return mailboxes
+
+
+def issue_reference_report(
+    project_root: Path = PROJECT_ROOT, *, ledger: Path | None = None,
+) -> list[dict[str, object]]:
+    """Inventory mailbox provenance, never query upstream or print ledger drafts."""
+    captured: dict[str, dict[str, str]] = {}
+    if ledger is not None:
+        try:
+            text = ledger.read_text(encoding="utf-8")
+        except OSError as error:
+            raise DeltaWorkflowError(f"could not read explicit ledger: {error}") from error
+        key = None
+        for line in text.splitlines():
+            if line.startswith("### "):
+                heading = line[4:].strip()
+                key = heading if ISSUE_RE.fullmatch(heading) else None
+                if key is not None:
+                    captured.setdefault(key, {})
+            elif line.startswith("#"):
+                key = None
+            elif key is not None:
+                for label, field in (("Title", "title"), ("Local outcome", "behavior")):
+                    if line.startswith(f"- {label}: "):
+                        captured[key][field] = line[len(label) + 4:].strip()
+
+    mailboxes = _read_series(project_root)
+    rows: list[dict[str, object]] = []
+    for position, mailbox in enumerate(mailboxes, start=1):
+        path = project_root / "patches" / "delta" / mailbox
+        metadata = _read_mailbox_metadata(path, position, len(mailboxes))
+        content = path.read_bytes()
+        text = content.decode("utf-8").replace("\r\n", "\n")
+        source = re.match(r"From ([0-9a-f]{40}) ", text)
+        owners: set[str] = set()
+        for line in text.splitlines():
+            if line.startswith(("--- ", "+++ ")):
+                value = line[4:]
+                if value.startswith('"'):
+                    try:
+                        value = ast.literal_eval("b" + value).decode("utf-8")
+                    except (ValueError, SyntaxError, UnicodeError, AttributeError):
+                        raise DeltaWorkflowError(f"invalid quoted patch path in {mailbox}")
+                if value.startswith(("a/", "b/")):
+                    owners.add(value[2:])
+        # References in changed source are useful too; duplicate mentions are one row.
+        references = sorted(set(ISSUE_RE.findall(metadata.commit_message + "\n" + text.split("\n---\n", 1)[-1])))
+        for reference in references or [None]:
+            fields = captured.get(reference, {})
+            rows.append({
+                "reference": reference,
+                "mailbox": f"patches/delta/{mailbox}",
+                "subject": metadata.commit_message.splitlines()[0],
+                "path_owners": sorted(owners),
+                "mailbox_sha256": hashlib.sha256(content).hexdigest(),
+                "source_commit": source.group(1) if source else None,
+                "title": fields.get("title"),
+                "behavior": fields.get("behavior"),
+            })
+    return rows
 
 
 def refresh_delta(
@@ -1496,6 +1607,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="refresh-only replay and compile of every ordered mailbox prefix",
     )
     prefixes.add_argument("--target-dir", type=Path, help="task-owned shared Cargo cache")
+    prefixes.add_argument("--work-dir", type=Path, help="caller-owned checkout and compiler caches for one refresh")
+
+    report = commands.add_parser("issue-report", help="read-only local mailbox issue inventory as JSON; null means unknown")
+    report.add_argument("--ledger", type=Path, help="explicit private ledger; include only Title and Local outcome fields")
 
     refresh = commands.add_parser("refresh", help="verify and finalize an authorized stable-refresh logical stack")
     refresh.add_argument("--base", required=True)
@@ -1596,9 +1711,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
 
         if options.command == "compile-prefixes":
-            mailboxes = compile_delta_prefixes(target_dir=options.target_dir)
+            mailboxes = compile_delta_prefixes(target_dir=options.target_dir, work_dir=options.work_dir)
             print(f"compiled-prefixes: {len(mailboxes)}")
             print(f"last-mailbox: {mailboxes[-1]}")
+            return 0
+
+        if options.command == "issue-report":
+            print(json.dumps(issue_reference_report(ledger=options.ledger), indent=2, ensure_ascii=True))
             return 0
 
         if options.command == "refresh":

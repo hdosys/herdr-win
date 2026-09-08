@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from scripts.delta_workflow import (
     compile_delta_prefixes,
     finalize_delta_mailbox,
     integrate_development_worktree,
+    issue_reference_report,
     materialize_delta_worktree,
     publish_development_worktree,
     refresh_delta,
@@ -59,7 +61,8 @@ class DeltaFixture:
         run_git(self.control, ["config", "core.autocrlf", "false"])
 
         (self.control / "value.txt").write_bytes(b"base\n")
-        run_git(self.control, ["add", "value.txt"])
+        (self.control / ".gitignore").write_bytes(b".zig-cache/\nzig-out/\n")
+        run_git(self.control, ["add", "value.txt", ".gitignore"])
         run_git(self.control, ["commit", "-m", "base"])
         self.base = run_git(self.control, ["rev-parse", "HEAD"])
 
@@ -280,6 +283,7 @@ class DeltaWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture = DeltaFixture(Path(temp_dir))
             log = Path(temp_dir) / "prefixes.txt"
+            workspace = Path(temp_dir) / "prefix-work"
             probe = (
                 "import os, pathlib; "
                 "root = pathlib.Path.cwd(); "
@@ -288,6 +292,13 @@ class DeltaWorkflowTests(unittest.TestCase):
                 "assert os.environ['CARGO_INCREMENTAL'] == '0'; "
                 "assert (root / 'value.txt').read_text().strip() == 'first'; "
                 "assert (root / 'second.txt').exists() == (prefix == 2); "
+                "assert len(os.environ['HERDR_DELTA_TREE']) == 40; "
+                "cache = root / 'vendor/libghostty-vt/.zig-cache/local'; "
+                "cache.mkdir(parents=True, exist_ok=True); "
+                "marker = cache / 'count'; "
+                "marker.write_text(str(int(marker.read_text()) + 1) if marker.exists() else '1'); "
+                "target = pathlib.Path(os.environ['CARGO_TARGET_DIR']); "
+                "target.mkdir(exist_ok=True); (target / 'retained').touch(); "
                 "pathlib.Path(os.environ['HERDR_PREFIX_LOG']).open('a', encoding='utf-8').write("
                 "f\"{prefix}:{os.environ['HERDR_DELTA_MAILBOX']}\\n\")"
             )
@@ -298,7 +309,13 @@ class DeltaWorkflowTests(unittest.TestCase):
                 mailboxes = compile_delta_prefixes(
                     fixture.control,
                     check_command=(sys.executable, "-c", probe),
+                    work_dir=workspace,
                 )
+                with self.assertRaisesRegex(DeltaWorkflowError, "failed to compile"):
+                    compile_delta_prefixes(fixture.control, work_dir=workspace,
+                                           check_command=(sys.executable, "-c", "raise SystemExit(1)"))
+                compile_delta_prefixes(fixture.control, work_dir=workspace,
+                                       check_command=(sys.executable, "-c", probe))
             finally:
                 if previous is None:
                     os.environ.pop("HERDR_PREFIX_LOG", None)
@@ -308,8 +325,54 @@ class DeltaWorkflowTests(unittest.TestCase):
             self.assertEqual(mailboxes, ("0001-first.patch", "0002-second.patch"))
             self.assertEqual(
                 log.read_text(encoding="utf-8").splitlines(),
-                ["1:0001-first.patch", "2:0002-second.patch"],
+                ["1:0001-first.patch", "2:0002-second.patch"] * 2,
             )
+            self.assertEqual((workspace / "source/vendor/libghostty-vt/.zig-cache/local/count").read_text(), "4")
+            self.assertTrue((workspace / "target/retained").is_file())
+            (workspace / "source/value.txt").write_text("unfinished")
+            with self.assertRaisesRegex(DeltaWorkflowError, "has changes"):
+                compile_delta_prefixes(fixture.control, work_dir=workspace)
+            self.assertEqual((workspace / "source/value.txt").read_text(), "unfinished")
+
+    def test_prefix_workspace_rejects_foreign_or_unsafe_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = DeltaFixture(root)
+            foreign = root / "foreign"
+            foreign.mkdir()
+            (foreign / "keep").write_text("user data")
+            for path in (foreign, fixture.control, Path("relative")):
+                with self.subTest(path=path), self.assertRaises(DeltaWorkflowError):
+                    compile_delta_prefixes(fixture.control, work_dir=path)
+            self.assertEqual((foreign / "keep").read_text(), "user data")
+
+    def test_issue_report_joins_only_explicit_captured_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = DeltaFixture(Path(directory))
+            patch = fixture.control / "patches/delta/0001-first.patch"
+            patch.write_text(patch.read_text().replace("+first\n", "+first example/project#14\n").replace(
+                "Own the first value.", "Refs example/project#12 twice example/project#12; bare #9."
+            ))
+            ledger = Path(directory) / "ledger.md"
+            ledger.write_text("### example/project#12\n- Title: Captured title\n"
+                              "- Local outcome: Captured behavior\n- Verification: PRIVATE\n"
+                              "#### Draft post\n- Title: PRIVATE DRAFT\nsecret@example.com\n")
+            public = issue_reference_report(fixture.control)
+            self.assertEqual(len(public), 3)
+            self.assertEqual(public[0]["reference"], "example/project#12")
+            self.assertEqual(public[0]["path_owners"], ["value.txt"])
+            self.assertEqual(public[1]["reference"], "example/project#14")
+            self.assertIsNone(public[2]["reference"])
+            self.assertIsNone(public[0]["title"])
+            joined = issue_reference_report(fixture.control, ledger=ledger)
+            self.assertEqual(joined[0]["title"], "Captured title")
+            self.assertEqual(joined[0]["behavior"], "Captured behavior")
+            self.assertEqual(len(joined[0]["source_commit"]), 40)
+            self.assertEqual(len(joined[0]["mailbox_sha256"]), 64)
+            output = json.dumps(joined)
+            self.assertNotIn("PRIVATE", output)
+            self.assertNotIn("@", output)
+            self.assertEqual(joined, issue_reference_report(fixture.control, ledger=ledger))
 
     def test_expected_tree_mismatch_reports_the_semantic_difference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

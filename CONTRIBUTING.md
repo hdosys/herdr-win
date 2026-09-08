@@ -399,9 +399,21 @@ that separate operation. For every approved refresh:
    replacing the queue and `BASE`; failures preserve existing inputs.
 6. Before publishing control `master`, run `delta_workflow.py compile-prefixes`.
    Every Windows x86_64 prefix must compile with all logical processors and
-   incremental disabled. `--target-dir <task-owned-cache>` may reuse one fresh
-   compiler cache across decomposition corrections. Remove that disposable cache
-   after the refresh. Evidence from the exact same privately staged prefix trees
+   incremental disabled. Use `--work-dir <absolute-task-owned-empty-directory>`
+   throughout one refresh correction cycle to retain both the source checkout's
+   native Zig caches/output and its sibling Cargo `target`. The first invocation
+   accepts only a new or empty directory outside the control checkout. Subsequent
+   invocations require the same local repository and `BASE`, reject dirty source
+   or unfinished replay, and return to `BASE` without forced checkout or cleanup.
+   Do not edit or share this disposable workspace. A compile failure retains it;
+   a replay conflict requires inspection rather than automatic recovery. Use a new
+   workspace when changing `BASE`. Every invocation replays and checks every prefix,
+   printing its exact tree; compiler caches are never verification attestations.
+   `--target-dir` remains the Cargo-only alternative and cannot accompany
+   `--work-dir`. After the refresh, inspect the workspace and explicitly remove
+   only that caller-owned directory, using extended-path-aware cleanup on Windows.
+   No automatic expiry or cache index is maintained.
+   Evidence from the exact same privately staged prefix trees
    remains valid; queue finalization or cleanup alone does not require recompilation.
 
 Between explicit refreshes, `BASE` remains pinned to that reviewed stable release;
@@ -592,6 +604,26 @@ copying upstream release entries. Do not edit changelog, release notes, website,
 or broad docs unless changed behavior requires it, and never edit generated
 preview/version documentation directories. The repository pre-commit hook rejects
 invalid staged whitespace before it can enter the worktree.
+
+## Local issue-reference triage
+
+Run `python scripts/delta_workflow.py issue-report` before issue-owner triage.
+It prints deterministic JSON from the current series and mailboxes only: qualified
+references (including hunk references), subjects, touched source paths, mailbox
+SHA-256, and the mailbox's recorded source commit. Repeated references within a
+mailbox produce one row; mailboxes without references remain visible. `null` means
+unknown, not permission to query upstream. Touched paths are ownership leads, not
+proof that a particular hunk fixes an issue; the recorded source commit is not a
+claim of current reachability or release inclusion.
+
+An explicit `--ledger <private-ledger-path>` optionally joins existing canonical
+`### owner/repository#number` sections. Only single-line `- Title:` and
+`- Local outcome:` fields before a nested heading are included. Missing captured
+fields stay unknown. No ledger is discovered automatically; author headers,
+verification text, and drafts are not emitted. Treat an explicitly joined report
+as private, review the selected fields before sharing, and never commit generated
+reports. This command performs no replay, history scan, network call, or ledger
+write and creates no second maintained issue index.
 
 ## Pull requests and commits
 

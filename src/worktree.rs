@@ -784,6 +784,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",
@@ -804,6 +806,8 @@ prunable stale
         assert_eq!(
             command.args,
             vec![
+                "-c",
+                "safe.directory=/repo/herdr",
                 "-C",
                 "/repo/herdr",
                 "worktree",

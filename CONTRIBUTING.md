@@ -201,49 +201,54 @@ current replay plus every completed change integrated into the development branc
 Topic branches keep package output temporary and remove it after their focused
 check under the global artifact lifecycle.
 
-Before each user handoff, collect every completed topic handoff, commit the coherent
-development tree, and push `origin/candidate/development`. Candidate packaging first
-compares every changed embedded integration with the accepted queue, requires a
-higher migration version, and requires its Rust constant to match. This permits
-multiple cumulative Candidate generations before patch finalization. After a
-Rust-owned source change, run one exact focused behavior check before commit through
-the control checkout's shared Candidate target:
-
-```powershell
-$testFilter = "<one exact test filter>"
-python scripts/local_windows_installer.py test-one `
-  --source-worktree <development-worktree> `
-  --test-filter $testFilter
-```
-
-After committing and pushing that exact source, rerun the same filter while building
-the candidate:
+Commit the coherent integrated development tree, then build and report the installer
+before focused behavior checks and publication. Candidate packaging compares every
+changed embedded integration with the accepted queue, requires a higher migration
+version, and requires its Rust constant to match. This permits multiple cumulative
+Candidate generations before patch finalization:
 
 ```powershell
 python scripts/local_windows_installer.py candidate `
+  --source-worktree <development-worktree>
+```
+
+After the handoff, run the selected Rust behavior check once through the shared
+Candidate target. Reuse passing evidence while source, inputs, and environment are
+unchanged; a Git commit or push alone does not require another run:
+
+```powershell
+python scripts/local_windows_installer.py test-one `
   --source-worktree <development-worktree> `
-  --test-filter $testFilter
+  --test-filter "<one exact test filter>"
 ```
 
 For a regression owned by the vendored `portable-pty` library, select that owner
-directly before and after the push instead of routing it through the `herdr` binary:
+instead of routing it through the `herdr` binary:
 
 ```powershell
-$testFilter = "<one exact portable-pty test filter>"
 python scripts/local_windows_installer.py test-one `
   --source-worktree <development-worktree> `
-  --portable-pty-test-filter $testFilter
-python scripts/local_windows_installer.py candidate `
-  --source-worktree <development-worktree> `
-  --portable-pty-test-filter $testFilter
+  --portable-pty-test-filter "<one exact portable-pty test filter>"
 ```
+
+Local Candidate compilation enables optimized incremental reuse and explicitly keeps
+release's 16 codegen units. Optimization level, native payload validation, exact
+build identity, all-core job count, and public release profiles do not change.
+Before each optimized compile, Candidate requires 2 GiB of free target-volume space
+and refuses an incremental cache already above its 2 GiB iteration budget. The
+budget is a preflight bound, not a filesystem quota. Cache data never substitutes
+for a build or its acceptance checks. No automatic pruning or non-incremental
+fallback occurs. Keep only the current compiler/profile cache; after its users
+have stopped, obsolete `release/incremental` contents may be removed under the
+normal disposable-cache cleanup procedure. Retain the useful shared target between
+ordinary iterations instead of rebuilding dependencies in a new directory.
 
 These commands keep one Sandbox-local Cargo target, remove local build-identity
 variables from the normal test profile, and pass the detected logical processor
 count to Cargo. The ordinary filter uses `just test-one`; the vendored filter runs
 the library manifest with a task-owned temporary lock beside it and removes that
-lock after success or failure. The Candidate rerun therefore verifies the pushed
-source without a second target or an unrelated PTY lifecycle harness. Before every
+lock after success or failure. No second target or unrelated PTY lifecycle harness
+is required. Before every
 Cargo test or build phase, the control owner reads the native Windows commit
 counters.
 At or below 3 GiB of remaining commit headroom it stops before Cargo, reports the
@@ -257,9 +262,9 @@ verifies bootstrap consumption, user and session ownership, terminal process cle
 and zero scheduled-task residue. It replaces the fixed setup only after the selected
 test, source identity, native probe, bundle, and package checks pass.
 
-For a Bun- or Python-owned behavior change, run the exact repository command first
-and invoke Candidate packaging without a Rust filter in the same stop-on-failure
-sequence. Do not add a generic command runner to the installer entrypoint:
+For a Bun- or Python-owned behavior change, build and report Candidate without a
+Rust filter, then run the exact repository-owned check. Do not compile the Rust test
+binary merely to prove an embedded script already exercised by its own runtime:
 
 ```powershell
 Push-Location -LiteralPath <development-worktree>
@@ -269,12 +274,11 @@ try {
 } finally {
     Pop-Location
 }
-python scripts/local_windows_installer.py candidate `
-  --source-worktree <development-worktree>
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ```
 
-For a build-only repeat of the exact unchanged pushed source, omit the test filter:
+The optional filters on `candidate` still support an explicitly combined unattended
+check/build invocation. They run before packaging and are not the interactive
+artifact-first path. For a build-only repeat, omit the filter:
 
 ```powershell
 python scripts/local_windows_installer.py candidate `
@@ -286,8 +290,30 @@ exact current build identity from that label, the source fingerprint, and a
 per-candidate nonce. An incomplete attempt retains one temporary stamp so a rerun
 can reuse the exact validated input bundle before compiling. Successful publication
 removes the stamp and superseded bundles. Do not omit focused verification after a
-source behavior change; omit the Rust filter only when an exact non-Rust owner
-already passed immediately before Candidate packaging.
+source behavior change; perform the exact source-owned check after the installer
+handoff rather than repeating it inside the packaging command.
+
+### Recovering incomplete compiler caches
+
+Distinguish missing source, memory pressure, disk exhaustion, and cache corruption
+before another build. Check Git status first. A missing tracked file is not a cache
+entry: preserve unexplained deletions and obtain recovery authority rather than
+patching around them. Candidate's memory and disk preflights stop before compiler
+work; they never terminate processes or delete other sessions' data.
+
+When compiler diagnostics and the cache contents demonstrate empty dependency
+directories or stale native references, stop every task-owned compiler using that
+exact cache. Preserve the suspect cache on the same filesystem, use a new empty
+cache through the existing build owner's path, and perform one bounded rebuild of
+unchanged committed source. Remove the preserved cache only after successful
+verification and proof that no other user owns it. If the fresh-cache build fails,
+retain the evidence and diagnose that failure instead of retrying or repairing
+individual dependency entries. Do not change dependency versions as cache recovery.
+
+Git worktrees, active source, user configuration, package-manager state, and the
+canonical installer bundle are not disposable compiler caches. A failed Herdr
+worktree removal is a separate lifecycle boundary, not authorization to recursively
+delete its residual directory.
 
 Prepare a persistent ignored input bundle directly only when supplying already
 built runtime, launcher, helper, or staged ConPTY payloads:

@@ -36,6 +36,7 @@ from scripts.local_windows_installer import (
     _portable_pty_test_arguments,
     _prune_completed_candidate_outputs,
     _require_integrated_development_source,
+    _require_candidate_cache_budget,
     _require_one_focused_test,
     _require_one_nextest_test,
     _run_normal_focused_test,
@@ -55,6 +56,24 @@ BUILD_NONCE = "c" * 32
 
 
 class LocalWindowsInstallerTests(unittest.TestCase):
+    def test_candidate_cache_budget_preserves_cache_on_resource_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / "x86_64-pc-windows-msvc/release/incremental"
+            cache.mkdir(parents=True)
+            data = cache / "retained.bin"
+            data.write_bytes(b"retained")
+            with patch("scripts.local_windows_installer.shutil.disk_usage") as usage:
+                usage.return_value.free = 0
+                with self.assertRaisesRegex(LocalInstallerError, "at least 2 GiB free"):
+                    _require_candidate_cache_budget(root)
+                usage.return_value.free = 4 * 1024**3
+                with patch("scripts.local_windows_installer.MAXIMUM_CANDIDATE_INCREMENTAL_CACHE_BYTES", 1):
+                    with self.assertRaisesRegex(LocalInstallerError, "iteration budget"):
+                        _require_candidate_cache_budget(root)
+                _require_candidate_cache_budget(root)
+            self.assertEqual(data.read_bytes(), b"retained")
+
     def test_identity_parser_accepts_only_local_candidate_contract(self) -> None:
         self.assertEqual(
             parse_identity(

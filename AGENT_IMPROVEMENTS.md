@@ -56,17 +56,18 @@ configuration repository.
   second installer build and 125.719 seconds total. Owner: the script, its focused
   tests, and the candidate procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Bound incremental reuse for local Candidate release
-  builds.** Measure and enable Candidate-only optimized incremental reuse under the
-  existing shared target, commit-headroom preflight, and bounded cache pruning;
-  keep public release builds unchanged. Evidence: this one-module Rust fix spent
-  4.135 seconds in its cached focused test and 23.916 seconds in installer
-  packaging, but the all-core release compile remained the largest bottleneck at
-  111.740 seconds and brought the validated Candidate to 166.238 seconds. Expected
-  benefit: preserve exact source provenance and real installer validation while
-  shortening repeated small-source release rebuilds enough to approach the daytime
-  artifact goal. Owner: `scripts/local_windows_installer.py`, its focused tests,
-  and the Candidate procedure in `CONTRIBUTING.md`.
+- **Status: done. Bound incremental reuse for local Candidate release builds.**
+  Candidate enables optimized incremental reuse in its existing target, keeps 16
+  release codegen units and all available build jobs, and leaves public releases
+  unchanged. Evidence: an identity-changing warm build completed in 68.325 seconds
+  after a 186.010-second seed; the earlier non-incremental measurement took 207.310
+  seconds. Different cache warmness prevents treating that comparison as a universal
+  speedup. The warm incremental cache occupied 953,296,663 bytes. A prior run failed
+  on a full target volume, so Candidate now requires 2 GiB free and refuses a cache
+  already above its 2 GiB iteration budget before compiling. Cleanup is explicit
+  and requires quiescent ownership; no automatic pruning or fallback was added.
+  Owner: `scripts/local_windows_installer.py`, its focused test, and
+  `CONTRIBUTING.md`.
 
 - **Status: declined. Reuse validated binaries for package-excluded candidate
   changes.** The current candidate identity intentionally changes for every tracked
@@ -345,11 +346,12 @@ configuration repository.
   savings are not yet measured; no actual source compilation was needed for this
   workflow-only acceptance. Explicit caller cleanup ends the one-refresh lifecycle.
 
-- **Status: proposed. Document bounded recovery of demonstrably incomplete native
-  caches.** A recovered checkout had empty Zig package directories and stale compiled
-  references; rebuilding with a fresh cache resolved the unchanged source build.
-  Preserve the suspect cache on the same filesystem until the clean build succeeds,
-  then remove only that task-owned cache. Avoid repairing individual dependency
-  entries or changing versions. Expected benefit: one diagnostic recovery cycle
-  instead of serial cache surgery. Owner: the existing Candidate troubleshooting
-  procedure, not a new automatic retry or fallback.
+- **Status: done. Document bounded recovery of demonstrably incomplete native
+  caches.** The Candidate procedure distinguishes missing tracked source, memory
+  pressure, disk exhaustion, and proven cache damage. It preserves the suspect
+  cache on the same filesystem, permits one unchanged-source rebuild using a fresh
+  cache, and requires ownership proof before cleanup. Evidence: empty Zig dependency
+  directories and stale references were resolved without source/version changes;
+  later measurements independently exposed disk exhaustion. This replaces serial
+  cache surgery, not failure diagnosis. Owner: `CONTRIBUTING.md`; no automatic retry
+  or fallback.

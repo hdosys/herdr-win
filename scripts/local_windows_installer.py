@@ -70,6 +70,8 @@ LOCAL_VERSION_RE = re.compile(
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 GIBIBYTE = 1024**3
 MINIMUM_CARGO_COMMIT_HEADROOM_BYTES = 3 * GIBIBYTE
+MINIMUM_CANDIDATE_DISK_HEADROOM_BYTES = 2 * GIBIBYTE
+MAXIMUM_CANDIDATE_INCREMENTAL_CACHE_BYTES = 2 * GIBIBYTE
 
 
 class LocalInstallerError(RuntimeError):
@@ -490,6 +492,25 @@ def _source_build_provenance(source: Path) -> tuple[str, str]:
         _source_fingerprint(source_commit, tracked_diff, untracked_files),
         base_commit,
     )
+
+
+def _require_candidate_cache_budget(cargo_target: Path) -> None:
+    free = shutil.disk_usage(cargo_target).free
+    if free < MINIMUM_CANDIDATE_DISK_HEADROOM_BYTES:
+        raise LocalInstallerError(
+            "Candidate compilation requires at least 2 GiB free on the Cargo target "
+            "volume; inspect disk usage before retrying. No cache was deleted."
+        )
+    cache = cargo_target / WINDOWS_TARGET / "release" / "incremental"
+    size = sum(path.stat().st_size for path in _files(cache).values()) if cache.exists() else 0
+    if size > MAXIMUM_CANDIDATE_INCREMENTAL_CACHE_BYTES:
+        raise LocalInstallerError(
+            f"Candidate incremental cache exceeds its 2 GiB iteration budget: {cache}. "
+            "After all users of this Cargo target have stopped, remove only that "
+            "compiler cache and rebuild. No cache was deleted."
+        )
+    print(f"cargo_disk_free_gib={free / GIBIBYTE:.2f}")
+    print(f"candidate_incremental_cache_gib={size / GIBIBYTE:.2f}")
 
 
 def _cargo_build_arguments(cargo_target: Path, jobs: int) -> list[str]:
@@ -1196,6 +1217,9 @@ def candidate(options: argparse.Namespace) -> None:
         "HERDR_BUILD_ID": build_id,
         "HERDR_BUILD_COMMIT": base_commit,
         "HERDR_BUILD_FRESHNESS": build_freshness,
+        "CARGO_INCREMENTAL": "1",
+        # Preserve release's 16 codegen units rather than incremental's 256 default.
+        "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
     }
     if options.test_filter is not None:
         _run_normal_focused_test(
@@ -1206,6 +1230,7 @@ def candidate(options: argparse.Namespace) -> None:
             source, cargo_target, jobs, options.portable_pty_test_filter
         )
     elif options.release_test_filter is not None:
+        _require_candidate_cache_budget(cargo_target)
         _require_cargo_commit_headroom()
         print(f"focused_test={options.release_test_filter}")
         print("focused_test_profile=release")
@@ -1222,7 +1247,9 @@ def candidate(options: argparse.Namespace) -> None:
         _require_one_focused_test(test_result.stdout)
         print(f"focused_test_elapsed_seconds={time.monotonic() - test_started:.3f}")
 
+    _require_candidate_cache_budget(cargo_target)
     _require_cargo_commit_headroom()
+    print("candidate_incremental=true")
     cargo_started = time.monotonic()
     cargo_result = _run(
         "cargo",

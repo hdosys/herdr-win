@@ -66,17 +66,20 @@ pub(super) fn ghostty_mouse_encoder_for_terminal(
     encoder.set_from_terminal(terminal);
     let cols = terminal.cols().ok()? as u32;
     let rows = terminal.rows().ok()? as u32;
+    let sgr_pixels = terminal
+        .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+        .ok()?;
     match position {
         crate::input::mouse::Position::Cell { .. } => {
-            if terminal
-                .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
-                .ok()?
-            {
+            if sgr_pixels {
                 encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR);
             }
             encoder.set_size(cols, rows, 1, 1);
         }
         crate::input::mouse::Position::Pixels { .. } => {
+            if sgr_pixels {
+                encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR_PIXELS);
+            }
             let width_px = terminal.width_px().ok()?;
             let height_px = terminal.height_px().ok()?;
             if width_px == 0 || height_px == 0 || cols == 0 || rows == 0 {

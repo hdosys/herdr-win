@@ -1,1 +1,4 @@
+* text=auto eol=lf
 packaging/windows/licenses/* binary
+# Unified diffs use a single space for blank context lines.
+vendor/patches/**/*.patch whitespace=-blank-at-eol

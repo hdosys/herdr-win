@@ -60,7 +60,7 @@ headless_cols = 160
 headless_rows = 50
 ```
 
-客户端连接后，其尺寸仍决定共享运行时的大小。客户端断开后，现有窗格 PTY 会保留上次连接时的尺寸，而新的无客户端布局会使用配置的回退值。
+只有一个客户端连接时,所有标签页都会采用它的尺寸。连接多个客户端时,每个正在查看的标签页会采用最后聚焦、选择或操作它的客户端尺寸。当只剩一个客户端时,所有标签页会立即恢复为该客户端的尺寸。没有客户端连接时,现有窗格 PTY 会保留最后的尺寸,新的无客户端布局会使用配置的回退值。
 
 ## 终端默认值
 
@@ -273,6 +273,23 @@ yellow = "#f9e2af"
 
 颜色值支持十六进制、命名颜色、`rgb(r,g,b)`，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
 
+启用 `auto_switch` 后，可以通过明暗模式子表在共享自定义颜色之上应用不同的覆盖值：
+
+```toml
+[theme.custom]
+accent = "#89b4fa"
+
+[theme.custom.light]
+panel_bg = "#eff1f5"
+text = "#4c4f69"
+
+[theme.custom.dark]
+panel_bg = "#1e1e2e"
+text = "#cdd6f4"
+```
+
+有效调色板按以下顺序应用：内置主题、`[theme.custom]`，然后是 `[theme.custom.light]` 或 `[theme.custom.dark]`。省略模式子表时，会保留现有的共享覆盖行为。
+
 ## UI 与侧边栏
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
@@ -331,7 +348,7 @@ status_indicators = "symbols"
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
-  ["state_icon", "workspace", "tab"],
+  ["state_icon", "machine", "workspace", "tab"],
   ["agent"],
 ]
 
@@ -347,6 +364,7 @@ Agent 行支持以下内置 token：
 
 - `state_icon` — 智能体语义状态的彩色图标。
 - `state_text` — `idle`、`working`、`blocked`、`done` 或 `unknown`；如果报告中包含显示标签，也会一并显示。
+- `machine` — 客户端连接多台机器时显示机器标签；只有一台本地机器时省略。
 - `workspace` — 工作区名称。
 - `tab` — 标签页名称（如有）。
 - `pane` — 窗格名称（如有）。
@@ -364,7 +382,7 @@ Space 行支持以下内置 token：
 - `git_status` — 非零时显示 Git ahead 和 behind 数量。
 - `$name` — 名为 `name` 的自定义工作区元数据。
 
-token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
+token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。已有的自定义行不会改变；如果希望在自定义的多机器布局中显示机器标识，请显式添加 `machine`。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
 
 也可以用内联样式表定义 token：
 
@@ -467,14 +485,16 @@ claude = "on"
 
 ## Kitty graphics
 
-面向已连接本地客户端的 Kitty graphics 渲染是一项实验性功能，默认禁用：
+Herdr 默认在兼容的外层终端中渲染窗格图像。要禁用图形渲染和窗格图形 API，请设置：
 
 ```toml
-[experimental]
-kitty_graphics = true
+[terminal]
+kitty_graphics = false
 ```
 
-仅在测试终端图像行为时启用。
+为兼容现有配置，旧的 `experimental.kitty_graphics` 设置仍然可用。若两者同时设置，`terminal.kitty_graphics` 优先。
+
+更改此设置后，需要重启受影响的 Herdr 服务器或重新连接客户端。在远程会话中，服务器端设置控制窗格图形解析和 API 可用性，本地客户端设置控制向外层终端输出图形。
 
 ## 智能体会话恢复
 

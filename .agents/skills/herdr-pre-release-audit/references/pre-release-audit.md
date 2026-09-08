@@ -44,11 +44,14 @@ Process:
      - formatting-only changes
      - comment-only/doc-only changes unless they materially affect users
 
-6. Audit `docs/next/CHANGELOG.md` and issue references.
-   - Treat root `CHANGELOG.md` as the latest released changelog.
-   - Treat `docs/next/CHANGELOG.md` as the next-release changelog.
-   - Compare meaningful user-facing changes in the commit range against `docs/next/CHANGELOG.md`.
+6. Build the stable-release changelog inventory, then audit `docs/next/CHANGELOG.md` and issue references.
+   - Normal feature and fix work does not maintain `docs/next/CHANGELOG.md`. Stable release preparation owns the complete changelog update so long-lived pull requests do not conflict over one shared file.
+   - Treat root `CHANGELOG.md` as the latest released changelog and `docs/next/CHANGELOG.md` as the human-curated next-release changelog.
+   - Before judging the draft, inventory every merged PR and direct commit in the release range. Use conventional commit subjects, commit bodies, changed files, linked issues, PR bodies, and contributor identity as source material. Generated or grouped commit lists are a coverage aid, not final release prose.
+   - Classify each release unit as user-facing and changelog-worthy, internal/maintenance, docs-only, or needing a decision. Do not silently omit uncertain items.
+   - Compare every meaningful user-facing item in that inventory against `docs/next/CHANGELOG.md`.
    - Flag missing entries for new features, bug fixes, removals, breaking changes, defaults, compatibility changes, user-visible command/config/API behavior, and security-relevant changes.
+   - Final entries must be human-written at product height. Describe what users gain or no longer experience rather than copying commit subjects or implementation details.
    - Do not require changelog entries solely for internal client/server protocol version bumps. Mention protocol only when the release intentionally changes user-facing compatibility guidance beyond the normal restart requirement.
    - Inspect commit bodies for issue reference lines in the form `refs #<issue-number>`.
    - Flag normal commits that use GitHub closing keywords like `fixes #<issue-number>`, `closes #<issue-number>`, or `resolves #<issue-number>`, because they close issues before release when they land on `master`.
@@ -72,19 +75,19 @@ Process:
    - Audit `skills/herdr/SKILL.md` against shipped changes to the CLI, public IDs, pane and agent workflows, lifecycle semantics, and safety guidance. Flag stale commands, options, examples, or behavioral claims. The binary bundles this exact file, so review semantic freshness rather than file synchronization.
 
 8. Verify finalization state.
-   - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `website/src/content/docs/` or `docs/preview/`.
+   - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `docs/preview/` or `docs/versions/`.
    - `nix/package.nix` imports `Cargo.lock` through `cargoLock.lockFile`; normal version and lockfile updates do not require a separate cargo hash refresh. If git dependencies are introduced, verify the required `cargoLock.outputHashes` entries.
    - Run or recommend:
      ```bash
      just pre-release-check
      ```
-   - The docs check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
+   - The docs check validates the staged draft, localized heading parity, the public distribution contract, and published preview and stable snapshot provenance. The private website repository owns production and draft rendering checks.
    - The render benchmark has no automatic timing threshold, but reviewing it is a required release checkpoint. Record the 1, 15, and 50-count median and p95 results for background-workspace resize/layout and active panes, compare their scaling ratios, and treat a material regression as a release blocker until investigated rather than relying on absolute timing across machines.
    - Do not run `just release` unless the working tree is clean, the docs check passes, and the render-scale result has been reviewed.
 
 9. Apply changes only when asked.
    - Do not edit files during the audit unless the user explicitly asks you to apply fixes.
-   - When asked to apply audit fixes, update `docs/next/CHANGELOG.md`, `docs/next/README.md`, and any required staged website docs under `docs/next/website/src/content/docs/`.
+   - Release preparation is the normal workflow that writes `docs/next/CHANGELOG.md`. When asked to apply audit fixes, human-write the approved changelog entries from the complete release inventory, and update `docs/next/README.md` plus any required staged website docs under `docs/next/website/src/content/docs/`.
    - When asked to finalize release docs, finalize only the staged files under `docs/next/`, then run `just release-docs-check`. Preview and stable publication remain CI-owned.
 
 Output format:

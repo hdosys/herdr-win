@@ -28,7 +28,7 @@ pub struct ApiWorktreeAddRequest {
 #[derive(Debug)]
 pub struct WorktreeAddResult {
     pub path: std::path::PathBuf,
-    pub api_request: ApiWorktreeAddRequest,
+    pub api_request: Option<ApiWorktreeAddRequest>,
     pub result: Result<(), String>,
 }
 
@@ -37,6 +37,7 @@ pub struct ApiWorktreeRemoveRequest {
     pub id: String,
     pub operation_id: u64,
     pub checkout_key: std::path::PathBuf,
+    pub shutdown_panes: Vec<crate::layout::PaneId>,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }
 
@@ -47,7 +48,7 @@ pub struct WorktreeRemoveResult {
     pub workspace: Option<Box<crate::api::schema::WorkspaceInfo>>,
     pub worktree: Option<Box<crate::api::schema::WorktreeInfo>>,
     pub forced: bool,
-    pub api_request: ApiWorktreeRemoveRequest,
+    pub api_request: Option<ApiWorktreeRemoveRequest>,
     pub result: Result<(), String>,
 }
 
@@ -55,7 +56,12 @@ pub struct WorktreeRemoveResult {
 #[derive(Debug)]
 pub enum AppEvent {
     /// A pane's child process exited.
-    PaneDied { pane_id: PaneId },
+    PaneDied {
+        pane_id: PaneId,
+        exit_reason: crate::platform::ChildExitReason,
+    },
+    /// A worktree-removal runtime could not be restored normally.
+    WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
@@ -129,6 +135,7 @@ pub enum AppEvent {
     /// Remote agent detection manifest update check finished.
     AgentDetectionManifestsUpdated {
         updated: Vec<crate::detect::manifest_update::ManifestUpdateCommit>,
+        activated: Vec<crate::detect::Agent>,
         status: crate::detect::manifest_update::ManifestUpdateStatus,
     },
     /// A pane child emitted one or more executable BEL characters.
@@ -137,11 +144,6 @@ pub enum AppEvent {
     /// A pane child emitted a valid OSC 52 clipboard write. The main loop
     /// re-emits it through herdr's own clipboard writer.
     ClipboardWrite { content: Vec<u8> },
-    /// Prefix-mode ASCII input-source request, emitted on entering/leaving the ASCII input
-    /// realm. The foreground process applies the host-local TIS switch (`active = true`) /
-    /// restore (`active = false`): the client in server mode (via server forwarding), the
-    /// app itself in monolithic mode.
-    PrefixInputSource { active: bool },
     /// A pane child reported its shell current directory through terminal
     /// metadata such as OSC 7.
     TerminalCwdReported {

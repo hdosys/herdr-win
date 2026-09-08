@@ -277,7 +277,73 @@ fn is_unicode_format_control(character: char) -> bool {
 
 fn command_output_text(output: &[u8]) -> Option<String> {
     let output = String::from_utf8_lossy(output);
+    let output = strip_terminal_control_sequences(output.as_bytes());
+    let output = String::from_utf8_lossy(&output);
     output.lines().next_back().and_then(sanitize_status_text)
+}
+
+#[derive(Clone, Copy)]
+enum ControlSequenceState {
+    Text,
+    Escape,
+    EscapeIntermediate,
+    Csi,
+    Osc,
+    StString,
+}
+
+fn strip_terminal_control_sequences(value: &[u8]) -> Vec<u8> {
+    use ControlSequenceState::*;
+
+    let mut output = Vec::with_capacity(value.len());
+    let mut state = Text;
+    for &byte in value {
+        state = match (state, byte) {
+            (Text, b'\x1b') => Escape,
+            (Text, _) => {
+                output.push(byte);
+                Text
+            }
+            (Escape, b'[') => Csi,
+            (Escape, b']') => Osc,
+            (Escape, b'P' | b'X' | b'^' | b'_') => StString,
+            (Escape, 0x20..=0x2f) => EscapeIntermediate,
+            (Escape, 0x30..=0x7e) => Text,
+            (Escape, b'\x1b') => Escape,
+            (Escape, b'\x18' | b'\x1a') => Text,
+            (Escape, byte) if byte.is_ascii_control() => Escape,
+            (Escape, _) => {
+                output.push(byte);
+                Text
+            }
+            (EscapeIntermediate, 0x20..=0x2f) => EscapeIntermediate,
+            (EscapeIntermediate, 0x30..=0x7e) => Text,
+            (EscapeIntermediate, b'\x1b') => Escape,
+            (EscapeIntermediate, b'\x18' | b'\x1a') => Text,
+            (EscapeIntermediate, byte) if byte.is_ascii_control() => EscapeIntermediate,
+            (EscapeIntermediate, _) => {
+                output.push(byte);
+                Text
+            }
+            (Csi, 0x20..=0x3f) => Csi,
+            (Csi, 0x40..=0x7e) => Text,
+            (Csi, b'\x1b') => Escape,
+            (Csi, b'\x18' | b'\x1a') => Text,
+            (Csi, byte) if byte.is_ascii_control() => Csi,
+            (Csi, _) => {
+                output.push(byte);
+                Text
+            }
+            (Osc, b'\x07') => Text,
+            (Osc, b'\x1b') => Escape,
+            (Osc, b'\x18' | b'\x1a') => Text,
+            (Osc, _) => Osc,
+            (StString, b'\x1b') => Escape,
+            (StString, b'\x18' | b'\x1a') => Text,
+            (StString, _) => StString,
+        };
+    }
+    output
 }
 
 async fn read_last_output_line(
@@ -458,7 +524,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
@@ -699,9 +765,50 @@ mod tests {
     fn command_output_uses_sanitized_last_line() {
         assert_eq!(
             command_output_text(b"old\n win\x1b[31mter\r\n"),
-            Some("win[31mter".into())
+            Some("winter".into())
         );
         assert_eq!(command_output_text(b"\r\n"), None);
+    }
+
+    #[test]
+    fn command_output_strips_ansi_style_sequences() {
+        assert_eq!(
+            command_output_text(b"\x1b[32mHELLO\x1b[0m"),
+            Some("HELLO".into())
+        );
+    }
+
+    #[test]
+    fn command_output_strips_terminal_control_sequence_families() {
+        assert_eq!(
+            command_output_text(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"),
+            Some("link".into())
+        );
+        assert_eq!(
+            command_output_text(b"\x1bPignored\x1b\\visible\x1b7"),
+            Some("visible".into())
+        );
+        assert_eq!(command_output_text(b"\x1b[31m\x1b[0m"), None);
+        assert_eq!(
+            command_output_text(b"\x1b\x07[32mHELLO\x1b[0m"),
+            Some("HELLO".into())
+        );
+        assert_eq!(
+            command_output_text(b"\x1bPignored\x18VISIBLE"),
+            Some("VISIBLE".into())
+        );
+        assert_eq!(
+            command_output_text(b"\x1bPignored\x1b7VISIBLE"),
+            Some("VISIBLE".into())
+        );
+        assert_eq!(
+            command_output_text(b"\x1b]ignored\x1aVISIBLE"),
+            Some("VISIBLE".into())
+        );
+        assert_eq!(command_output_text(b"\xc2\x1b[31m\xa2"), Some("��".into()));
+
+        let styled = format!("\x1b[38;2;1;2;3m{}\x1b[0m", "x".repeat(80));
+        assert_eq!(command_output_text(styled.as_bytes()), Some("x".repeat(80)));
     }
 
     #[test]

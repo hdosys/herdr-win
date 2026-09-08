@@ -608,7 +608,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
@@ -747,7 +747,7 @@ mod tests {
                     second: Box::new(LayoutNode::Pane {
                         pane: LayoutPane {
                             label: Some("tests".into()),
-                            command: Some(vec!["sh".into(), "-c".into(), "true".into()]),
+                            command: Some(vec![exiting_test_command().into()]),
                             env: std::collections::HashMap::from([(
                                 "HERDR_ROLE".into(),
                                 "tests".into(),
@@ -789,7 +789,7 @@ mod tests {
         assert_eq!(second_pane.label.as_deref(), Some("tests"));
         assert_eq!(
             second_pane.command,
-            Some(vec!["sh".into(), "-c".into(), "true".into()])
+            Some(vec![exiting_test_command().into()])
         );
         assert!(matches!(
             &app.event_hub.events_after(0).last().expect("layout event").1.data,

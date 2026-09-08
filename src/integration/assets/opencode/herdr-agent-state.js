@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=19
+// HERDR_INTEGRATION_VERSION=20
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -674,9 +674,19 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     }
   }
 
+  function rootSessionFor(sessionID) {
+    const visited = new Set();
+    while (children.has(sessionID)) {
+      if (visited.has(sessionID)) return undefined;
+      visited.add(sessionID);
+      sessionID = children.get(sessionID).info.parentID;
+    }
+    return sessionID;
+  }
+
   function retireChildrenOutsideRoot(rootSessionID) {
     for (const [childSessionID, child] of children) {
-      if (child.info.parentID !== rootSessionID) {
+      if (rootSessionFor(child.info.parentID) !== rootSessionID) {
         void retireChild(childSessionID);
       }
     }
@@ -866,7 +876,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       }
 
       if (info?.id && info.parentID) {
-        if (!currentRootSessionID || info.parentID === currentRootSessionID) {
+        if (!currentRootSessionID || rootSessionFor(info.parentID) === currentRootSessionID) {
           const child = children.get(info.id) ?? {
             info,
             working: false,
@@ -906,7 +916,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         const state = updatePromptState(type, properties, sessionID)
           ?? CHILD_EVENT_STATES.get(type);
         if (state && !unscopedErrorBlocked) {
-          await reportState(state, currentRootSessionID);
+          await reportState(state, rootSessionFor(sessionID));
         }
         return;
       }

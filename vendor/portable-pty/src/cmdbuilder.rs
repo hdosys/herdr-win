@@ -76,35 +76,63 @@ fn reg_value_to_string(value: &winreg::RegValue) -> anyhow::Result<OsString> {
     use std::os::windows::ffi::OsStringExt;
     use winapi::um::processenv::ExpandEnvironmentStringsW;
     use winreg::enums::RegType;
-    use winreg::types::FromRegValue;
 
-    match value.vtype {
-        RegType::REG_SZ => Ok(OsString::from_reg_value(value)?),
-        RegType::REG_EXPAND_SZ => {
-            let src = unsafe {
-                std::slice::from_raw_parts(
-                    value.bytes.as_ptr() as *const u16,
-                    value.bytes.len() / 2,
-                )
-            };
-            let size =
-                unsafe { ExpandEnvironmentStringsW(src.as_ptr(), std::ptr::null_mut(), 0) };
-            let mut buf = vec![0u16; size as usize + 1];
-            unsafe {
-                ExpandEnvironmentStringsW(src.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
-            };
-
-            let mut buf = buf.as_slice();
-            while let Some(0) = buf.last() {
-                buf = &buf[0..buf.len() - 1];
-            }
-            Ok(OsString::from_wide(buf))
-        }
-        _ => anyhow::bail!(
+    if !matches!(value.vtype, RegType::REG_SZ | RegType::REG_EXPAND_SZ) {
+        anyhow::bail!(
             "unsupported registry type {:?} for environment variable",
             value.vtype
-        ),
+        );
     }
+
+    let mut bytes = value.bytes.chunks_exact(2);
+    let mut units: Vec<u16> = bytes
+        .by_ref()
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    anyhow::ensure!(
+        bytes.remainder().is_empty(),
+        "invalid UTF-16 byte length for environment variable"
+    );
+    while let Some(0) = units.last() {
+        units.pop();
+    }
+    anyhow::ensure!(
+        !units.contains(&0),
+        "embedded null in registry environment variable"
+    );
+
+    if value.vtype == RegType::REG_SZ {
+        return Ok(OsString::from_wide(&units));
+    }
+
+    units.push(0);
+    let size = unsafe { ExpandEnvironmentStringsW(units.as_ptr(), std::ptr::null_mut(), 0) };
+    if size == 0 {
+        anyhow::bail!(
+            "ExpandEnvironmentStringsW failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mut buf = vec![0u16; size as usize];
+    let written = unsafe {
+        ExpandEnvironmentStringsW(units.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
+    };
+    if written == 0 {
+        anyhow::bail!(
+            "ExpandEnvironmentStringsW failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    anyhow::ensure!(
+        written as usize <= buf.len(),
+        "environment changed while expanding registry value"
+    );
+
+    buf.truncate(written as usize);
+    while let Some(0) = buf.last() {
+        buf.pop();
+    }
+    Ok(OsString::from_wide(&buf))
 }
 
 fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
@@ -669,21 +697,24 @@ impl CommandBuilder {
             value,
         } in self.envs.values()
         {
-            // Every entry must be exactly `name=value\0`. An empty name or an
-            // embedded terminator corrupts the complete block passed to CreateProcessW.
-            if preferred_key.is_empty()
-                || preferred_key.encode_wide().any(|unit| unit == 0)
+            let key: Vec<u16> = preferred_key.encode_wide().collect();
+            if key.is_empty()
+                || key.contains(&0)
+                || key[1..].contains(&(b'=' as u16))
                 || value.encode_wide().any(|unit| unit == 0)
             {
                 continue;
             }
 
-            block.extend(preferred_key.encode_wide());
+            block.extend(key);
             block.push(b'=' as u16);
             block.extend(value.encode_wide());
             block.push(0);
         }
         // and a final terminator for CreateProcessW
+        if block.is_empty() {
+            block.push(0);
+        }
         block.push(0);
 
         block
@@ -854,17 +885,6 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn test_env_case_insensitive_override() {
-        let mut cmd = CommandBuilder::new("dummy");
-        cmd.env("Cargo_Pkg_Authors", "Not Wez");
-        assert!(cmd.get_env("cargo_pkg_authors") == Some(OsStr::new("Not Wez")));
-
-        cmd.env_remove("cARGO_pKG_aUTHORS");
-        assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
     fn raw_arg_appends_unescaped_windows_command_tail() {
         use std::os::windows::ffi::OsStringExt;
 
@@ -888,6 +908,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn test_env_case_insensitive_override() {
+        let mut cmd = CommandBuilder::new("dummy");
+        cmd.env("Cargo_Pkg_Authors", "Not Wez");
+        assert!(cmd.get_env("cargo_pkg_authors") == Some(OsStr::new("Not Wez")));
+
+        cmd.env_remove("cARGO_pKG_aUTHORS");
+        assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_environment_rejects_malformed_entries() {
         use std::os::windows::ffi::{OsStrExt, OsStringExt};
         use winreg::enums::RegType;
@@ -898,6 +929,22 @@ mod tests {
             vtype: RegType::REG_MULTI_SZ,
         };
         assert!(reg_value_to_string(&multi_string).is_err());
+        let malformed_expand_string = RegValue {
+            bytes: vec![b'%', 0, b'P'],
+            vtype: RegType::REG_EXPAND_SZ,
+        };
+        assert!(reg_value_to_string(&malformed_expand_string).is_err());
+        let expandable_string = RegValue {
+            bytes: "literal\0"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            vtype: RegType::REG_EXPAND_SZ,
+        };
+        assert_eq!(
+            reg_value_to_string(&expandable_string).unwrap(),
+            OsString::from("literal")
+        );
 
         let mut cmd = CommandBuilder::new("dummy");
         cmd.env_clear();
@@ -910,10 +957,24 @@ mod tests {
             "MULTI",
             OsString::from_wide(&[b'a' as u16, 0, b'b' as u16]),
         );
+        cmd.env("BAD=KEY", "ignored");
+        cmd.env("=::", "colon");
+        cmd.env("=C:", r"C:\valid");
+        cmd.env("=ExitCode", "hidden");
         cmd.env("EMPTY", "");
         cmd.env("VALID", "ok");
 
-        let expected: Vec<u16> = OsStr::new("EMPTY=\0VALID=ok\0\0").encode_wide().collect();
+        let expected: Vec<u16> =
+            OsStr::new("=::=colon\0=C:=C:\\valid\0=ExitCode=hidden\0EMPTY=\0VALID=ok\0\0")
+                .encode_wide()
+                .collect();
         assert_eq!(cmd.environment_block(), expected);
+
+        cmd.env_remove("=::");
+        cmd.env_remove("=C:");
+        cmd.env_remove("=ExitCode");
+        cmd.env_remove("EMPTY");
+        cmd.env_remove("VALID");
+        assert_eq!(cmd.environment_block(), vec![0, 0]);
     }
 }

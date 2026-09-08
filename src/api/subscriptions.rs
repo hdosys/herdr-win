@@ -1,9 +1,9 @@
 use regex::Regex;
 
 use crate::api::schema::{
-    ErrorBody, ErrorResponse, Method, PaneAgentStatusChangedEvent, PaneOutputMatchedEvent,
-    PaneScrollChangedEvent, PaneScrollInfo, Request, Subscription, SubscriptionEventData,
-    SubscriptionEventEnvelope, SubscriptionEventKind,
+    ErrorBody, ErrorResponse, EventKind, Method, PaneAgentStatusChangedEvent,
+    PaneOutputMatchedEvent, PaneScrollChangedEvent, PaneScrollInfo, Request, Subscription,
+    SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind,
 };
 use crate::api::server::{dispatch_to_app_with_timeout, APP_RESPONSE_TIMEOUT};
 use crate::api::{ApiRequestSender, EventHub};
@@ -110,104 +110,54 @@ impl ActiveSubscription {
         index: usize,
         api_tx: &ApiRequestSender,
         event_hub: &EventHub,
+        event_start_sequence: u64,
     ) -> Result<Self, ErrorResponse> {
+        let event_subscription = |event_kind| {
+            Self::Event(ActiveEventSubscription {
+                event_kind,
+                last_sequence: event_start_sequence,
+            })
+        };
+
         match subscription {
-            Subscription::WorkspaceCreated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceCreated,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceUpdated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceUpdated,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceMetadataUpdated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceMetadataUpdated,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceRenamed {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceRenamed,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceMoved {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceMoved,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceReordered {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceReordered,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceClosed {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceClosed,
-                last_sequence: 0,
-            })),
-            Subscription::WorkspaceFocused {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorkspaceFocused,
-                last_sequence: 0,
-            })),
-            Subscription::WorktreeCreated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorktreeCreated,
-                last_sequence: 0,
-            })),
-            Subscription::WorktreeOpened {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorktreeOpened,
-                last_sequence: 0,
-            })),
-            Subscription::WorktreeRemoved {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::WorktreeRemoved,
-                last_sequence: 0,
-            })),
-            Subscription::TabCreated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::TabCreated,
-                last_sequence: 0,
-            })),
-            Subscription::TabClosed {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::TabClosed,
-                last_sequence: 0,
-            })),
-            Subscription::TabFocused {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::TabFocused,
-                last_sequence: 0,
-            })),
-            Subscription::TabRenamed {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::TabRenamed,
-                last_sequence: 0,
-            })),
-            Subscription::TabMoved {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::TabMoved,
-                last_sequence: 0,
-            })),
-            Subscription::PaneCreated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneCreated,
-                last_sequence: 0,
-            })),
-            Subscription::PaneClosed {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneClosed,
-                last_sequence: 0,
-            })),
-            Subscription::PaneUpdated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneUpdated,
-                last_sequence: 0,
-            })),
-            Subscription::PaneFocused {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneFocused,
-                last_sequence: 0,
-            })),
-            Subscription::PaneMoved {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneMoved,
-                last_sequence: 0,
-            })),
-            Subscription::PaneExited {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneExited,
-                last_sequence: 0,
-            })),
-            Subscription::PaneAgentDetected {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::PaneAgentDetected,
-                last_sequence: 0,
-            })),
-            Subscription::LayoutUpdated {} => Ok(Self::Event(ActiveEventSubscription {
-                event_kind: crate::api::schema::EventKind::LayoutUpdated,
-                last_sequence: 0,
-            })),
+            Subscription::WorkspaceCreated {} => {
+                Ok(event_subscription(EventKind::WorkspaceCreated))
+            }
+            Subscription::WorkspaceUpdated {} => {
+                Ok(event_subscription(EventKind::WorkspaceUpdated))
+            }
+            Subscription::WorkspaceMetadataUpdated {} => {
+                Ok(event_subscription(EventKind::WorkspaceMetadataUpdated))
+            }
+            Subscription::WorkspaceRenamed {} => {
+                Ok(event_subscription(EventKind::WorkspaceRenamed))
+            }
+            Subscription::WorkspaceMoved {} => Ok(event_subscription(EventKind::WorkspaceMoved)),
+            Subscription::WorkspaceReordered {} => {
+                Ok(event_subscription(EventKind::WorkspaceReordered))
+            }
+            Subscription::WorkspaceClosed {} => Ok(event_subscription(EventKind::WorkspaceClosed)),
+            Subscription::WorkspaceFocused {} => {
+                Ok(event_subscription(EventKind::WorkspaceFocused))
+            }
+            Subscription::WorktreeCreated {} => Ok(event_subscription(EventKind::WorktreeCreated)),
+            Subscription::WorktreeOpened {} => Ok(event_subscription(EventKind::WorktreeOpened)),
+            Subscription::WorktreeRemoved {} => Ok(event_subscription(EventKind::WorktreeRemoved)),
+            Subscription::TabCreated {} => Ok(event_subscription(EventKind::TabCreated)),
+            Subscription::TabClosed {} => Ok(event_subscription(EventKind::TabClosed)),
+            Subscription::TabFocused {} => Ok(event_subscription(EventKind::TabFocused)),
+            Subscription::TabRenamed {} => Ok(event_subscription(EventKind::TabRenamed)),
+            Subscription::TabMoved {} => Ok(event_subscription(EventKind::TabMoved)),
+            Subscription::PaneCreated {} => Ok(event_subscription(EventKind::PaneCreated)),
+            Subscription::PaneClosed {} => Ok(event_subscription(EventKind::PaneClosed)),
+            Subscription::PaneUpdated {} => Ok(event_subscription(EventKind::PaneUpdated)),
+            Subscription::PaneFocused {} => Ok(event_subscription(EventKind::PaneFocused)),
+            Subscription::PaneMoved {} => Ok(event_subscription(EventKind::PaneMoved)),
+            Subscription::PaneExited {} => Ok(event_subscription(EventKind::PaneExited)),
+            Subscription::PaneAgentDetected {} => {
+                Ok(event_subscription(EventKind::PaneAgentDetected))
+            }
+            Subscription::LayoutUpdated {} => Ok(event_subscription(EventKind::LayoutUpdated)),
             Subscription::PaneOutputMatched {
                 pane_id,
                 source,
@@ -652,6 +602,15 @@ mod tests {
         }
     }
 
+    fn workspace_focused_event(workspace_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            event: EventKind::WorkspaceFocused,
+            data: EventData::WorkspaceFocused {
+                workspace_id: workspace_id.into(),
+            },
+        }
+    }
+
     fn pane_info_with_scroll(scroll: Option<PaneScrollInfo>) -> PaneInfo {
         PaneInfo {
             pane_id: "pane_1".into(),
@@ -677,6 +636,35 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_subscription_skips_history_but_keeps_setup_window_events() {
+        let event_hub = EventHub::default();
+        event_hub.push(workspace_focused_event("before_subscription"));
+        let event_start_sequence = event_hub.current_sequence();
+        event_hub.push(workspace_focused_event("during_setup"));
+
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscription = ActiveSubscription::new(
+            Subscription::WorkspaceFocused {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+            event_start_sequence,
+        )
+        .expect("workspace focus subscription");
+
+        let setup_event = subscription
+            .poll(&api_tx, &event_hub)
+            .expect("setup-window event");
+        assert_eq!(setup_event["data"]["workspace_id"], "during_setup");
+        assert!(subscription.poll(&api_tx, &event_hub).is_none());
+
+        event_hub.push(workspace_focused_event("after_setup"));
+        let live_event = subscription.poll(&api_tx, &event_hub).expect("live event");
+        assert_eq!(live_event["data"]["workspace_id"], "after_setup");
+    }
+
+    #[test]
     fn workspace_metadata_subscription_uses_dedicated_event_kind() {
         let event_hub = EventHub::default();
         let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -686,6 +674,7 @@ mod tests {
             0,
             &api_tx,
             &event_hub,
+            event_hub.current_sequence(),
         )
         .expect("workspace metadata subscription");
 

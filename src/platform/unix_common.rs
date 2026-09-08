@@ -1,5 +1,36 @@
 use std::path::{Path, PathBuf};
 
+pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::ChildExitReason {
+    if status.signal().is_some() {
+        super::ChildExitReason::Interrupted
+    } else {
+        super::ChildExitReason::Exited
+    }
+}
+
+pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+    use std::os::fd::{AsFd as _, AsRawFd as _};
+    let crate::ipc::LocalStream::UdSocket(stream) = stream;
+    let mut descriptor = libc::pollfd {
+        fd: stream.as_fd().as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Bound cancellation latency without polling idle connections hundreds of times per second.
+    let result = unsafe { libc::poll(&mut descriptor, 1, 100) };
+    if result < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
+    crossterm::terminal::window_size().map(|size| (size.columns, size.rows))
+}
+
 fn set_sigpipe_disposition(handler: libc::sighandler_t) {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handler;
@@ -224,9 +255,27 @@ fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {
     Some(time::PrimitiveDateTime::new(date, time))
 }
 
+pub(crate) fn set_default_plugin_pane_pwd(env: &mut Vec<(String, String)>, cwd: &std::path::Path) {
+    if !env.iter().any(|(key, _)| key == "PWD") {
+        env.push(("PWD".to_string(), cwd.display().to_string()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_pane_pwd_defaults_to_cwd_without_overriding_explicit_env() {
+        let cwd = Path::new("/plugin-cwd");
+        let mut derived = vec![("OTHER".to_string(), "value".to_string())];
+        set_default_plugin_pane_pwd(&mut derived, cwd);
+        assert!(derived.contains(&("PWD".to_string(), "/plugin-cwd".to_string())));
+
+        let mut explicit = vec![("PWD".to_string(), "/caller-pwd".to_string())];
+        set_default_plugin_pane_pwd(&mut explicit, cwd);
+        assert_eq!(explicit, [("PWD".to_string(), "/caller-pwd".to_string())]);
+    }
 
     #[test]
     fn remote_ssh_config_dir_rejects_overlong_control_socket_name() {

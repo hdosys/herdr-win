@@ -61,7 +61,7 @@ Herdr deliberately does not rewrite modified arrows because terminal application
 
 ## Herdr updated, but the running session is still old
 
-Updating the binary does not always replace a compatible server that is already running. Check `herdr status`. To start the updated server, stop the session and launch Herdr again:
+Updating the binary does not replace a compatible server that is already running. Start Herdr again to use the updated client. If you also need server-side changes from the release, check `herdr status`, then stop the session and launch Herdr again:
 
 ```bash
 herdr server stop
@@ -69,6 +69,23 @@ herdr
 ```
 
 Stopping a server exits its pane processes. Named sessions use `herdr session stop <name>`. See [Install Herdr](/docs/install/#update) for updater, package-manager, and live-handoff behavior.
+
+## Keychain-backed tools fail inside Herdr on macOS
+
+Check the server launch context from a Herdr pane:
+
+```bash
+launchctl managername
+```
+
+If it prints `Background`, stop the server and start Herdr again from a normal GUI terminal:
+
+```bash
+herdr server stop
+herdr
+```
+
+Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
 
 ## The `herdr` command is not found
 

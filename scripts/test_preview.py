@@ -63,6 +63,10 @@ class PreviewNotesTests(unittest.TestCase):
                 "https://github.com/herdrdev/herdr/releases/download/v2026.06.02.1/herdr-win_v2026.06.02.1_linux_amd64",
             )
             self.assertEqual(
+                data["endpoint_generation"],
+                preview.read_endpoint_protocol_generation(),
+            )
+            self.assertEqual(
                 data["assets"]["linux-x86_64"]["sha256"],
                 VALID_SHAS["linux-x86_64"],
             )
@@ -297,6 +301,7 @@ class PreviewNotesTests(unittest.TestCase):
     def test_hidden_subjects_include_preview_manifest_commits(self):
         self.assertTrue(preview.hidden_subject("docs: update preview manifest"))
         self.assertTrue(preview.hidden_subject("docs: update website manifest"))
+        self.assertTrue(preview.hidden_subject("docs: publish release distribution"))
         self.assertFalse(preview.hidden_subject("release: v0.7.0"))
         self.assertFalse(preview.hidden_subject("fix: repair preview manifest"))
 
@@ -374,60 +379,6 @@ class PreviewNotesTests(unittest.TestCase):
                 )
             finally:
                 os.chdir(original_cwd)
-
-    def test_preview_docs_rewrite_links_to_preview_namespace(self):
-        source = """---
-title: Install Herdr
----
-
-import ConfigReference from '../../components/ConfigReference.astro';
-import LocaleWidget from '../../../components/LocaleWidget.astro';
-
-[Install](/docs/install/)
-file: ../../../public/assets/logo.svg
-"""
-        output = subprocess.check_output(
-            ["node", "website/scripts/prepare-docs.mjs", "--rewrite-preview-doc-fixture"],
-            input=source,
-            text=True,
-        )
-        self.assertIn("[Install](/docs/preview/install/)", output)
-        self.assertIn("file: ../../../../public/assets/logo.svg", output)
-        self.assertIn("from '../../../components/ConfigReference.astro'", output)
-        self.assertIn("from '../../../../components/LocaleWidget.astro'", output)
-        self.assertIn("Preview build `2026-07-29-44b3adb12552`", output)
-        self.assertIn(
-            "https://github.com/herdrdev/herdr/commit/44b3adb125524ea9a55739eee3776f922f2115ad",
-            output,
-        )
-
-    def test_version_docs_rewrite_links_and_source_paths(self):
-        source = """---
-title: Install Herdr
----
-
-import ConfigReference from '../../components/ConfigReference.astro';
-
-[Install](/docs/install/)
-[Skill](https://github.com/herdrdev/herdr/blob/master/SKILL.md)
-file: ../../../public/assets/logo.svg
-"""
-        output = subprocess.check_output(
-            [
-                "node",
-                "website/scripts/prepare-docs.mjs",
-                "--rewrite-version-doc-fixture",
-                "0.7.4",
-            ],
-            input=source,
-            text=True,
-        )
-        self.assertIn("[Install](/docs/0.7.4/install/)", output)
-        self.assertIn("file: ../../../../../public/assets/logo.svg", output)
-        self.assertIn("from '../../../../components/ConfigReference.astro'", output)
-        self.assertIn("blob/master/docs/versions/0.7.4/website/src/content/docs/index.mdx", output)
-        self.assertIn("blob/v0.7.4/SKILL.md", output)
-
 
 class ConventionalCommitTests(unittest.TestCase):
     def test_valid_subjects_allow_scopes_and_bang(self):

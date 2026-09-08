@@ -3,10 +3,7 @@
 //! When the user runs `herdr` with no subcommand:
 //! 1. Check if a server is already listening on the client socket
 //! 2. If no server → spawn one as a background daemon → wait for socket readiness (up to 15s)
-//! 3. Attach as a thin client to the server
-//!
-//! The `--no-session` flag bypasses server/client entirely and runs monolithically
-//! (escape hatch for users who want the traditional single-process behavior).
+//! 3. Attach as a client to the server
 
 use std::io;
 use std::path::Path;
@@ -68,7 +65,7 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
             Ok(_) => {
                 // Server is listening. Close the test connection immediately.
                 // The server's handshake handler will time out on this connection
-                // since we don't send Hello, which is fine.
+                // since we don't send a handshake, which is fine.
                 true
             }
             Err(err)
@@ -119,7 +116,14 @@ fn client_protocol_accepts_hello(socket_path: &Path, read_timeout: Duration) -> 
         Err(err) => return Err(err),
     };
 
-    let hello = client_protocol_readiness_hello();
+    let hello = crate::protocol::ClientMessage::TerminalHello {
+        version: crate::protocol::PROTOCOL_VERSION,
+        cols: 80,
+        rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+    };
 
     match crate::protocol::write_message(&mut stream, &hello) {
         Ok(()) => {}
@@ -173,83 +177,7 @@ fn client_protocol_welcome_is_ready(
     }
 }
 
-#[cfg(windows)]
-fn client_protocol_readiness_hello() -> crate::protocol::ClientMessage {
-    crate::protocol::ClientMessage::Hello {
-        version: crate::protocol::PROTOCOL_VERSION,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        requested_encoding: crate::protocol::RenderEncoding::SemanticFrame,
-        keybindings: crate::protocol::ClientKeybindings::Server,
-        // Readiness must validate the handshake without becoming the foreground
-        // app client that starts the pending startup workspace.
-        launch_mode: crate::protocol::ClientLaunchMode::TerminalAttach,
-    }
-}
-
-#[cfg(all(test, windows))]
-mod windows_tests {
-    use super::*;
-
-    #[test]
-    fn readiness_probe_cannot_become_foreground_app_client() {
-        let crate::protocol::ClientMessage::Hello { launch_mode, .. } =
-            client_protocol_readiness_hello()
-        else {
-            panic!("expected readiness hello");
-        };
-        assert_eq!(
-            launch_mode,
-            crate::protocol::ClientLaunchMode::TerminalAttach
-        );
-    }
-
-    #[test]
-    fn readiness_probe_requires_matching_accepted_welcome() {
-        assert!(
-            client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
-                version: crate::protocol::PROTOCOL_VERSION,
-                encoding: crate::protocol::RenderEncoding::SemanticFrame,
-                error: None,
-            }))
-            .unwrap()
-        );
-        assert!(
-            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
-                version: crate::protocol::PROTOCOL_VERSION + 1,
-                encoding: crate::protocol::RenderEncoding::SemanticFrame,
-                error: None,
-            }))
-            .unwrap()
-        );
-        assert!(
-            !client_protocol_welcome_is_ready(Ok(crate::protocol::ServerMessage::Welcome {
-                version: crate::protocol::PROTOCOL_VERSION,
-                encoding: crate::protocol::RenderEncoding::SemanticFrame,
-                error: Some("rejected".into()),
-            }))
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn readiness_probe_treats_no_welcome_as_not_ready() {
-        assert!(
-            !client_protocol_welcome_is_ready(Err(crate::protocol::FramingError::Io(
-                io::ErrorKind::TimedOut.into()
-            )))
-            .unwrap()
-        );
-        assert!(!client_protocol_welcome_is_ready(Err(
-            crate::protocol::FramingError::UnexpectedEof
-        ))
-        .unwrap());
-    }
-}
-
-fn validate_running_server_compatibility() -> io::Result<()> {
+fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<()> {
     let Some(status) = read_server_status()? else {
         return Err(io::Error::other(format!(
             "a herdr server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
@@ -257,19 +185,29 @@ fn validate_running_server_compatibility() -> io::Result<()> {
         )));
     };
 
-    if status.protocol == Some(crate::protocol::PROTOCOL_VERSION) {
+    let capabilities = status.capabilities.as_ref();
+    let endpoint_generation =
+        capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);
+    let surface_interest = capabilities.is_some_and(|capabilities| capabilities.surface_interest);
+    if endpoint_generation == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+        && (!saved_federation || surface_interest)
+    {
         return Ok(());
     }
 
+    let requirement = if saved_federation && !surface_interest {
+        "saved SSH machines require surface lifecycle support"
+    } else {
+        "the stable endpoint generation is incompatible"
+    };
     Err(io::Error::other(format!(
-        "Herdr was updated, but this session is still running the old server.\n\nserver: v{} protocol {}\nclient: v{} protocol {}\n\n{}",
+        "This session needs one final server update before Herdr can attach ({requirement}).\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
         status.version.as_deref().unwrap_or("unknown"),
-        status
-            .protocol
+        endpoint_generation
             .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .unwrap_or_else(|| "unavailable".to_string()),
         crate::build_info::version(),
-        crate::protocol::PROTOCOL_VERSION,
+        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
         crate::session::active_restart_after_update_guidance()
     )))
 }
@@ -314,7 +252,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 pub fn start_server_daemon_with_exe(exe: PathBuf) -> io::Result<()> {
     let socket_path = client_socket_path();
     if is_server_listening_at(&socket_path) {
-        validate_running_server_compatibility()?;
+        validate_running_server_compatibility(false)?;
         return Ok(());
     }
     let mut command = build_server_daemon_command(exe);
@@ -403,24 +341,33 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
 /// attach as a thin client.
 ///
 /// This is the entry point called from `main.rs` when the user runs `herdr`
-/// without `--no-session` and without a subcommand.
+/// without a subcommand.
 ///
 /// Flow:
 /// 1. Check if a server is listening on the client socket
 /// 2. If no server → spawn server daemon → wait for socket readiness
 /// 3. Run the thin client (which connects to the server)
-pub fn auto_detect_launch() -> io::Result<()> {
+pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
-    if is_server_listening_at(&socket_path) {
-        validate_running_server_compatibility()?;
+    let startup = if is_server_listening_at(&socket_path) {
         info!("server already running, attaching as client");
+        if saved_federation {
+            Ok(())
+        } else {
+            validate_running_server_compatibility(false)
+        }
     } else {
         info!("no server running, spawning server daemon");
-        spawn_server_daemon()?;
-        wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT)?;
-        info!("server ready, attaching as client");
+        spawn_server_daemon()
+            .and_then(|_| wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT))
+    };
+    if let Err(error) = startup {
+        if !saved_federation {
+            return Err(error);
+        }
+        tracing::warn!(%error, "Local startup failed; keeping saved machines available");
     }
 
     // Now attach as a thin client.
@@ -646,7 +593,7 @@ test "$sid" = "$$"
         let path = dir.join("api.sock");
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
 
-        let err = validate_running_server_compatibility().unwrap_err();
+        let err = validate_running_server_compatibility(false).unwrap_err();
 
         assert!(
             err.to_string().contains("status API is unavailable"),
@@ -682,7 +629,7 @@ test "$sid" = "$$"
             stream.flush().unwrap();
         });
 
-        let err = validate_running_server_compatibility().unwrap_err();
+        let err = validate_running_server_compatibility(false).unwrap_err();
         let message = err.to_string();
 
         let _ = handle.join();

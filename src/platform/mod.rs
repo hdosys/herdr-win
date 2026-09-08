@@ -25,6 +25,36 @@ pub enum Signal {
     Kill,
 }
 
+/// Why a pane runtime ended, before application persistence policy is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildExitReason {
+    Exited,
+    Interrupted,
+    /// Imported runtimes have no child wait handle in the replacement server.
+    #[cfg(unix)]
+    Handoff,
+    WaitFailed,
+}
+
+impl ChildExitReason {
+    pub(crate) fn requires_session_checkpoint(self) -> bool {
+        match self {
+            Self::Interrupted => true,
+            #[cfg(unix)]
+            Self::Handoff => true,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) use unix_common::classify_child_exit;
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildExitReason {
+    ChildExitReason::Exited
+}
+
 pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
     let mut process = detached_custom_command_process_platform(command);
     configure_background_command(&mut process);
@@ -37,6 +67,24 @@ pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::Co
 
 pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuilder) {
     apply_pane_runtime_marker_platform(command);
+}
+
+pub(crate) fn prepare_paste_text_for_pty(text: String) -> String {
+    prepare_paste_text_for_pty_platform(text)
+}
+
+pub(crate) fn plugin_runtime_path(path: &std::path::Path) -> std::path::PathBuf {
+    plugin_runtime_path_platform(path)
+}
+
+#[cfg(not(windows))]
+fn plugin_runtime_path_platform(path: &std::path::Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn prepare_paste_text_for_pty_platform(text: String) -> String {
+    text
 }
 
 #[cfg(not(windows))]
@@ -99,6 +147,23 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
         direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
+}
+
+pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
+    #[cfg(unix)]
+    let (cols, rows) = unix_common::read_terminal_grid_size()?;
+    #[cfg(windows)]
+    let (cols, rows) = windows::read_terminal_grid_size()?;
+    #[cfg(not(any(unix, windows)))]
+    let (cols, rows) = fallback::read_terminal_grid_size()?;
+
+    if cols == 0 || rows == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "terminal reported a zero-sized grid",
+        ));
+    }
+    Ok((cols, rows))
 }
 
 #[cfg(not(windows))]
@@ -232,6 +297,9 @@ pub(crate) struct RemoteSshConfigPaths {
 mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::begin_cli_output;
+
+mod client_state;
+pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
@@ -456,6 +524,7 @@ fn quote_windows_command_line_arg(value: &str) -> String {
 
 pub(crate) fn quote_powershell_arg(value: &str) -> String {
     if !value.is_empty()
+        && !value.starts_with('-')
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
                 || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'+' | b'=')
@@ -602,6 +671,25 @@ mod interactive_shell_command_tests {
             Some(r#"^"C:\\Program Files\\agent.exe" "a\\b\\\"c""#)
         );
     }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+#[test]
+fn child_exit_classification_only_checkpoints_interruptions() {
+    for code in [0, 1, 130, 255, 0xC0000005] {
+        let reason = classify_child_exit(&portable_pty::ExitStatus::with_exit_code(code));
+        assert_eq!(reason, ChildExitReason::Exited, "exit code {code:#x}");
+        assert!(!reason.requires_session_checkpoint());
+    }
+    #[cfg(windows)]
+    let status = portable_pty::ExitStatus::with_exit_code(0xC000013A);
+    #[cfg(not(windows))]
+    let status = portable_pty::ExitStatus::with_signal("Terminated: 15");
+    assert_eq!(classify_child_exit(&status), ChildExitReason::Interrupted);
+    assert!(classify_child_exit(&status).requires_session_checkpoint());
+    #[cfg(unix)]
+    assert!(ChildExitReason::Handoff.requires_session_checkpoint());
+    assert!(!ChildExitReason::WaitFailed.requires_session_checkpoint());
 }
 
 #[cfg(all(test, unix))]

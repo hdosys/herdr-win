@@ -32,7 +32,9 @@ use std::io::Write;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::protocol::{underline_style_from_modifier, CellData, FrameData};
+use crate::protocol::{
+    underline_style_from_modifier, CellData, CursorState, FrameData, PaneSurfacePatchRow,
+};
 
 const REVERSED_MODIFIER: u16 = 1 << 6;
 const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
@@ -52,6 +54,7 @@ pub(crate) struct EncodedBlit {
     next_last_visible_cursor: Option<(u16, u16)>,
     next_last_cursor_shape: u8,
     next_last_cursor_color: Option<crate::terminal_theme::RgbColor>,
+    drawn_cursor: bool,
 }
 
 /// Stateful encoder that diffs semantic frames into terminal ANSI bytes.
@@ -61,9 +64,14 @@ pub(crate) struct BlitEncoder {
     last_visible_cursor: Option<(u16, u16)>,
     last_cursor_shape: u8,
     last_cursor_color: Option<crate::terminal_theme::RgbColor>,
+    cursor_color: Option<crate::terminal_theme::RgbColor>,
+    last_drawn_cursor_cell: Option<(u16, u16, CellData)>,
 }
 
 impl BlitEncoder {
+    pub(crate) fn set_cursor_color(&mut self, color: Option<crate::terminal_theme::RgbColor>) {
+        self.cursor_color = color;
+    }
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -86,6 +94,9 @@ impl BlitEncoder {
         repaint: bool,
         suppress_visible_cursor: bool,
     ) -> EncodedBlit {
+        let painted = suppress_visible_cursor
+            .then(|| frame_with_drawn_cursor(frame.clone(), self.cursor_color));
+        let frame = painted.as_ref().unwrap_or(frame);
         let previous_frame = self.last_frame.as_ref();
         let prev = if repaint { None } else { previous_frame };
         let full = repaint
@@ -98,11 +109,7 @@ impl BlitEncoder {
         let mut bytes = Vec::new();
         let mut next_last_visible_cursor = self.last_visible_cursor;
         let mut next_last_cursor_shape = self.last_cursor_shape;
-        let next_last_cursor_color = if suppress_visible_cursor {
-            None
-        } else {
-            frame.cursor.as_ref().and_then(|cursor| cursor.color)
-        };
+        let next_last_cursor_color = self.cursor_color;
         blit_frame_to_with_cursor_memory_and_clear_policy(
             &mut bytes,
             frame,
@@ -134,6 +141,7 @@ impl BlitEncoder {
             next_last_visible_cursor,
             next_last_cursor_shape,
             next_last_cursor_color,
+            drawn_cursor: suppress_visible_cursor,
         }
     }
 
@@ -141,15 +149,145 @@ impl BlitEncoder {
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
         self.last_cursor_color = encoded.next_last_cursor_color;
-        self.last_frame = Some(frame);
+        self.last_drawn_cursor_cell = encoded
+            .drawn_cursor
+            .then(|| undrawn_cursor_cell(&frame))
+            .flatten();
+        self.last_frame = Some(if encoded.drawn_cursor {
+            frame_with_drawn_cursor(frame, self.last_cursor_color)
+        } else {
+            frame
+        });
     }
 
     pub(crate) fn is_current(&self, frame: &FrameData) -> bool {
-        self.last_frame.as_ref() == Some(frame)
+        self.last_frame.as_ref() == Some(frame) && self.cursor_color == self.last_cursor_color
     }
 
-    pub(crate) fn last_frame(&self) -> Option<&FrameData> {
-        self.last_frame.as_ref()
+    pub(crate) fn encode_patch(
+        &self,
+        rows: &[PaneSurfacePatchRow],
+        cursor: Option<CursorState>,
+        suppress_visible_cursor: bool,
+    ) -> Option<EncodedBlit> {
+        let frame = self.last_frame.as_ref()?;
+        if rows.iter().any(|row| !patch_row_fits(frame, row)) || patch_rows_overlap(rows) {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        let mut next_last_visible_cursor = self.last_visible_cursor;
+        let mut next_last_cursor_shape = self.last_cursor_shape;
+        blit_patch_to(
+            &mut bytes,
+            frame,
+            rows,
+            cursor,
+            &mut next_last_visible_cursor,
+            &mut next_last_cursor_shape,
+            repeat_ime_anchor_after_sync(),
+            suppress_visible_cursor,
+        );
+        let next_last_cursor_color = self.cursor_color;
+        if next_last_cursor_color != self.last_cursor_color {
+            insert_cursor_color_change(&mut bytes, next_last_cursor_color);
+        }
+        Some(EncodedBlit {
+            bytes,
+            full: false,
+            next_last_visible_cursor,
+            next_last_cursor_shape,
+            next_last_cursor_color,
+            drawn_cursor: suppress_visible_cursor,
+        })
+    }
+
+    pub(crate) fn patch_rows_with_drawn_cursor(
+        &self,
+        rows: &[PaneSurfacePatchRow],
+        cursor: Option<&CursorState>,
+    ) -> Option<Vec<PaneSurfacePatchRow>> {
+        let frame = self.last_frame.as_ref()?;
+        let mut rows = rows.to_vec();
+        let previous = frame
+            .cursor
+            .as_ref()
+            .filter(|cursor| cursor.visible)
+            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y));
+        let next = cursor
+            .filter(|cursor| cursor.visible)
+            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y));
+
+        if let Some((x, y)) = previous.filter(|position| Some(*position) != next) {
+            if patch_cell_mut(&mut rows, x, y).is_none() {
+                let (_, _, cell) = self
+                    .last_drawn_cursor_cell
+                    .as_ref()
+                    .filter(|(old_x, old_y, _)| *old_x == x && *old_y == y)?;
+                rows.push(PaneSurfacePatchRow {
+                    x,
+                    y,
+                    cells: vec![cell.clone()],
+                });
+            }
+        }
+        if let Some((x, y)) = next {
+            if let Some(cell) = patch_cell_mut(&mut rows, x, y) {
+                paint_cursor_cell(cell, self.cursor_color);
+            } else if previous != next || self.cursor_color != self.last_cursor_color {
+                let mut cell = if previous == next {
+                    self.last_drawn_cursor_cell.as_ref()?.2.clone()
+                } else {
+                    frame.cells.get(frame_cell_index(frame, x, y)?)?.clone()
+                };
+                paint_cursor_cell(&mut cell, self.cursor_color);
+                rows.push(PaneSurfacePatchRow {
+                    x,
+                    y,
+                    cells: vec![cell],
+                });
+            }
+        }
+        Some(rows)
+    }
+
+    pub(crate) fn commit_patch(
+        &mut self,
+        rows: &[PaneSurfacePatchRow],
+        cursor: Option<CursorState>,
+        encoded: EncodedBlit,
+    ) -> bool {
+        let Some(frame) = self.last_frame.as_mut() else {
+            return false;
+        };
+        if let Some((x, y, cell)) = self.last_drawn_cursor_cell.take() {
+            let Some(index) = frame_cell_index(frame, x, y) else {
+                return false;
+            };
+            frame.cells[index] = cell;
+        }
+        for row in rows {
+            let start = usize::from(row.y) * usize::from(frame.width) + usize::from(row.x);
+            let end = start + row.cells.len();
+            let Some(target) = frame.cells.get_mut(start..end) else {
+                return false;
+            };
+            target.clone_from_slice(&row.cells);
+        }
+        frame.cursor = cursor;
+        self.last_visible_cursor = encoded.next_last_visible_cursor;
+        self.last_cursor_shape = encoded.next_last_cursor_shape;
+        self.last_cursor_color = encoded.next_last_cursor_color;
+        self.last_drawn_cursor_cell = encoded
+            .drawn_cursor
+            .then(|| undrawn_cursor_cell(frame))
+            .flatten();
+        if let Some((x, y, _)) = self.last_drawn_cursor_cell.as_ref() {
+            let Some(index) = frame_cell_index(frame, *x, *y) else {
+                return false;
+            };
+            paint_cursor_cell(&mut frame.cells[index], self.last_cursor_color);
+        }
+        true
     }
 
     #[cfg(test)]
@@ -163,22 +301,35 @@ pub(crate) fn frame_with_drawn_cursor(
     host_cursor_color: Option<crate::terminal_theme::RgbColor>,
 ) -> FrameData {
     if let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible) {
-        let cursor_color = cursor.color.or(host_cursor_color);
         let (x, y) = clamp_cursor_position(&frame, cursor.x, cursor.y);
         let idx = (y as usize)
             .saturating_mul(frame.width as usize)
             .saturating_add(x as usize);
         if let Some(cell) = frame.cells.get_mut(idx) {
-            if let Some((foreground, background)) = drawn_cursor_colors(cell, cursor_color) {
-                cell.fg = foreground;
-                cell.bg = background;
-                cell.modifier &= !REVERSED_MODIFIER;
-            } else {
-                cell.modifier ^= REVERSED_MODIFIER;
-            }
+            paint_cursor_cell(cell, host_cursor_color);
         }
     }
     frame
+}
+
+fn paint_cursor_cell(cell: &mut CellData, color: Option<crate::terminal_theme::RgbColor>) {
+    if let Some((foreground, background)) = drawn_cursor_colors(cell, color) {
+        cell.fg = foreground;
+        cell.bg = background;
+        cell.modifier &= !REVERSED_MODIFIER;
+    } else {
+        cell.modifier ^= REVERSED_MODIFIER;
+    }
+}
+
+fn undrawn_cursor_cell(frame: &FrameData) -> Option<(u16, u16, CellData)> {
+    let cursor = frame.cursor.as_ref().filter(|cursor| cursor.visible)?;
+    let (x, y) = clamp_cursor_position(frame, cursor.x, cursor.y);
+    Some((
+        x,
+        y,
+        frame.cells.get(frame_cell_index(frame, x, y)?)?.clone(),
+    ))
 }
 
 fn insert_cursor_color_change(bytes: &mut Vec<u8>, color: Option<crate::terminal_theme::RgbColor>) {
@@ -486,7 +637,6 @@ fn build_sgr(fg: u32, bg: u32, modifier: u16) -> String {
 // ---------------------------------------------------------------------------
 
 /// Checks if two cells are visually identical.
-#[cfg(test)]
 fn cells_equal(a: &CellData, b: &CellData) -> bool {
     a.symbol == b.symbol
         && a.fg == b.fg
@@ -555,6 +705,116 @@ fn blit_frame_to_with_cursor_memory_and_policy(
         true,
         suppress_visible_cursor,
     );
+}
+
+fn frame_cell_index(frame: &FrameData, x: u16, y: u16) -> Option<usize> {
+    (x < frame.width && y < frame.height)
+        .then(|| usize::from(y) * usize::from(frame.width) + usize::from(x))
+}
+
+fn patch_cell_mut(rows: &mut [PaneSurfacePatchRow], x: u16, y: u16) -> Option<&mut CellData> {
+    rows.iter_mut().rev().find_map(|row| {
+        if row.y != y || x < row.x {
+            return None;
+        }
+        row.cells.get_mut(usize::from(x - row.x))
+    })
+}
+
+fn patch_rows_overlap(rows: &[PaneSurfacePatchRow]) -> bool {
+    rows.iter().enumerate().any(|(index, left)| {
+        let left_end = left.x.saturating_add(left.cells.len() as u16);
+        rows[index + 1..].iter().any(|right| {
+            if left.y != right.y {
+                return false;
+            }
+            let right_end = right.x.saturating_add(right.cells.len() as u16);
+            left.x < right_end && right.x < left_end
+        })
+    })
+}
+
+fn patch_row_fits(frame: &FrameData, row: &PaneSurfacePatchRow) -> bool {
+    let Ok(len) = u16::try_from(row.cells.len()) else {
+        return false;
+    };
+    if row.y >= frame.height
+        || row.x.saturating_add(len) > frame.width
+        || row.cells.iter().any(|cell| cell.hyperlink.is_some())
+    {
+        return false;
+    }
+    let start = usize::from(row.y) * usize::from(frame.width) + usize::from(row.x);
+    let end = start + row.cells.len();
+    frame
+        .cells
+        .get(start..end)
+        .is_some_and(|cells| cells.iter().all(|cell| cell.hyperlink.is_none()))
+}
+
+fn blit_patch_to(
+    mut writer: impl Write,
+    frame: &FrameData,
+    rows: &[PaneSurfacePatchRow],
+    cursor: Option<CursorState>,
+    last_visible_cursor: &mut Option<(u16, u16)>,
+    last_cursor_shape: &mut u8,
+    repeat_ime_anchor: bool,
+    suppress_visible_cursor: bool,
+) {
+    let _ = writer.write_all(b"\x1b[?2026h\x1b[?25l\x1b]8;;\x1b\\");
+    let mut last_sgr = String::new();
+    let mut active_hyperlink = None;
+    for row in rows {
+        let mut invalidated = 0usize;
+        let mut to_skip = 0usize;
+        let mut next_inline_col = None;
+        for (offset, cell) in row.cells.iter().enumerate() {
+            let col = row.x + offset as u16;
+            let idx = usize::from(row.y) * usize::from(frame.width) + usize::from(col);
+            let prev_cell = &frame.cells[idx];
+            if !cell.skip && (!cells_equal(cell, prev_cell) || invalidated > 0) && to_skip == 0 {
+                let cursor_position =
+                    (next_inline_col != Some(col) || invalidated > 0).then_some((col, row.y));
+                write_cell(
+                    &mut writer,
+                    cursor_position,
+                    cell,
+                    &mut last_sgr,
+                    &mut active_hyperlink,
+                    frame,
+                );
+                next_inline_col = (cell.symbol.is_ascii() && cell_width(cell) == 1)
+                    .then_some(col.saturating_add(1));
+            }
+            to_skip = cell_width(cell).saturating_sub(1);
+            let affected_width = cmp::max(cell_width(cell), cell_width(prev_cell));
+            invalidated = cmp::max(affected_width, invalidated).saturating_sub(1);
+        }
+    }
+    close_hyperlink(&mut writer, &mut active_hyperlink);
+    if !last_sgr.is_empty() {
+        let _ = writer.write_all(b"\x1b[0m");
+    }
+
+    let cursor_frame = FrameData {
+        cells: Vec::new(),
+        width: frame.width,
+        height: frame.height,
+        cursor,
+        hyperlinks: Vec::new(),
+        graphics: Vec::new(),
+    };
+    let mut host_cursor = resolve_host_cursor_state(&cursor_frame, last_visible_cursor);
+    if suppress_visible_cursor && host_cursor.visible {
+        host_cursor.visible = false;
+    }
+    write_host_cursor_state(&mut writer, host_cursor, last_cursor_shape);
+    let _ = writer.write_all(b"\x1b[?2026l");
+    if repeat_ime_anchor {
+        write_ime_anchor_cursor_state(&mut writer, host_cursor);
+    }
+    let _ = writer.flush();
 }
 
 fn blit_frame_to_with_cursor_memory_and_clear_policy(
@@ -1170,7 +1430,6 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1238,7 +1497,6 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1279,7 +1537,6 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1320,7 +1577,6 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 6,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1330,7 +1586,7 @@ mod tests {
         assert_eq!(drawn.cells[5].modifier, REVERSED_MODIFIER);
         assert_eq!(frame.cells[5].modifier, 0);
 
-        let encoded = BlitEncoder::new().encode_with_suppressed_visible_cursor(&drawn, false);
+        let encoded = BlitEncoder::new().encode_with_suppressed_visible_cursor(&frame, false);
         let output_str = String::from_utf8(encoded.bytes).unwrap();
 
         assert!(
@@ -1358,7 +1614,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1382,7 +1637,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1406,7 +1660,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1427,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn drawn_cursor_prefers_child_color_over_host_fallback() {
+    fn drawn_cursor_uses_requested_cursor_color() {
         let frame = FrameData {
             cells: vec![make_cell("A", 0, 0x02_f0_f0_f0, 0)],
             width: 1,
@@ -1437,11 +1690,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
-                color: Some(crate::terminal_theme::RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                }),
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1450,9 +1698,9 @@ mod tests {
         let drawn = frame_with_drawn_cursor(
             frame,
             Some(crate::terminal_theme::RgbColor {
-                r: 0x44,
-                g: 0x55,
-                b: 0x66,
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
             }),
         );
 
@@ -1465,7 +1713,7 @@ mod tests {
 
     #[test]
     fn native_cursor_color_tracks_child_override_and_reset() {
-        let mut frame = FrameData {
+        let frame = FrameData {
             cells: vec![make_cell("A", 0, 0, 0)],
             width: 1,
             height: 1,
@@ -1474,16 +1722,16 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: Some(crate::terminal_theme::RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                }),
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
         let mut encoder = BlitEncoder::new();
+        encoder.set_cursor_color(Some(crate::terminal_theme::RgbColor {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        }));
 
         let encoded = encoder.encode(&frame, false);
         assert!(encoded
@@ -1492,7 +1740,7 @@ mod tests {
             .any(|window| window == b"\x1b]12;rgb:11/22/33\x1b\\"));
         encoder.commit(frame.clone(), encoded);
 
-        frame.cursor.as_mut().unwrap().color = None;
+        encoder.set_cursor_color(None);
         let encoded = encoder.encode(&frame, false);
         assert!(encoded
             .bytes
@@ -1502,7 +1750,7 @@ mod tests {
 
     #[test]
     fn full_redraw_reset_preserves_physical_cursor_color_memory() {
-        let mut frame = FrameData {
+        let frame = FrameData {
             cells: vec![make_cell("A", 0, 0, 0)],
             width: 1,
             height: 1,
@@ -1511,17 +1759,17 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: Some(crate::terminal_theme::RgbColor { r: 1, g: 2, b: 3 }),
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
         let mut encoder = BlitEncoder::new();
+        encoder.set_cursor_color(Some(crate::terminal_theme::RgbColor { r: 1, g: 2, b: 3 }));
         let encoded = encoder.encode(&frame, false);
         encoder.commit(frame.clone(), encoded);
 
         encoder.reset_frame_baseline();
-        frame.cursor.as_mut().unwrap().color = None;
+        encoder.set_cursor_color(None);
         let encoded = encoder.encode(&frame, false);
 
         assert!(encoded
@@ -1541,7 +1789,6 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1561,7 +1808,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 6,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1609,7 +1855,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1623,7 +1868,6 @@ mod tests {
                 y: 1,
                 visible: false,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1849,6 +2093,197 @@ mod tests {
     }
 
     #[test]
+    fn retained_patch_matches_full_diff_and_updates_the_encoder_baseline() {
+        let previous = make_frame(
+            4,
+            2,
+            vec![
+                make_cell("a", 0, 0, 0),
+                make_cell("b", 0, 0, 0),
+                make_cell("c", 0, 0, 0),
+                make_cell("d", 0, 0, 0),
+                make_cell("e", 0, 0, 0),
+                make_cell("f", 0, 0, 0),
+                make_cell("g", 0, 0, 0),
+                make_cell("h", 0, 0, 0),
+            ],
+        );
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode(&previous, false);
+        encoder.commit(previous.clone(), initial);
+
+        let rows = vec![PaneSurfacePatchRow {
+            x: 0,
+            y: 1,
+            cells: vec![
+                make_cell("E", 0, 0, 0),
+                make_cell("f", 0, 0, 0),
+                make_cell("G", 0, 0, 0),
+                make_cell("h", 0, 0, 0),
+            ],
+        }];
+        let cursor = Some(CursorState {
+            x: 3,
+            y: 1,
+            visible: true,
+            shape: 2,
+        });
+        let mut expected = previous;
+        expected.cells[4..8].clone_from_slice(&rows[0].cells);
+        expected.cursor = cursor.clone();
+
+        let full_diff = encoder.encode(&expected, false);
+        let patch = encoder
+            .encode_patch(&rows, cursor.clone(), false)
+            .expect("valid retained patch");
+        assert_eq!(patch.bytes, full_diff.bytes);
+        assert!(encoder.commit_patch(&rows, cursor, patch));
+        assert!(encoder.is_current(&expected));
+    }
+
+    #[test]
+    fn retained_patch_width_transition_matches_full_diff_with_following_cell() {
+        let previous = make_frame(
+            3,
+            1,
+            vec![
+                make_cell("界", 0, 0, 0),
+                make_cell("z", 0, 0, 0),
+                make_cell("q", 0, 0, 0),
+            ],
+        );
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode(&previous, false);
+        encoder.commit(previous.clone(), initial);
+
+        let rows = vec![PaneSurfacePatchRow {
+            x: 0,
+            y: 0,
+            cells: vec![make_cell("x", 0, 0, 0), make_cell("z", 0, 0, 0)],
+        }];
+        let mut expected = previous;
+        expected.cells[0..2].clone_from_slice(&rows[0].cells);
+
+        let full_diff = encoder.encode(&expected, false);
+        let patch = encoder
+            .encode_patch(&rows, None, false)
+            .expect("valid retained patch");
+        assert_eq!(patch.bytes, full_diff.bytes);
+    }
+
+    #[test]
+    fn retained_patch_rejects_overlapping_rows() {
+        let frame = make_frame(
+            3,
+            1,
+            vec![
+                make_cell("a", 0, 0, 0),
+                make_cell("b", 0, 0, 0),
+                make_cell("c", 0, 0, 0),
+            ],
+        );
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode(&frame, false);
+        encoder.commit(frame, initial);
+        let rows = vec![
+            PaneSurfacePatchRow {
+                x: 0,
+                y: 0,
+                cells: vec![make_cell("A", 0, 0, 0), make_cell("B", 0, 0, 0)],
+            },
+            PaneSurfacePatchRow {
+                x: 1,
+                y: 0,
+                cells: vec![make_cell("C", 0, 0, 0)],
+            },
+        ];
+
+        assert!(encoder.encode_patch(&rows, None, false).is_none());
+    }
+
+    #[tokio::test]
+    async fn retained_patch_preserves_the_client_drawn_cursor_overlay() {
+        let mut previous = make_frame(
+            3,
+            1,
+            vec![
+                make_cell("a", 0x02_112233, 0x02_334455, REVERSED_MODIFIER),
+                make_cell("b", 0x02_445566, 0x02_778899, 0),
+                make_cell("c", 0, 0, 0),
+            ],
+        );
+        previous.cursor = Some(CursorState {
+            x: 0,
+            y: 0,
+            visible: true,
+            shape: 0,
+        });
+        let mut encoder = BlitEncoder::new();
+        let color = Some(crate::terminal_theme::RgbColor {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        });
+        encoder.set_cursor_color(color);
+        let initial = encoder.encode_with_suppressed_visible_cursor(&previous, false);
+        let rendered_patch =
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(3, 1, &initial.bytes);
+        let rendered_full =
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(3, 1, &initial.bytes);
+        encoder.commit(previous.clone(), initial);
+
+        let rows = Vec::new();
+        let cursor = Some(CursorState {
+            x: 1,
+            y: 0,
+            visible: true,
+            shape: 0,
+        });
+        let drawn_rows = encoder
+            .patch_rows_with_drawn_cursor(&rows, cursor.as_ref())
+            .expect("drawn cursor patch rows");
+        let mut expected = previous;
+        expected.cursor = cursor.clone();
+        let full_diff = encoder.encode_with_suppressed_visible_cursor(&expected, false);
+        let patch = encoder
+            .encode_patch(&drawn_rows, cursor.clone(), true)
+            .expect("valid drawn cursor patch");
+        rendered_patch.test_process_pty_bytes(&patch.bytes);
+        rendered_full.test_process_pty_bytes(&full_diff.bytes);
+        let area = ratatui::layout::Rect::new(0, 0, 3, 1);
+        assert_eq!(
+            crate::server::render_stream::render_terminal_virtual(&rendered_patch, area).0,
+            crate::server::render_stream::render_terminal_virtual(&rendered_full, area).0
+        );
+        assert!(encoder.commit_patch(&rows, cursor.clone(), patch));
+        assert!(encoder.is_current(&frame_with_drawn_cursor(expected.clone(), color)));
+
+        let next_color = Some(crate::terminal_theme::RgbColor {
+            r: 0xaa,
+            g: 0xbb,
+            b: 0xcc,
+        });
+        encoder.set_cursor_color(next_color);
+        let recolored_rows = encoder
+            .patch_rows_with_drawn_cursor(&[], cursor.as_ref())
+            .unwrap();
+        let full_diff = encoder.encode_with_suppressed_visible_cursor(&expected, false);
+        let patch = encoder
+            .encode_patch(&recolored_rows, cursor.clone(), true)
+            .unwrap();
+        rendered_patch.test_process_pty_bytes(&patch.bytes);
+        rendered_full.test_process_pty_bytes(&full_diff.bytes);
+        assert_eq!(
+            crate::server::render_stream::render_terminal_virtual(&rendered_patch, area).0,
+            crate::server::render_stream::render_terminal_virtual(&rendered_full, area).0
+        );
+        assert!(encoder.commit_patch(&[], cursor, patch));
+        assert!(encoder.is_current(&frame_with_drawn_cursor(expected, next_color)));
+        rendered_patch.shutdown();
+        rendered_full.shutdown();
+    }
+
+    #[test]
     fn blit_frame_positions_cursor() {
         let frame = FrameData {
             cells: vec![make_cell("A", 0, 0, 0)],
@@ -1859,7 +2294,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1886,7 +2320,6 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1935,7 +2368,6 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1958,7 +2390,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1988,7 +2419,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -2000,7 +2430,6 @@ mod tests {
             y: 2,
             visible: true,
             shape: 0,
-            color: None,
         });
 
         let mut output = Vec::new();
@@ -2030,7 +2459,6 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -2116,7 +2544,6 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
-                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),

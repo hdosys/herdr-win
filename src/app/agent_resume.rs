@@ -295,7 +295,7 @@ impl App {
 fn derived_pending_agent_resume_pane_infos(
     tab: &crate::workspace::Tab,
     terminal_area: Rect,
-    pane_borders: bool,
+    pane_borders: crate::config::PaneBordersConfig,
     pane_gaps: bool,
     pane_outer_borders: bool,
 ) -> Vec<crate::layout::PaneInfo> {
@@ -337,7 +337,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),

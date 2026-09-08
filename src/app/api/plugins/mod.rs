@@ -6,11 +6,11 @@ mod runtime;
 
 use super::responses::{encode_error, encode_success};
 use crate::api::schema::{
-    InstalledPluginInfo, PluginActionInfo, PluginActionInvokeParams, PluginActionListParams,
-    PluginLinkParams, PluginListParams, PluginLogListParams, PluginManifestAction,
-    PluginManifestLinkHandler, PluginPaneCloseParams, PluginPaneFocusParams, PluginPaneInfo,
-    PluginPaneOpenParams, PluginPanePlacement, PluginSetEnabledParams, PluginUnlinkParams,
-    ResponseResult,
+    InstalledPluginInfo, PaneLinkActivateParams, PluginActionInfo, PluginActionInvokeParams,
+    PluginActionListParams, PluginLinkParams, PluginListParams, PluginLogListParams,
+    PluginManifestAction, PluginManifestLinkHandler, PluginPaneCloseParams, PluginPaneFocusParams,
+    PluginPaneInfo, PluginPaneOpenParams, PluginPanePlacement, PluginSetEnabledParams,
+    PluginUnlinkParams, ResponseResult,
 };
 use crate::app::App;
 pub(super) use manifest::normalize_plugin_id;
@@ -37,7 +37,7 @@ impl App {
     }
 
     fn refresh_installed_plugins(&mut self) -> std::io::Result<()> {
-        if self.no_session {
+        if !self.policy.persist_plugin_registry {
             return Ok(());
         }
         let entries = crate::persist::plugin_registry::try_load()?;
@@ -49,7 +49,7 @@ impl App {
         &mut self,
         mutation: impl FnOnce(&mut crate::app::state::InstalledPluginRegistry) -> T,
     ) -> std::io::Result<T> {
-        if self.no_session {
+        if !self.policy.persist_plugin_registry {
             return Ok(mutation(&mut self.state.installed_plugins));
         }
         let (result, entries) = crate::persist::plugin_registry::update(|entries| {
@@ -225,6 +225,7 @@ impl App {
     pub(crate) fn invoke_plugin_action_from_keybind(
         &mut self,
         action_id: String,
+        selected_text: Option<String>,
     ) -> Result<(), String> {
         self.refresh_installed_plugins()
             .map_err(|err| format!("failed to load plugin registry: {err}"))?;
@@ -241,6 +242,7 @@ impl App {
         .map_err(|(_, message)| message)?;
         let mut context = self.current_plugin_context("keybinding");
         context.invocation_source = Some("keybinding".to_string());
+        context.selected_text = selected_text;
         self.start_plugin_command(
             &plugin,
             Some(action.action_id),
@@ -251,6 +253,80 @@ impl App {
         )
         .map(|_| ())
         .map_err(|(_, message)| message)
+    }
+
+    pub(super) fn handle_pane_link_activate(
+        &mut self,
+        id: String,
+        params: PaneLinkActivateParams,
+    ) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return encode_error(id, "pane_not_found", "pane not found");
+        };
+        if !self.state.pane_visible_on_active_surface(ws_idx, pane_id) {
+            return encode_error(id, "stale_target", "pane is no longer visible");
+        }
+        let Some(runtime) =
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+        else {
+            return encode_error(id, "pane_not_found", "pane runtime not found");
+        };
+        let current_offset = runtime
+            .scroll_metrics()
+            .map(|metrics| metrics.offset_from_bottom as u64);
+        if params
+            .offset_from_bottom
+            .is_some_and(|expected| current_offset != Some(expected))
+        {
+            return encode_error(
+                id,
+                "stale_content",
+                "pane viewport changed before link activation",
+            );
+        }
+        let content_revision = runtime.content_seq();
+        if content_revision % 2 != 0
+            || params
+                .content_revision
+                .is_some_and(|expected| expected != content_revision)
+        {
+            return encode_error(
+                id,
+                "stale_content",
+                "pane content changed before link activation",
+            );
+        }
+        let url = self.state.url_at_pane_surface_cell(
+            &self.terminal_runtimes,
+            ws_idx,
+            pane_id,
+            params.viewport_row,
+            params.col,
+        );
+        if runtime.content_seq() != content_revision
+            || runtime
+                .scroll_metrics()
+                .map(|metrics| metrics.offset_from_bottom as u64)
+                != current_offset
+        {
+            return encode_error(
+                id,
+                "stale_content",
+                "pane content or viewport changed during link activation",
+            );
+        }
+        let handled = match url.as_deref() {
+            Some(url) => match self.invoke_plugin_link_handler_for_url(url, pane_id) {
+                Ok(handled) => handled,
+                Err(err) => {
+                    tracing::warn!(err = %err, url = %url, "failed to invoke plugin link handler");
+                    false
+                }
+            },
+            None => false,
+        };
+        encode_success(id, ResponseResult::PaneLinkActivated { url, handled })
     }
 
     pub(crate) fn invoke_plugin_link_handler_for_url(
@@ -382,10 +458,12 @@ impl App {
         ) {
             return encode_error(id, code, message);
         }
-        pane.command = crate::plugin_command::argv_for_dir(
-            &pane.command,
+        pane.command[0] = crate::plugin_command::program_for_cwd(
+            &pane.command[0],
             std::path::Path::new(&plugin.plugin_root),
-        );
+        )
+        .display()
+        .to_string();
         let placement = params.placement.unwrap_or(pane.placement);
         if placement != PluginPanePlacement::Popup
             && (params.width.is_some() || params.height.is_some())
@@ -396,13 +474,8 @@ impl App {
                 "width and height are only supported when placement is popup",
             );
         }
-        if placement == PluginPanePlacement::Popup && self.state.mode != crate::app::Mode::Terminal
-        {
-            return encode_error(
-                id,
-                "ui_busy",
-                "popup panes can only open from the normal workspace view",
-            );
+        if placement == PluginPanePlacement::Popup && self.state.popup_pane.is_some() {
+            return encode_error(id, "ui_busy", "a popup pane is already open");
         }
         match placement {
             PluginPanePlacement::Overlay | PluginPanePlacement::Popup => {
@@ -461,7 +534,7 @@ impl App {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         }
         self.state.focus_pane_in_workspace(ws_idx, pane_id);
-        self.state.settle_terminal_mode_after_focus();
+        self.state.mode = crate::app::Mode::Terminal;
         let Some(record) = self.state.plugin_panes.get(&pane_id).cloned() else {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         };
@@ -720,7 +793,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
@@ -920,7 +993,16 @@ platforms = ["linux", "macos", "windows"]
         assert_eq!(plugin.plugin_id, "example.worktree-bootstrap");
         assert_eq!(plugin.name, "Worktree Bootstrap");
         assert_eq!(plugin.version, "0.1.0");
-        assert_eq!(plugin.plugin_root, canonical_path_string(&root));
+        assert_eq!(
+            plugin.manifest_path,
+            canonical_path_string(&root.join("herdr-plugin.toml"))
+        );
+        assert_eq!(
+            plugin.plugin_root,
+            crate::platform::plugin_runtime_path(&root.canonicalize().unwrap())
+                .display()
+                .to_string()
+        );
         assert!(plugin.enabled);
         assert_eq!(plugin.build.len(), 1);
         assert_eq!(plugin.build[0].command, ["bun", "install"]);
@@ -1370,68 +1452,6 @@ platforms = ["linux", "macos"]
         assert_eq!(value["error"]["code"], "plugin_not_found");
     }
 
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn plugin_pane_open_resolves_relative_executable_from_plugin_root() {
-        let mut app = test_app();
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new(
-            "plugin-relative-pane",
-        )];
-        app.state.ensure_test_terminals();
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = crate::app::Mode::Terminal;
-
-        let root = unique_temp_path("plugin-pane-relative-command");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-            .join("System32")
-            .join("where.exe");
-        std::fs::copy(source, root.join("tool.exe")).unwrap();
-        write_manifest_content(
-            &root,
-            r#"
-id = "example.relative-pane"
-name = "Relative Pane"
-version = "0.1.0"
-min_herdr_version = "0.8.0"
-platforms = ["windows"]
-
-[[panes]]
-id = "tool"
-title = "Relative Tool"
-placement = "split"
-command = ["./tool.exe", "/?"]
-"#,
-        );
-        link_manifest(&mut app, &root);
-
-        let open = app.handle_api_request(Request {
-            id: "pane-open-relative".into(),
-            method: Method::PluginPaneOpen(PluginPaneOpenParams {
-                plugin_id: "example.relative-pane".into(),
-                entrypoint: "tool".into(),
-                placement: None,
-                width: None,
-                height: None,
-                workspace_id: None,
-                target_pane_id: None,
-                direction: None,
-                cwd: None,
-                focus: false,
-                env: std::collections::HashMap::new(),
-            }),
-        });
-        let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
-            panic!("expected plugin pane opened response: {open}");
-        };
-
-        for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
-        }
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[test]
     fn plugin_pane_open_rejects_popup_size_for_non_popup_placement() {
         let mut app = test_app();
@@ -1461,67 +1481,172 @@ command = ["./tool.exe", "/?"]
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn plugin_pane_open_popup_preserves_existing_ui_modes() {
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_plugin_pane_commands_resolve_from_plugin_root_with_cwd_override() {
+        use std::os::windows::ffi::OsStrExt;
+
         let mut app = test_app();
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("modal")];
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-pane-paths")];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
-        let root = unique_temp_path("plugin-popup-ui-busy");
-        write_manifest(&root);
+        app.state.mode = crate::app::Mode::Terminal;
+
+        let root = unique_temp_path("plugin-pane-paths");
+        let child_cwd = root.join("child-cwd");
+        std::fs::create_dir_all(&child_cwd).unwrap();
+        let cleanup_root = root.canonicalize().unwrap();
+        let tool = root.join("tool.exe");
+        let long_where_relative = format!("bin/{}/where.exe", "x".repeat(220));
+        let long_where = root.join(&long_where_relative);
+        std::fs::create_dir_all(long_where.parent().unwrap()).unwrap();
+        let shell = std::env::var_os("ComSpec").expect("ComSpec");
+        std::fs::copy(&shell, &tool).unwrap();
+        let where_exe = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/where.exe");
+        std::fs::copy(where_exe, &long_where).unwrap();
+        let where_probe = "herdr-long-path-probe.exe";
+        std::fs::write(child_cwd.join(where_probe), b"").unwrap();
+        assert!(
+            root.as_os_str().encode_wide().count()
+                < windows_sys::Win32::Foundation::MAX_PATH as usize
+        );
+        assert!(
+            long_where.as_os_str().encode_wide().count()
+                >= windows_sys::Win32::Foundation::MAX_PATH as usize
+        );
+        let script = "@echo off\r\n(echo %1&cd)>capture-%1.tmp\r\nmove /y capture-%1.tmp capture-%1.txt >nul\r\n";
+        std::fs::write(root.join("slot.cmd"), script).unwrap();
+        std::fs::write(child_cwd.join("slot.cmd"), script).unwrap();
+        write_manifest_content(
+            &root,
+            &format!(
+                r#"
+id = "example.pane-paths"
+name = "Pane Paths"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+platforms = ["windows"]
+
+[[panes]]
+id = "explicit"
+title = "Explicit"
+command = ["./tool.exe", "/d", "/c", "slot.cmd", "explicit"]
+
+[[panes]]
+id = "bare"
+title = "Bare"
+command = ["tool.exe", "/d", "/c", "slot.cmd", "bare"]
+
+[[panes]]
+id = "path"
+title = "Path"
+command = ["cmd.exe", "/d", "/c", "slot.cmd", "path"]
+
+[[panes]]
+id = "absolute"
+title = "Absolute"
+command = ['{}', "/d", "/c", "slot.cmd", "absolute"]
+
+[[panes]]
+id = "long"
+title = "Long executable"
+command = ['./{}', "{}"]
+
+[[panes]]
+id = "default"
+title = "Default cwd"
+command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
+"#,
+                tool.display(),
+                long_where_relative,
+                where_probe
+            ),
+        );
         link_manifest(&mut app, &root);
 
-        let open_popup = |app: &mut App, id: &str| {
-            app.handle_api_request(Request {
-                id: id.into(),
+        for (entrypoint, cwd) in [
+            ("explicit", Some(&child_cwd)),
+            ("bare", Some(&child_cwd)),
+            ("path", Some(&child_cwd)),
+            ("absolute", Some(&child_cwd)),
+            ("long", Some(&child_cwd)),
+            ("default", None),
+        ] {
+            let expected_cwd = cwd.unwrap_or(&root);
+            let open = app.handle_api_request(Request {
+                id: format!("pane-open-{entrypoint}"),
                 method: Method::PluginPaneOpen(PluginPaneOpenParams {
-                    plugin_id: "example.worktree-bootstrap".into(),
-                    entrypoint: "board".into(),
-                    placement: Some(PluginPanePlacement::Popup),
+                    plugin_id: "example.pane-paths".into(),
+                    entrypoint: entrypoint.into(),
+                    placement: Some(PluginPanePlacement::Split),
                     width: None,
                     height: None,
                     workspace_id: None,
                     target_pane_id: None,
                     direction: None,
-                    cwd: None,
-                    focus: true,
+                    cwd: cwd.map(|path| path.display().to_string()),
+                    focus: false,
                     env: std::collections::HashMap::new(),
                 }),
-            })
-        };
+            });
+            let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
+                panic!("failed to open {entrypoint} plugin pane: {open}");
+            };
+            if entrypoint == "long" {
+                let Some((ws_idx, pane_id)) = app.parse_pane_id(&plugin_pane.pane.pane_id) else {
+                    panic!("opened pane id should parse");
+                };
+                let runtime = app
+                    .state
+                    .runtime_for_pane_in_workspace(&app.terminal_runtimes, ws_idx, pane_id)
+                    .expect("long executable pane runtime");
+                let expected = child_cwd.join(where_probe).canonicalize().unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let text = runtime.recent_unwrapped_text(20);
+                    if text.lines().any(|line| {
+                        std::fs::canonicalize(line.trim()).is_ok_and(|path| path == expected)
+                    }) {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "long where.exe output missing from pane: {text:?}"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                continue;
+            }
+            let capture = read_capture_when_ready(
+                &expected_cwd.join(format!("capture-{entrypoint}.txt")),
+                || {},
+            );
+            let mut lines = capture.lines();
+            assert_eq!(lines.next(), Some(entrypoint));
+            let actual_cwd = std::fs::canonicalize(lines.next().expect("captured cwd")).unwrap();
+            assert_eq!(actual_cwd, expected_cwd.canonicalize().unwrap());
+        }
 
-        app.state.mode = crate::app::Mode::Settings;
-        app.state.settings.original_theme = Some("settings-theme".into());
-        let settings_response = open_popup(&mut app, "settings-popup");
-        let settings_error: serde_json::Value = serde_json::from_str(&settings_response).unwrap();
-        assert_eq!(settings_error["error"]["code"], "ui_busy");
-        assert_eq!(app.state.mode, crate::app::Mode::Settings);
-        assert_eq!(
-            app.state.settings.original_theme.as_deref(),
-            Some("settings-theme")
-        );
-        assert!(app.state.popup_pane.is_none());
-
-        let copy_mode = crate::app::state::CopyModeState {
-            pane_id: root_pane,
-            cursor_row: 2,
-            cursor_col: 3,
-            entry_offset_from_bottom: 4,
-            selection: None,
-            search: crate::app::state::CopyModeSearchState::default(),
-        };
-        app.state.mode = crate::app::Mode::Copy;
-        app.state.copy_mode = Some(copy_mode.clone());
-        let copy_response = open_popup(&mut app, "copy-popup");
-        let copy_error: serde_json::Value = serde_json::from_str(&copy_response).unwrap();
-        assert_eq!(copy_error["error"]["code"], "ui_busy");
-        assert_eq!(app.state.mode, crate::app::Mode::Copy);
-        assert_eq!(app.state.copy_mode, Some(copy_mode));
-        assert!(app.state.popup_pane.is_none());
-
-        let _ = std::fs::remove_dir_all(root);
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        // PTY actor shutdown is queued, so its Windows handles can outlive `shutdown()`.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(&cleanup_root) {
+                Ok(()) => break,
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "failed to remove {} after runtime shutdown: {error}",
+                        cleanup_root.display()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -1747,7 +1872,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub.clone(),
@@ -1830,7 +1955,7 @@ command = ["sh", "-c", "sleep 1"]
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub.clone(),
@@ -1909,7 +2034,7 @@ command = ["sh", "-c", "sleep 1"]
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub.clone(),
@@ -1988,7 +2113,7 @@ command = ["sh", "-c", "sleep 1"]
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub.clone(),
@@ -2024,8 +2149,8 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
         write_manifest_content(&root, &manifest);
         link_manifest(&mut app, &root);
 
-        let open = app.handle_api_request(Request {
-            id: "pane-open-popup".into(),
+        let popup_request = |id: &str| Request {
+            id: id.into(),
             method: Method::PluginPaneOpen(PluginPaneOpenParams {
                 plugin_id: "example.popup".into(),
                 entrypoint: "board".into(),
@@ -2039,8 +2164,14 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                 focus: true,
                 env: std::collections::HashMap::new(),
             }),
-        });
+        };
+        app.state.mode = crate::app::Mode::Navigate;
+        let open = app.handle_api_request(popup_request("pane-open-popup"));
         assert_eq!(response_result(&open), ResponseResult::Ok {});
+        let duplicate = app.handle_api_request(popup_request("pane-open-popup-duplicate"));
+        let duplicate: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&duplicate).unwrap();
+        assert_eq!(duplicate.error.code, "ui_busy");
         assert_eq!(
             read_capture_when_ready(&env_capture, || {
                 app.drain_internal_events();
@@ -2079,6 +2210,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
 
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: opened_pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(app.state.popup_pane.is_none());
         assert!(event_hub.events_after(0).is_empty());
@@ -2250,7 +2382,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
         .unwrap();
 
         let mut app = test_app();
-        app.no_session = false;
+        app.policy.persist_plugin_registry = true;
         let workspace = crate::workspace::Workspace::test_new("plugin-refresh");
         let pane_id = workspace.tabs[0].root_pane;
         app.state.workspaces = vec![workspace];
@@ -2268,7 +2400,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
 
         make_stale(&mut app);
         assert!(app
-            .invoke_plugin_action_from_keybind("bootstrap".into())
+            .invoke_plugin_action_from_keybind("bootstrap".into(), None)
             .unwrap_err()
             .contains("disabled"));
 
@@ -2485,7 +2617,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
     }
 
     #[tokio::test]
-    async fn current_plugin_context_includes_selected_text_for_focused_pane() {
+    async fn current_plugin_context_leaves_client_owned_selection_empty() {
         let mut app = test_app();
         let workspace = crate::workspace::Workspace::test_new("plugin-selection");
         let pane_id = workspace.tabs[0].root_pane;
@@ -2499,11 +2631,9 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
             terminal_id,
             crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"hello plugin\n"),
         );
-        app.state.selection = Some(crate::selection::Selection::range(pane_id, 0, 0, 4, None));
-
         let context = app.current_plugin_context("selection-test");
 
-        assert_eq!(context.selected_text.as_deref(), Some("hello"));
+        assert_eq!(context.selected_text, None);
     }
 
     #[cfg(unix)]
@@ -2995,6 +3125,7 @@ action = "missing"
         let _ = app.handle_pane_report_agent(
             "report".into(),
             crate::api::schema::PaneReportAgentParams {
+                suppress_completion: false,
                 pane_id: pane_public.clone(),
                 source: "test".into(),
                 agent: "codex".into(),
@@ -3003,7 +3134,6 @@ action = "missing"
                 seq: None,
                 agent_session_id: None,
                 agent_session_path: None,
-                suppress_completion: false,
             },
         );
 
@@ -3320,7 +3450,10 @@ command = ["sh", "-c", "echo ok"]
             },
         );
 
-        app.handle_internal_event(crate::events::AppEvent::PaneDied { pane_id });
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
 
         assert!(!app.state.plugin_panes.contains_key(&pane_id));
     }

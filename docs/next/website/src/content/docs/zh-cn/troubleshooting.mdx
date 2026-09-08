@@ -61,7 +61,7 @@ map alt+right send_text all \x1bf
 
 ## Herdr 已更新，但运行中的会话仍是旧版本
 
-更新二进制文件不一定会替换已经运行且兼容的服务器。先检查 `herdr status`。要启动更新后的服务器，请停止会话并重新启动 Herdr:
+更新二进制文件不会替换正在运行的兼容服务器。重新打开 Herdr 即可使用更新后的客户端。只有还需要本次发行的服务器功能时，才先检查 `herdr status`，然后停止会话并重新启动 Herdr:
 
 ```bash
 herdr server stop
@@ -69,6 +69,23 @@ herdr
 ```
 
 停止服务器会结束窗格进程。命名会话使用 `herdr session stop <name>`。更新器、软件包管理器和实时移交行为见[安装 Herdr](/zh-cn/docs/install/#update)。
+
+## macOS 上依赖钥匙串的工具仅在 Herdr 内失败
+
+在 Herdr 窗格中检查服务器的启动上下文:
+
+```bash
+launchctl managername
+```
+
+如果输出为 `Background`，请停止服务器，然后从普通 GUI 终端重新启动 Herdr:
+
+```bash
+herdr server stop
+herdr
+```
+
+停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
 
 ## 找不到 `herdr` 命令
 

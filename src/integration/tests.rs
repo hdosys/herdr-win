@@ -14,6 +14,40 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 #[test]
+fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
+    use base64::Engine;
+
+    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\herdr-agent-state.ps1");
+    let command = powershell_encoded_hook_command(hook_path, "session");
+    let encoded = command
+        .strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
+        .expect("encoded PowerShell command");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("base64 payload");
+    let mut chunks = bytes.chunks_exact(2);
+    let utf16 = chunks
+        .by_ref()
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    assert!(chunks.remainder().is_empty(), "UTF-16LE payload");
+    assert_eq!(
+        String::from_utf16(&utf16).expect("PowerShell script"),
+        r"& 'C:\Users\O''Neil λ\App Data\hooks\herdr-agent-state.ps1' session"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_antigravity_cli_hook_command_uses_encoded_powershell() {
+    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\herdr-agent-state.ps1");
+    assert_eq!(
+        antigravity_cli_hook_command(hook_path, "session"),
+        powershell_encoded_hook_command(hook_path, "session")
+    );
+}
+
+#[test]
 fn extract_version_triple_parses_common_outputs() {
     assert_eq!(extract_version_triple("0.14.0"), Some((0, 14, 0)));
     assert_eq!(extract_version_triple("v1.2.3"), Some((1, 2, 3)));
@@ -100,6 +134,8 @@ fn clear_integration_path_env() {
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
     std::env::remove_var("XDG_CONFIG_HOME");
+    #[cfg(windows)]
+    std::env::remove_var("APPDATA");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(QWEN_HOME_ENV_VAR);
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
@@ -172,6 +208,36 @@ fn home_dir_uses_userprofile_when_home_is_missing() {
         std::env::set_var("USERPROFILE", userprofile);
     } else {
         std::env::remove_var("USERPROFILE");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_devin_dir_uses_appdata_without_xdg_override() {
+    let previous_appdata;
+    {
+        let _lock = integration_env_lock();
+        previous_appdata = std::env::var_os("APPDATA");
+        let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let base = unique_base();
+        let appdata = base.join("appdata");
+        let xdg = base.join("xdg");
+        std::env::set_var("APPDATA", &appdata);
+
+        assert_eq!(devin_dir().unwrap(), appdata.join("devin"));
+
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        assert_eq!(devin_dir().unwrap(), xdg.join("devin"));
+
+        if let Some(value) = previous_xdg {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+    {
+        let _lock = integration_env_lock();
+        assert_eq!(std::env::var_os("APPDATA"), previous_appdata);
     }
 }
 
@@ -1086,7 +1152,7 @@ fn claude_v1_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 8);
+    assert_eq!(claude.expected_version, 9);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1116,7 +1182,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 8);
+    assert_eq!(claude.expected_version, 9);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2042,8 +2108,8 @@ fn install_droid_writes_hook_to_settings_and_cleans_legacy_hooks_json() {
     fs::write(
             droid_dir.join("hooks.json"),
             format!(
-                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":"{}","timeout":10}}]}}],"PreToolUse":[{{"matcher":"Read","hooks":[{{"type":"command","command":"echo keep","timeout":10}}]}}]}}}}"#,
-                legacy_command,
+                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":{},"timeout":10}}]}}],"PreToolUse":[{{"matcher":"Read","hooks":[{{"type":"command","command":"echo keep","timeout":10}}]}}]}}}}"#,
+                serde_json::to_string(&legacy_command).unwrap(),
             ),
         )
         .unwrap();
@@ -2167,16 +2233,16 @@ fn uninstall_droid_removes_herdr_hooks_and_preserves_others() {
     fs::write(
             droid_dir.join("hooks.json"),
             format!(
-                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":"{}","timeout":10}},{{"type":"command","command":"echo keep","timeout":10}}]}}],"PreToolUse":[{{"matcher":"Read","hooks":[{{"type":"command","command":"echo read","timeout":10}}]}}]}}}}"#,
-                command,
+                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":{},"timeout":10}},{{"type":"command","command":"echo keep","timeout":10}}]}}],"PreToolUse":[{{"matcher":"Read","hooks":[{{"type":"command","command":"echo read","timeout":10}}]}}]}}}}"#,
+                serde_json::to_string(&command).unwrap(),
             ),
         )
         .unwrap();
     fs::write(
             droid_dir.join("settings.json"),
             format!(
-                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":"{}","timeout":10}}]}}],"PostToolUse":[{{"matcher":"Edit","hooks":[{{"type":"command","command":"echo post","timeout":10}}]}}]}}}}"#,
-                command,
+                r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":{},"timeout":10}}]}}],"PostToolUse":[{{"matcher":"Edit","hooks":[{{"type":"command","command":"echo post","timeout":10}}]}}]}}}}"#,
+                serde_json::to_string(&command).unwrap(),
             ),
         )
         .unwrap();
@@ -2769,191 +2835,6 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             "{name} asset version must match its integration version constant"
         );
     }
-}
-
-#[test]
-fn bundled_integration_assets_report_session_refs() {
-    assert!(PI_EXTENSION_ASSET.contains("agent_session_path"));
-    assert!(PI_EXTENSION_ASSET.contains("agent_session_id"));
-    assert!(PI_EXTENSION_ASSET.contains("ctx?.mode !== \"tui\""));
-    assert!(PI_EXTENSION_ASSET.contains("pane.report_agent_session"));
-    assert!(PI_EXTENSION_ASSET.contains("pane.report_agent\""));
-    assert!(PI_EXTENSION_ASSET.contains("pi.on(\"agent_start\""));
-    assert!(PI_EXTENSION_ASSET.contains("pi.on(\"agent_settled\""));
-    assert!(!PI_EXTENSION_ASSET.contains("pi.on(\"session_shutdown\""));
-    assert!(OMP_EXTENSION_ASSET.contains("agent_session_path"));
-    assert!(OMP_EXTENSION_ASSET.contains("agent_session_id"));
-    assert!(OMP_EXTENSION_ASSET.contains("ctx?.hasUI !== true"));
-    assert!(OMP_EXTENSION_ASSET.contains("pane.report_agent_session"));
-    assert!(OMP_EXTENSION_ASSET.contains("pane.report_agent\""));
-    assert!(OMP_EXTENSION_ASSET.contains("pi.on(\"agent_start\""));
-    assert!(OMP_EXTENSION_ASSET.contains("pi.on(\"agent_end\""));
-    assert!(OMP_EXTENSION_ASSET.contains("pi.on(\"session_shutdown\""));
-    assert!(
-        CLAUDE_HOOK_ASSET.contains("agent_session_id")
-            || CLAUDE_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        CLAUDE_HOOK_ASSET.contains("agent_session_path")
-            || CLAUDE_HOOK_ASSET.contains("--agent-session-path")
-    );
-    assert!(CLAUDE_HOOK_ASSET.contains("agent_id"));
-    assert!(
-        CLAUDE_HOOK_ASSET.contains("session_start_source")
-            || CLAUDE_HOOK_ASSET.contains("--session-start-source")
-    );
-    assert!(
-        CLAUDE_HOOK_ASSET.contains("pane.report_agent_session")
-            || CLAUDE_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(!CLAUDE_HOOK_ASSET.contains("\"state\": action"));
-    assert!(!CLAUDE_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(
-        CODEX_HOOK_ASSET.contains("HERDR_HOOK_INPUT_FILE")
-            || CODEX_HOOK_ASSET.contains("In.ReadToEnd")
-    );
-    assert!(
-        CODEX_HOOK_ASSET.contains("agent_session_id")
-            || CODEX_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        CODEX_HOOK_ASSET.contains("session_start_source")
-            || CODEX_HOOK_ASSET.contains("--session-start-source")
-    );
-    assert!(CODEX_HOOK_ASSET.contains("CODEX_THREAD_ID"));
-    assert!(
-        CODEX_HOOK_ASSET.contains("pane.report_agent_session")
-            || CODEX_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(!CODEX_HOOK_ASSET.contains("\"state\": action"));
-    assert!(!CODEX_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(
-        KIMI_HOOK_ASSET.contains("source\": \"herdr:kimi")
-            || KIMI_HOOK_ASSET.contains("--source herdr:kimi")
-    );
-    assert!(
-        KIMI_HOOK_ASSET.contains("agent_session_id")
-            || KIMI_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        KIMI_HOOK_ASSET.contains("method = \"pane.report_agent_session\"")
-            || KIMI_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(
-        KIMI_HOOK_ASSET.contains("params[\"session_start_source\"] = \"startup\"")
-            || KIMI_HOOK_ASSET.contains("--session-start-source startup")
-    );
-    assert!(
-        KIMI_HOOK_ASSET.contains("method = \"pane.report_agent\"")
-            || KIMI_HOOK_ASSET.contains("pane report-agent ")
-    );
-    assert!(
-        KIMI_HOOK_ASSET.contains("params[\"state\"] = action")
-            || KIMI_HOOK_ASSET.contains("--state $Action")
-    );
-    assert!(!KIMI_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(
-        COPILOT_HOOK_ASSET.contains("agent_session_id")
-            || COPILOT_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        COPILOT_HOOK_ASSET.contains("pane.report_agent_session")
-            || COPILOT_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(!COPILOT_HOOK_ASSET.contains("\"state\":"));
-    assert!(!COPILOT_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(
-        DEVIN_HOOK_ASSET.contains("HERDR_DEVIN_LIST_JSON")
-            || DEVIN_HOOK_ASSET.contains("devin list --format json")
-    );
-    assert!(
-        DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent_session\"")
-            || DEVIN_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(!DEVIN_HOOK_ASSET.contains("\"method\": \"pane.report_agent\""));
-    assert!(!DEVIN_HOOK_ASSET.contains("\"state\":"));
-    assert!(!DEVIN_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(
-        DEVIN_HOOK_ASSET.contains("agent_session_id")
-            || DEVIN_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        DROID_HOOK_ASSET.contains("agent_session_id")
-            || DROID_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        DROID_HOOK_ASSET.contains("pane.report_agent_session")
-            || DROID_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(!DROID_HOOK_ASSET.contains("\"state\": action"));
-    assert!(!DROID_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(OPENCODE_PLUGIN_ASSET.contains("properties?.sessionID"));
-    assert!(OPENCODE_PLUGIN_ASSET.contains("params.agent_session_id = sessionID"));
-    assert!(OPENCODE_PLUGIN_ASSET.contains("pane.report_agent_session"));
-    assert!(OPENCODE_PLUGIN_ASSET.contains("reportState"));
-    assert!(!OPENCODE_PLUGIN_ASSET.contains("pane.release_agent"));
-    assert!(KILO_PLUGIN_ASSET.contains("SOURCE = \"herdr:kilo\""));
-    assert!(KILO_PLUGIN_ASSET.contains("AGENT = \"kilo\""));
-    assert!(KILO_PLUGIN_ASSET.contains("pane.report_agent_session"));
-    assert!(KILO_PLUGIN_ASSET.contains("session_start_source: \"startup\""));
-    assert!(KILO_PLUGIN_ASSET.contains("reportState"));
-    assert!(!KILO_PLUGIN_ASSET.contains("pane.release_agent"));
-    assert!(QODERCLI_HOOK_ASSET.contains("HERDR_PANE_ID"));
-    assert!(QODERCLI_HOOK_ASSET.contains("session_id"));
-    assert!(QODERCLI_HOOK_ASSET.contains("report-agent-session"));
-    assert!(QODERCLI_HOOK_ASSET.contains("--agent-session-id"));
-    assert!(!QODERCLI_HOOK_ASSET.contains("report-agent\""));
-    assert!(!QODERCLI_HOOK_ASSET.contains("release-agent"));
-    assert!(CURSOR_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=cursor"));
-    assert!(CURSOR_HOOK_ASSET.contains("conversation_id"));
-    assert!(CURSOR_HOOK_ASSET.contains("conversationId"));
-    assert!(CURSOR_HOOK_ASSET.contains("sessionId"));
-    assert!(
-        CURSOR_HOOK_ASSET.contains("agent_session_id")
-            || CURSOR_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        CURSOR_HOOK_ASSET.contains("pane.report_agent_session")
-            || CURSOR_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(CURSOR_HOOK_ASSET.contains("hook_event_name"));
-    assert!(CURSOR_HOOK_ASSET.contains("sessionStart"));
-    assert!(!CURSOR_HOOK_ASSET.contains("\"state\":"));
-    assert!(!CURSOR_HOOK_ASSET.contains("pane.release_agent"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=mastracode"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("HERDR_INTEGRATION_VERSION=2"));
-    assert!(MASTRACODE_HOOK_ASSET.contains("session_id"));
-    assert!(!MASTRACODE_HOOK_ASSET.contains("run_id"));
-    assert!(
-        MASTRACODE_HOOK_ASSET.contains("agent_session_id")
-            || MASTRACODE_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        MASTRACODE_HOOK_ASSET.contains("pane.report_agent_session")
-            || MASTRACODE_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(
-        MASTRACODE_HOOK_ASSET.contains("session_start_source")
-            || MASTRACODE_HOOK_ASSET.contains("--session-start-source")
-    );
-    assert!(
-        MASTRACODE_HOOK_ASSET.contains("pane.report_agent")
-            || MASTRACODE_HOOK_ASSET.contains("report-agent")
-    );
-    assert!(GROK_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=grok"));
-    assert!(GROK_HOOK_ASSET.contains("GROK_SESSION_ID"));
-    assert!(GROK_HOOK_ASSET.contains("sessionId"));
-    assert!(
-        GROK_HOOK_ASSET.contains("agent_session_id")
-            || GROK_HOOK_ASSET.contains("--agent-session-id")
-    );
-    assert!(
-        GROK_HOOK_ASSET.contains("pane.report_agent_session")
-            || GROK_HOOK_ASSET.contains("report-agent-session")
-    );
-    assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
-    assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
-    assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));
 }
 
 #[test]
@@ -3978,8 +3859,10 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
             Some(ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC)
         );
         let command = handler.get("command").and_then(Value::as_str).unwrap();
-        assert!(command.contains("herdr-agent-state"));
-        assert!(command.ends_with(action));
+        assert_eq!(
+            command,
+            antigravity_cli_hook_command(&installed.hook_path, action)
+        );
     }
 
     // The integration is session-only. Antigravity CLI cannot express blocked
@@ -4004,6 +3887,39 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
             .and_then(Value::as_str),
         Some("echo keep-me")
     );
+
+    std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn antigravity_cli_v2_install_is_outdated_until_reinstalled() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("config");
+    let hook_dir = agy_dir.join("hooks");
+    fs::create_dir_all(&hook_dir).unwrap();
+    fs::write(
+        hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
+        ANTIGRAVITY_CLI_HOOK_ASSET
+            .replace("HERDR_INTEGRATION_VERSION=3", "HERDR_INTEGRATION_VERSION=2"),
+    )
+    .unwrap();
+    std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    let status = || {
+        installed_integration_statuses()
+            .into_iter()
+            .find(|status| status.target == crate::api::schema::IntegrationTarget::AntigravityCli)
+            .expect("antigravity cli integration status")
+    };
+    let outdated = status();
+    assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
+    assert_eq!(outdated.installed_version, Some(2));
+    assert_eq!(outdated.expected_version, 3);
+
+    install_antigravity_cli().unwrap();
+    assert_eq!(status().state, IntegrationStatusKind::Current);
 
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);
@@ -4049,7 +3965,7 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
     assert!(entries[0]
         .get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command.contains("herdr-agent-state")));
+        .is_some_and(|command| command != "stale" && command != "stale idle"));
 
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);

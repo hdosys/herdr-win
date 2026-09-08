@@ -111,7 +111,7 @@ herdr update
 
 已安装的发行版拥有自己的更新源。官方 Herdr 直接安装使用官方 Herdr 发布。herdr-win 构建只使用该分支的 CalVer 发布源,不能通过配置切换到官方 Herdr 或其他通道。Homebrew、mise、Nix 和 WinGet 安装通过各自的包管理器更新。
 
-默认情况下,`herdr update` 安装新二进制文件,并不打扰兼容的运行中会话。如果某次更新改变了 Herdr 的客户端/服务器协议,Herdr 会在安装后询问是否停止旧服务器。要使用新版本,请停止旧服务器。停止会退出窗格进程。对于默认会话,运行 `herdr server stop`,再运行 `herdr`。对于命名会话,运行 `herdr session stop <name>`,再运行 `herdr session attach <name>`。
+默认情况下,`herdr update` 会安装新二进制文件,并让端点第 1 代服务器及其窗格进程继续运行。再次启动 Herdr 即可用更新后的客户端重新连接。纯客户端改动会立即生效。新的服务器端操作会保持不可用,直到对应服务器更新并重启;客户端会显示通知,而不会断开连接。只有早于端点第 1 代的服务器需要在更新时再停止最后一次。
 
 要对受支持的运行中会话启用实验性的实时服务器交接,运行:
 
@@ -119,7 +119,7 @@ herdr update
 herdr update --handoff
 ```
 
-实时交接不适用于 Homebrew、mise 或 Nix 的包管理器更新。这些安装先用包管理器更新,然后在准备好使用新服务器时重启那个 Herdr 会话。如果运行中的会话仍在使用旧服务器,用 `herdr server stop` 或 `herdr session stop <name>` 停止它,再重新运行 Herdr。
+实时交接不适用于 Homebrew、mise 或 Nix 的包管理器更新。这些安装先用包管理器更新,再重新运行 Herdr,用更新后的客户端连接。兼容的旧服务器会继续运行。只有需要新版本的服务器端改动时,才稍后用 `herdr server stop` 或 `herdr session stop <name>` 重启它。
 
 ## 系统要求
 

@@ -252,6 +252,7 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("kimi", include_str!("manifests/kimi.toml")),
     ("kiro", include_str!("manifests/kiro.toml")),
     ("maki", include_str!("manifests/maki.toml")),
+    ("muse", include_str!("manifests/muse.toml")),
     ("opencode", include_str!("manifests/opencode.toml")),
     ("pi", include_str!("manifests/pi.toml")),
     ("qodercli", include_str!("manifests/qodercli.toml")),
@@ -282,6 +283,36 @@ pub(crate) fn reload_manifests() -> Vec<AgentManifestSummary> {
         Err(poisoned) => *poisoned.into_inner() = cache,
     }
     summaries
+}
+
+pub(crate) fn reload_manifests_for_agents(agents: &[Agent]) {
+    if agents.is_empty() {
+        return;
+    }
+
+    let _reload_guard = MANIFEST_RELOAD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let lock = manifest_cache();
+    let replacements = Agent::SCREEN_MANIFEST_AGENTS
+        .into_iter()
+        .filter(|agent| agents.contains(agent))
+        .map(|agent| (agent, load_manifest_uncached(agent)))
+        .collect::<Vec<_>>();
+    let mut cache = match lock.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (agent, replacement) in replacements {
+        if let Some((_, loaded)) = cache
+            .manifests
+            .iter_mut()
+            .find(|(cached_agent, _)| *cached_agent == agent)
+        {
+            *loaded = replacement;
+        }
+    }
 }
 
 fn manifest_cache() -> &'static RwLock<ManifestCache> {

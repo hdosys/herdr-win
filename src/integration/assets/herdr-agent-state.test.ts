@@ -121,7 +121,7 @@ async function startRecordingServer(name: string): Promise<unknown[]> {
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
   configureIntegrationEnvironment(recordingSocketPath);
   return requests;
@@ -378,7 +378,7 @@ test("Pi waits for a replacement session report before publishing state", async 
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
@@ -457,7 +457,7 @@ async function startDroppedFirstResponseServer(name: string) {
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
@@ -496,6 +496,45 @@ test("Oh My Pi retries working before a queued idle state", async () => {
   expect(attemptedRequests[1]).toEqual(attemptedRequests[0]);
   expect(requestState(attemptedRequests[0])).toBe("working");
   expect(requestState(attemptedRequests[2])).toBe("idle");
+});
+
+test("Oh My Pi keeps working when a turn ends with a scheduled continuation", async () => {
+  const requests = await startRecordingServer("omp-will-continue");
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
+  const { handlers, pi } = createExtensionHarness();
+
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = {
+    hasUI: true,
+    isIdle: () => idle,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  // OMP already scheduled an automatic continuation, so this loop end is not a
+  // user-visible settle and must not publish idle. See issue #2851.
+  handlers.get("agent_end")?.({ messages: [], willContinue: true }, context);
+  await Bun.sleep(50);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  // The real terminal end still settles the pane.
+  idle = true;
+  handlers.get("agent_end")?.({ messages: [] }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
 });
 
 test("Pi retries working state after an unanswered socket attempt", async () => {

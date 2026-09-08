@@ -1,11 +1,18 @@
+mod args;
 mod attach;
 #[cfg(unix)]
 mod host_unix;
+mod process;
+mod restart_policy;
+mod saved;
 mod windows;
 
+pub(crate) use args::*;
 pub(crate) use attach::*;
 #[cfg(unix)]
 pub(crate) use host_unix::run_remote_client_bridge;
+pub(crate) use saved::*;
+
 #[cfg(windows)]
 pub(crate) use windows::run_remote_client_bridge;
 pub(crate) use windows::{

@@ -17,12 +17,73 @@ mod clipboard_image;
 mod process_job;
 pub(crate) use process_job::ChildProcessJob;
 
+pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::ChildExitReason {
+    // STATUS_CONTROL_C_EXIT is reported without a Unix signal by portable-pty.
+    if status.exit_code() == 0xC000013A {
+        super::ChildExitReason::Interrupted
+    } else {
+        super::ChildExitReason::Exited
+    }
+}
+
+pub(crate) fn wait_client_stream_readable(
+    _stream: &crate::ipc::LocalStream,
+) -> std::io::Result<()> {
+    // Sync named pipes have no read timeout. The caller peeks before each read and checks its
+    // cancellation flag between polls, including when a frame arrives in several fragments.
+    std::thread::sleep(Duration::from_millis(2));
+    Ok(())
+}
+
+pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
+    crossterm::terminal::size()
+}
+
+pub(crate) fn replace_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn set_default_plugin_pane_pwd(
+    _env: &mut Vec<(String, String)>,
+    _cwd: &std::path::Path,
+) {
+}
+
 use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
             CloseHandle, GlobalFree, LocalFree, ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, HWND,
-            INVALID_HANDLE_VALUE, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_FAILED,
+            INVALID_HANDLE_VALUE, MAX_PATH, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING, WAIT_FAILED,
             WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Security::{
@@ -74,8 +135,8 @@ use windows_sys::{
             Input::{
                 Ime::ImmGetDefaultIMEWnd,
                 KeyboardAndMouse::{
-                    GetKeyboardLayout, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-                    KEYEVENTF_KEYUP,
+                    GetKeyboardLayout, SendInput, ToUnicodeEx, INPUT, INPUT_0, INPUT_KEYBOARD,
+                    KEYBDINPUT, KEYEVENTF_KEYUP,
                 },
             },
             Shell::{
@@ -125,6 +186,74 @@ const INTERACTIVE_LAUNCH_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)
+}
+
+pub(crate) fn prepare_paste_text_for_pty_platform(text: String) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+pub(crate) fn plugin_runtime_path_platform(path: &std::path::Path) -> PathBuf {
+    use std::os::windows::ffi::OsStrExt;
+
+    let Some(candidate) = standard_windows_path(path) else {
+        return path.to_path_buf();
+    };
+    // Rust can canonicalize a long standard path by adding its own verbatim prefix, but native
+    // process consumers still need the original prefix when the plugin root exceeds MAX_PATH.
+    if candidate.join("").as_os_str().encode_wide().count() >= MAX_PATH as usize {
+        return path.to_path_buf();
+    }
+    match candidate.canonicalize() {
+        Ok(canonical) if canonical == path => candidate,
+        _ => path.to_path_buf(),
+    }
+}
+
+fn standard_windows_path(path: &std::path::Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let mut candidate = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut candidate = PathBuf::from(r"\\");
+            candidate.push(server);
+            candidate.push(share);
+            candidate
+        }
+        _ => return None,
+    };
+    candidate.push(components.as_path());
+    Some(candidate)
+}
+
+/// Resolves against the current foreground layout because asynchronous console
+/// records do not retain the layout that was active when the key was pressed.
+pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
+    // SAFETY: Win32 owns the handles; the fixed buffers match the API lengths.
+    unsafe {
+        let thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        let layout = GetKeyboardLayout(thread_id);
+
+        let key_state = [0u8; 256];
+        let mut output = [0u16; 2];
+        let written = ToUnicodeEx(
+            vk.into(),
+            scan.into(),
+            key_state.as_ptr(),
+            output.as_mut_ptr(),
+            output.len() as i32,
+            0x4,
+            layout,
+        );
+        let units = output.get(..usize::try_from(written).ok()?)?;
+        let mut chars = char::decode_utf16(units.iter().copied());
+        let ch = chars.next()?.ok()?;
+        (chars.next().is_none() && !ch.is_control()).then_some(ch)
+    }
 }
 
 const MAX_PROCESS_ENVIRONMENT_BYTES: usize = 256 * 1024;
@@ -3313,6 +3442,81 @@ mod tests {
     use crate::platform::interactive_shell_command;
 
     #[test]
+    fn windows_standard_plugin_runtime_paths_drop_only_disk_and_unc_verbatim_prefixes() {
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(r"\\?\C:\plugins\example")),
+            Some(std::path::PathBuf::from(r"C:\plugins\example"))
+        );
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(
+                r"\\?\UNC\server\share\plugins\example"
+            )),
+            Some(std::path::PathBuf::from(r"\\server\share\plugins\example"))
+        );
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(
+                r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\plugins"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_plugin_runtime_path_keeps_extended_path_when_normal_form_is_not_equivalent() {
+        let path = std::path::PathBuf::from(format!(
+            r"\\?\C:\herdr-missing-plugin-runtime-path-{}",
+            std::process::id()
+        ));
+        assert_eq!(super::plugin_runtime_path_platform(&path), path);
+    }
+
+    #[test]
+    fn windows_plugin_runtime_path_keeps_verbatim_root_beyond_max_path() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let base = std::env::temp_dir().join(format!(
+            "herdr-plugin-runtime-path-limit-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&base).expect("create test base");
+        let extended_base = base.canonicalize().expect("canonicalize test base");
+        let normal_base = super::standard_windows_path(&extended_base)
+            .expect("test base has a standard drive path");
+        let normal_base_len = normal_base.as_os_str().encode_wide().count();
+        let root_at_length = |length| {
+            let component_len = length - normal_base_len - 1;
+            let path = extended_base.join("é".repeat(component_len));
+            fs::create_dir(&path).expect("create length-boundary test root");
+            path.canonicalize()
+                .expect("canonicalize length-boundary test root")
+        };
+
+        let at_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 2);
+        let at_limit_normal =
+            super::standard_windows_path(&at_limit).expect("convert root at MAX_PATH boundary");
+        assert_eq!(
+            super::plugin_runtime_path_platform(&at_limit),
+            at_limit_normal
+        );
+
+        let beyond_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 1);
+        assert_eq!(
+            super::plugin_runtime_path_platform(&beyond_limit),
+            beyond_limit
+        );
+
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
+
+    #[test]
+    fn paste_text_uses_windows_line_endings() {
+        assert_eq!(
+            super::prepare_paste_text_for_pty_platform("one\ntwo\r\nthree\rfour".to_owned()),
+            "one\r\ntwo\r\nthree\rfour"
+        );
+    }
+
+    #[test]
     fn private_remote_directory_supports_long_paths() {
         let base = std::env::temp_dir().join(format!(
             "herdr-private-remote-dir-test-{}",
@@ -3330,27 +3534,27 @@ mod tests {
     #[test]
     fn windows_conpty_native_encoder_uses_canonical_phase_and_repeat_count() {
         let key = crate::input::TerminalKey::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::empty(),
+            crossterm::event::KeyCode::Char('7'),
+            crossterm::event::KeyModifiers::CONTROL,
         )
         .with_windows_record(crate::input::WindowsKeyRecord {
             key_down: true,
             repeat_count: 3,
-            virtual_key_code: 27,
-            virtual_scan_code: 1,
-            unicode: 27,
-            control_key_state: 0,
+            virtual_key_code: 0x37,
+            virtual_scan_code: 0x08,
+            unicode: 0,
+            control_key_state: 0x0008,
         });
 
         assert_eq!(
             super::encode_windows_conpty_fallback(&key),
-            Some(b"\x1b[27;1;27;1;0;3_".to_vec())
+            Some(b"\x1b[55;8;0;1;8;3_".to_vec())
         );
         let mut release = key.with_kind(crossterm::event::KeyEventKind::Release);
         release.repeat_count = 3;
         assert_eq!(
             super::encode_windows_conpty_fallback(&release),
-            Some(b"\x1b[27;1;27;0;0;1_".to_vec())
+            Some(b"\x1b[55;8;0;0;8;1_".to_vec())
         );
     }
 
@@ -3554,7 +3758,7 @@ mod tests {
         let helper = base.join("pi.cmd");
         fs::write(
             &helper,
-            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
+            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
         )
         .unwrap();
         fs::write(
@@ -3575,6 +3779,7 @@ mod tests {
             "wow!".into(),
             "a'b".into(),
             "@options".into(),
+            "--model".into(),
         ];
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
@@ -3606,6 +3811,7 @@ mod tests {
             process
                 .env("PATH", &path)
                 .env("HERDR_ARGV_CAPTURE", capture)
+                .env("PSExecutionPolicyPreference", "Bypass")
                 .status()
                 .unwrap()
         };
@@ -3631,7 +3837,7 @@ mod tests {
                 fs::read_to_string(no_args_capture)
                     .unwrap()
                     .replace("\r\n", "\n"),
-                "\n\n\n\n\n\n"
+                "\n\n\n\n\n\n\n"
             );
 
             let capture = base.join(format!("{shell}.txt"));
@@ -3640,7 +3846,24 @@ mod tests {
             assert!(status.success(), "{shell} command failed");
             assert_eq!(
                 fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
-                "\ntwo words\n100%\nwow!\na'b\n@options\n"
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
+            );
+        }
+
+        fs::remove_file(helper).unwrap();
+        fs::write(
+            base.join("pi.ps1"),
+            "Set-Content -LiteralPath $env:HERDR_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
+        )
+        .unwrap();
+        for shell in ["powershell.exe", "cmd.exe"] {
+            let capture = base.join(format!("{shell}-ps1.txt"));
+            let command = interactive_shell_command(&argv, shell).unwrap();
+            let status = run_command(shell, &command, &capture);
+            assert!(status.success(), "{shell} PowerShell script command failed");
+            assert_eq!(
+                fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
             );
         }
 

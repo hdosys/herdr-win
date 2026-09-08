@@ -85,6 +85,7 @@ fn unix_stdin_reader_loop(
     let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
     if host_color_query_sent {
         framer.host_color_query_sent();
+        #[cfg(not(windows))]
         framer.enable_host_color_scheme_change_tracking();
         framer.enable_host_appearance_query_on_focus();
     }
@@ -386,7 +387,6 @@ fn windows_host_input_framer(host_color_query_sent: bool) -> crate::raw_input::R
     let mut framer = crate::raw_input::RawInputFramer::for_host_input();
     if host_color_query_sent {
         framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
     }
     framer
 }
@@ -449,23 +449,24 @@ fn send_windows_raw_events(
     events: Vec<crate::raw_input::RawInputEvent>,
     event_tx: &mpsc::Sender<ClientLoopEvent>,
 ) -> bool {
-    let raw_event_count = events.len();
-    let events = events
-        .into_iter()
-        .filter_map(windows_client_input_event_from_raw)
-        .collect::<Vec<_>>();
-    if events.is_empty() {
-        return true;
+    for event in events {
+        let event = match event {
+            observation @ (crate::raw_input::RawInputEvent::HostDefaultColor { .. }
+            | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)) => {
+                ClientLoopEvent::HostThemeObservation(vec![observation])
+            }
+            event => {
+                let Some(event) = windows_client_input_event_from_raw(event) else {
+                    continue;
+                };
+                ClientLoopEvent::StdinEvents(vec![event])
+            }
+        };
+        if event_tx.blocking_send(event).is_err() {
+            return false;
+        }
     }
-
-    tracing::debug!(
-        raw_event_count,
-        forwarded_event_count = events.len(),
-        "windows raw-framed input events forwarded"
-    );
-    event_tx
-        .blocking_send(ClientLoopEvent::StdinEvents(events))
-        .is_ok()
+    true
 }
 
 #[cfg(any(windows, test))]
@@ -515,13 +516,9 @@ fn windows_client_input_event_from_raw(
         crate::raw_input::RawInputEvent::OuterFocusLost => {
             Some(crate::protocol::ClientInputEvent::FocusLost)
         }
-        crate::raw_input::RawInputEvent::HostDefaultColor { kind, color } => {
-            Some(crate::protocol::ClientInputEvent::HostDefaultColor { kind, color })
-        }
-        crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => Some(
-            crate::protocol::ClientInputEvent::HostColorSchemeChanged(appearance),
-        ),
-        crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
+        crate::raw_input::RawInputEvent::HostDefaultColor { .. }
+        | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)
+        | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
         | crate::raw_input::RawInputEvent::Unsupported => None,
     }
 }
@@ -849,57 +846,28 @@ mod windows_tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn windows_host_color_replies_convert_to_semantic_events() {
+    fn windows_host_color_replies_stay_client_local() {
         let mut framer = windows_host_input_framer(true);
         let events = framer.push(
             b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\x1b]12;rgb:1212/3434/5656\x1b\\",
         );
-        let events = events
-            .into_iter()
-            .filter_map(windows_client_input_event_from_raw)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            events,
-            vec![
-                crate::protocol::ClientInputEvent::HostDefaultColor {
-                    kind: crate::terminal_theme::DefaultColorKind::Foreground,
-                    color: crate::terminal_theme::RgbColor {
-                        r: 0xff,
-                        g: 0xee,
-                        b: 0xdd,
-                    },
-                },
-                crate::protocol::ClientInputEvent::HostDefaultColor {
-                    kind: crate::terminal_theme::DefaultColorKind::Background,
-                    color: crate::terminal_theme::RgbColor {
-                        r: 0x11,
-                        g: 0x22,
-                        b: 0x33,
-                    },
-                },
-                crate::protocol::ClientInputEvent::HostDefaultColor {
-                    kind: crate::terminal_theme::DefaultColorKind::Cursor,
-                    color: crate::terminal_theme::RgbColor {
-                        r: 0x12,
-                        g: 0x34,
-                        b: 0x56,
-                    },
-                },
-            ]
-        );
-
-        assert_eq!(
-            framer
-                .push(crate::raw_input::GHOSTTY_COLOR_SCHEME_LIGHT_REPORT)
-                .into_iter()
-                .filter_map(windows_client_input_event_from_raw)
-                .collect::<Vec<_>>(),
-            vec![crate::protocol::ClientInputEvent::HostColorSchemeChanged(
-                crate::terminal_theme::HostAppearance::Light,
-            )]
-        );
+        let (tx, mut rx) = mpsc::channel(4);
+        assert!(send_windows_raw_events(events, &tx));
+        for expected in [
+            crate::terminal_theme::DefaultColorKind::Foreground,
+            crate::terminal_theme::DefaultColorKind::Background,
+            crate::terminal_theme::DefaultColorKind::Cursor,
+        ] {
+            let ClientLoopEvent::HostThemeObservation(events) = rx.try_recv().unwrap() else {
+                panic!("host response entered the pane input lane")
+            };
+            assert!(
+                matches!(events.as_slice(), [crate::raw_input::RawInputEvent::HostDefaultColor { kind, .. }] if *kind == expected)
+            );
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -11,8 +11,6 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不�
 
 已安装的 Windows 发行版拥有该分支的 CalVer 更新源,不能通过配置切换到官方 Herdr 或其他通道。
 
-对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。使用自定义预览清单时还应设置 `HERDR_CHANNEL=preview`。
-
 ## Windows 支持
 
 | 能力 | 状态 |
@@ -39,7 +37,7 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不�
 
 Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器,包括 npm/Node 和 Git Bash 进程链。它会跨越模拟的 `exec` 边界跟踪从 Git Bash 启动的智能体,但这和 Unix 前台进程组检测不是一回事。
 
-Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。Devin CLI 的进程检测和屏幕检测可在 Windows 上工作,但目前无法安装其可选的会话身份钩子。
+Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。
 
 插件以预览状态支持在清单中声明 `windows` 平台。GitHub 安装、本地链接、构建命令、动作、事件和插件窗格在 Windows 上尽力而为。命令是 argv 命令,必须兼容 Windows;`npm`、`bun`、`node` 之类的 Node 包 shim 只要在 `PATH` 上就应该能用,而使用 `sh` 或 Bash 的 Unix 专用示例需要 Windows 专用的替代方案。平台过滤器会跳过不支持的构建命令,并对不支持的动作或窗格返回 `platform_unsupported`。
 
@@ -70,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
 
 Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过 `herdr --remote` 单独受支持,包括 Windows 目标主机。
 
-Kitty graphics 是实验性功能,并取决于外层终端。设置 `experimental.kitty_graphics = true` 后,Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证,但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。除非外层终端支持 Kitty graphics 且你正在测试该组合,否则请保持此选项禁用。
+Kitty graphics 默认启用，并取决于外层终端。Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证，但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。如果外层终端无法正确处理图形输出，请设置 `[terminal].kitty_graphics = false`。
 
 ## 已知注意事项
 

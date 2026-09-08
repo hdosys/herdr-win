@@ -11,8 +11,6 @@ Windows ネイティブビルドは、[herdr-win のリリース](https://github
 
 インストール済みの Windows ディストリビューションはフォークの CalVer 更新フィードを所有し、設定で公式 Herdr や別のチャンネルへ切り替えることはできません。
 
-内部テスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。カスタムプレビューマニフェストでは `HERDR_CHANNEL=preview` も設定してください。
-
 ## Windows でサポート
 
 | 機能 | 状況 |
@@ -39,7 +37,7 @@ Windows ネイティブビルドは、[herdr-win のリリース](https://github
 
 Windows のエージェントプロセス検出は、ペインのシェルの子孫プロセスをスキャンし、npm/Node や Git Bash のプロセスチェーンを含む直接のエージェントと一般的なコマンドラッパーを認識します。Git Bash から起動したエージェントはエミュレートされた `exec` 境界を越えて追跡されますが、Unix のフォアグラウンドプロセスグループ検出と同じものではありません。
 
-Windows でインテグレーションをインストールできるのは、現在 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI、Antigravity CLI です。利用可能な対象は Unix より少なく、インストール形式が Windows で未対応のインテグレーションは表示されないか拒否されます。Devin CLI のプロセス検出とスクリーン検出は Windows でも動作しますが、オプションのセッション識別フックは現在インストールできません。
+Windows でインテグレーションをインストールできるのは、現在 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI、Antigravity CLI です。利用可能な対象は Unix より少なく、インストール形式が Windows で未対応のインテグレーションは表示されないか拒否されます。
 
 プラグインは、プレビューとしてマニフェストのプラットフォームに `windows` をサポートします。GitHub インストール、ローカルリンク、ビルドコマンド、アクション、イベント、プラグインペインは Windows ではベストエフォートです。コマンドは argv 形式で Windows 互換である必要があります。`npm`、`bun`、`node` のような Node パッケージの shim は `PATH` にあれば動作するはずですが、`sh` や Bash を使う Unix 専用の例には Windows 向けの代替が必要です。プラットフォームフィルターは、未サポートのビルドコマンドをスキップし、未サポートのアクションやペインには `platform_unsupported` を返します。
 
@@ -70,7 +68,7 @@ switch_ascii_input_source_in_prefix = true
 
 Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Windows 接続先を含む `herdr --remote` で別途サポートされます。
 
-Kitty graphics は実験的機能で、外側のターミナルに依存します。`experimental.kitty_graphics = true` の場合、Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルが Kitty graphics に対応しており、その組み合わせをテストする場合を除いて、このオプションは無効のままにしてください。
+Kitty graphics はデフォルトで有効で、外側のターミナルに依存します。Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルがグラフィックス出力を正しく扱えない場合は、`[terminal].kitty_graphics = false` に設定してください。
 
 ## 既知の注意点
 

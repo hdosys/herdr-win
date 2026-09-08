@@ -35,6 +35,43 @@ herdr session stop work --json
 herdr session delete side-project --json
 ```
 
+## 已保存的 SSH 机器
+
+保存常用目标后，即可从一个 Herdr 客户端跨多台机器工作：
+
+```bash
+herdr machine add workbox --label "Build machine" --remote-session agents
+herdr machine add ssh://you@server:2222 --label "Production" --remote-session operations
+herdr machine list
+```
+
+`machine add` 会在远程机器上准备 Herdr，并在保存配置前启动指定会话的后台服务器。它会分别检查运行中的服务器和已安装的二进制文件；即使服务器的发行版本与客户端不同，只要兼容就会保留。如果运行中的服务器需要升级，设置过程会在支持时使用实时交接来保留窗格进程，否则会在停止服务器前询问。未安装或不兼容时，使用与 `--remote` 相同的批准流程；需要批准时请在交互式终端中运行。取消设置不会保存配置。设置退出后，远程服务器会继续运行。
+
+已保存机器的更改会自动应用到已打开的本地 Herdr 客户端，通常在一秒内生效。如果正在切换机器，会等待切换完成再应用更改。新增或启用的 SSH 机器会与 Local 一起显示在机器侧边栏中，并在后台连接，不会改变当前选择。选择机器或其工作区即可切换。Herdr 保留已连接机器的元数据、agent 状态和通知，但只为选中的机器传输窗格画面、输入、显示区域和图形。即使两个服务器碰巧使用相同的内部 ID，工作区、标签页、窗格、agent 和图形的身份也始终按机器隔离。
+
+启动时会直接打开 Local，不等待已保存的 SSH 机器，也不显示连接标记。有已启用的保存机器时，即使 Local 连接失败，客户端仍能打开。停止或重启 Local 不会关闭正常的 SSH 连接。Local 服务器恢复后会自动重连，不会从正在使用的机器抢走选择。无响应的机器不会阻塞其他机器的输入或连接处理。
+
+Herdr 会监测已连接 SSH 机器的应用层活动，并在空闲时使用轻量健康探测。Local 依靠本地连接关闭或失败来判断断开，不使用远程健康探测。睡眠、网络中断或 SSH 故障后，不健康的机器会显示 Reconnecting，并以有上限的退避间隔重试。最后的工作区、agent 和选中窗格状态会保留，但变暗并冻结；在新连接和一致的画面到达前，无法输入或导航到这些缓存状态。重连不会回答提示，也不会安装、更新、重启或交接远程服务器。需要批准主机密钥、完成认证或安装兼容 Herdr 的目标会显示 Attention，Local 和其他机器仍可正常使用。请在终端中运行该配置对应的独立连接命令来完成设置，例如：
+
+```bash
+herdr --remote workbox --session agents --handoff
+```
+
+如果机器显示 Attention，请在设置完成后重启客户端以重试连接。使用配置的不透明 ID 来重命名、禁用或移除：
+
+```bash
+herdr machine rename <profile-id> --label "New name"
+herdr machine disable <profile-id>
+herdr machine enable <profile-id>
+herdr machine remove <profile-id>
+```
+
+重命名只更新标签，不会重新连接。移除或禁用只会将该机器从客户端断开；即使机器无法访问也可操作，其远程会话仍会继续运行。如果移除或禁用正在查看的机器，客户端会返回 Local。如果 Local 不可用，会显示该状态并尝试重连，而不是选择另一台远程机器。保存机器的文件无法读取或内容无效时，当前连接保持不变，客户端会显示通知并自动重试读取。
+
+保存的配置仅包含不透明 ID、标签、SSH 目标、明确的远程会话名和启用状态。密码、私钥、agent 票据和 SSH 控制套接字绝不会存入机器目录。
+
+客户端默认使用本地按键绑定。选中机器公布的自定义命令仍在该机器上执行。Herdr 不会将本地命令插件、配置、可执行文件或机密复制到 SSH 主机；远程缺少命令或插件时会明确报错。
+
 ## 通过 SSH 远程连接
 
 远程模式有两种;[使用 Herdr 的工作方式](/zh-cn/docs/how-to-work/)对它们做了比较。tmux 风格的路径是 SSH 到服务器并在那里运行 `herdr`。另一种是从本地机器通过 SSH 连接:
@@ -118,13 +155,3 @@ herdr terminal attach term_abc123
 ```bash
 herdr terminal attach term_abc123 --takeover
 ```
-
-## 单进程逃生舱
-
-用 `--no-session` 在没有后台服务器/客户端分离的情况下运行 Herdr:
-
-```bash
-herdr --no-session
-```
-
-这主要是调试或兼容性的逃生舱。默认的持久会话模式才是常规路径。

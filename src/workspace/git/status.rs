@@ -8,7 +8,8 @@ use super::{
     discovery::{
         automatic_workspace_label, canonicalize_best_effort_path, fallback_label_from_cwd,
         git_ref_storage_is_reftable, git_rev_parse_verify, git_space_metadata_from_info,
-        git_symbolic_head_full, git_worktree_info, read_ref_oid, GitWorktreeInfo,
+        git_symbolic_head_full, git_worktree_info, read_git_ref_file, read_ref_oid,
+        GitWorktreeInfo,
     },
 };
 
@@ -273,7 +274,7 @@ fn read_head_identity_from_git(info: &GitWorktreeInfo) -> Option<GitHeadIdentity
 }
 
 fn read_head_identity_from_files(info: &GitWorktreeInfo) -> Option<GitHeadIdentity> {
-    let head = std::fs::read_to_string(info.git_dir.join("HEAD")).ok()?;
+    let head = read_git_ref_file(&info.git_dir.join("HEAD"))?;
     let head = head.trim();
     if let Some(full_ref) = head.strip_prefix("ref: ") {
         let short_name = full_ref.strip_prefix("refs/heads/")?.to_string();
@@ -311,25 +312,6 @@ fn read_upstream(repo: &mut RepoContext, branch: &str) -> Option<GitUpstreamIden
         full_ref,
         oid,
     })
-}
-
-#[cfg(test)]
-pub(crate) fn git_ahead_behind(cwd: &Path) -> Option<(usize, usize)> {
-    super::discovery::git_repo_root(cwd)?;
-
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    parse_git_ahead_behind_output(&stdout)
 }
 
 fn git_ahead_behind_between(

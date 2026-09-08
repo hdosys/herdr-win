@@ -1287,7 +1287,6 @@ test("reports child prompts without replacing the root session", async () => {
     event: {
       type: "session.created",
       properties: {
-        sessionID: "child-session",
         info: { id: "child-session", parentID: "root-session" },
       },
     },
@@ -1314,6 +1313,48 @@ test("reports child prompts without replacing the root session", async () => {
     "root-session",
     "root-session",
   ]);
+});
+
+test("retired nested child prompts cannot target the newly selected root", async () => {
+  const plugin = await loadPlugin();
+  for (const info of [
+    { id: "child-session", parentID: "root-session" },
+    { id: "nested-session", parentID: "child-session" },
+  ]) {
+    await plugin.event({ event: { type: "session.created", properties: { info } } });
+  }
+  await plugin["chat.message"]({ sessionID: "other-root" });
+  await plugin.event({
+    event: { type: "permission.asked", properties: { sessionID: "nested-session" } },
+  });
+  await plugin.event({
+    event: { type: "permission.replied", properties: { sessionID: "nested-session" } },
+  });
+  await plugin.event({
+    event: { type: "session.idle", properties: { sessionID: "nested-session" } },
+  });
+  await plugin["chat.message"]({ sessionID: "nested-session" });
+
+  expect(requests.map(requestState)).toEqual(["working"]);
+  expect(requests.map(requestSessionID)).toEqual(["other-root"]);
+});
+
+test("nested child prompts report their selected root without opening nested panes", async () => {
+  const plugin = await loadPlugin();
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  for (const info of [
+    { id: "child-session", parentID: "root-session" },
+    { id: "nested-session", parentID: "child-session" },
+  ]) {
+    await plugin.event({ event: { type: "session.created", properties: { info } } });
+  }
+  requests.length = 0;
+  for (const type of ["permission.asked", "permission.replied"]) {
+    await plugin.event({ event: { type, properties: { sessionID: "nested-session" } } });
+  }
+  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent", "pane.report_agent"]);
 });
 
 test("root prompts stay blocked until every request completes", async () => {

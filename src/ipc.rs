@@ -131,13 +131,6 @@ pub(crate) fn set_local_stream_polling(stream: &mut LocalStream, enabled: bool) 
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn shutdown_local_stream_write(stream: &LocalStream) -> io::Result<()> {
-    match stream {
-        LocalStream::UdSocket(stream) => stream.inner().shutdown(std::net::Shutdown::Write),
-    }
-}
-
 /// Binds a listener for private terminal traffic. Unix callers restrict the
 /// socket file after binding; Windows must set the named-pipe DACL at creation.
 pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListener> {

@@ -241,6 +241,7 @@ struct PreviewManifest {
     // Windows installs the complete setup; Unix compares this field before activation.
     #[cfg_attr(windows, allow(dead_code))]
     protocol: u32,
+    endpoint_generation: Option<u32>,
     notes: String,
     assets: BTreeMap<String, AssetRef>,
 }
@@ -262,6 +263,8 @@ struct ReleaseInfo {
     commit: Option<String>,
     #[cfg(not(windows))]
     target_protocol: Option<u32>,
+    #[cfg(not(windows))]
+    target_endpoint_generation: Option<u32>,
     download_url: String,
     sha256: Option<String>,
     asset_format: Option<String>,
@@ -456,6 +459,8 @@ fn release_info_from_preview_manifest(
         commit: Some(manifest.commit.clone()),
         #[cfg(not(windows))]
         target_protocol: Some(manifest.protocol),
+        #[cfg(not(windows))]
+        target_endpoint_generation: manifest.endpoint_generation,
         download_url,
         sha256: asset.sha256.clone(),
         asset_format: asset.format.clone(),
@@ -831,10 +836,14 @@ fn update_requires_server_restart(
     server: &crate::api::RuntimeStatus,
     release: &ReleaseInfo,
 ) -> bool {
-    match (server.protocol, release.target_protocol) {
-        (Some(server_protocol), Some(target_protocol)) => server_protocol != target_protocol,
-        _ => true,
-    }
+    let Some(target_generation) = release.target_endpoint_generation else {
+        return true;
+    };
+    server
+        .capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.endpoint_protocol_generation)
+        != Some(target_generation)
 }
 
 #[cfg(not(windows))]
@@ -909,6 +918,7 @@ enum RunningServerUpdateAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(not(windows))]
 enum RunningServerUpdateOutcome {
+    CompatibleServerKept,
     RestartDeferred,
     Stopped,
     LiveHandoffComplete,
@@ -1235,7 +1245,12 @@ fn prompt_to_complete_plain_update(
     decisions: &[RunningServerUpdateDecision],
     release: &ReleaseInfo,
 ) -> Result<bool, String> {
-    if decisions.is_empty() {
+    let plans: Vec<&RunningServerUpdatePlan> = decisions
+        .iter()
+        .filter(|decision| decision.plan.requires_server_restart)
+        .map(|decision| &decision.plan)
+        .collect();
+    if plans.is_empty() {
         return Ok(true);
     }
 
@@ -1243,8 +1258,6 @@ fn prompt_to_complete_plain_update(
         return Ok(false);
     }
 
-    let plans: Vec<&RunningServerUpdatePlan> =
-        decisions.iter().map(|decision| &decision.plan).collect();
     let (singular, plural) = target_group_nouns(&plans);
     let noun = if plans.len() == 1 { singular } else { plural };
     eprintln!(
@@ -1294,7 +1307,9 @@ fn mark_plain_update_stop_decisions(
     decisions
         .into_iter()
         .map(|mut decision| {
-            decision.action = RunningServerUpdateAction::StopOldServer;
+            if decision.plan.requires_server_restart {
+                decision.action = RunningServerUpdateAction::StopOldServer;
+            }
             decision
         })
         .collect()
@@ -1725,7 +1740,10 @@ fn apply_running_session_update_decisions(
 
     for decision in decisions {
         let outcome = match decision.action {
-            RunningServerUpdateAction::None => RunningServerUpdateOutcome::RestartDeferred,
+            RunningServerUpdateAction::None if decision.plan.requires_server_restart => {
+                RunningServerUpdateOutcome::RestartDeferred
+            }
+            RunningServerUpdateAction::None => RunningServerUpdateOutcome::CompatibleServerKept,
             RunningServerUpdateAction::StopOldServer => {
                 stop_running_server_for_update(&decision.plan)?;
                 RunningServerUpdateOutcome::Stopped
@@ -1766,6 +1784,24 @@ fn print_running_session_update_outcomes(
 
     for outcome in outcomes {
         match outcome.outcome {
+            RunningServerUpdateOutcome::CompatibleServerKept => {
+                eprintln!(
+                    "{} {} kept running server v{}.",
+                    outcome.target_noun,
+                    outcome.session_label,
+                    version_label(outcome.server_version.as_deref())
+                );
+                match &outcome.attach_command {
+                    Some(command) => eprintln!(
+                        "Run `{command}` to reconnect with the updated client. Restart the server later only if you need server-side changes from {}.",
+                        release.label()
+                    ),
+                    None => eprintln!(
+                        "Reconnect with the same socket override to use the updated client. Restart the server later only if you need server-side changes from {}.",
+                        release.label()
+                    ),
+                }
+            }
             RunningServerUpdateOutcome::LiveHandoffComplete => {
                 if let Some(command) = &outcome.attach_command {
                     eprintln!(
@@ -1866,7 +1902,7 @@ pub(crate) fn update_install_command() -> &'static str {
 pub(crate) fn update_install_instruction(install_command: &str) -> String {
     match install_command {
         HERDR_UPDATE_COMMAND => {
-            "detach, run `herdr update`, then follow its restart guidance".to_string()
+            "detach, run `herdr update`, then run Herdr again to reconnect".to_string()
         }
         WINGET_UPDATE_COMMAND => {
             format!(
@@ -1874,16 +1910,16 @@ pub(crate) fn update_install_instruction(install_command: &str) -> String {
             )
         }
         HOMEBREW_UPDATE_COMMAND => {
-            "detach, run `brew update && brew upgrade herdr`, then restart this Herdr session when ready".to_string()
-        }
-        MISE_UPDATE_COMMAND => {
-            "detach, run `mise upgrade herdr`, then restart this Herdr session when ready"
+            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
                 .to_string()
         }
-        NIX_UPDATE_COMMAND => {
-            "detach, update through Nix, then restart this Herdr session when ready".to_string()
+        MISE_UPDATE_COMMAND => {
+            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect".to_string()
         }
-        command => format!("detach, run `{command}`, then restart this Herdr session when ready"),
+        NIX_UPDATE_COMMAND => {
+            "detach, update through Nix, then run Herdr again to reconnect".to_string()
+        }
+        command => format!("detach, run `{command}`, then run Herdr again to reconnect"),
     }
 }
 
@@ -2552,6 +2588,7 @@ mod cross_platform_tests {
             format: Some("zip".to_string()),
         };
         let manifest = PreviewManifest {
+            endpoint_generation: Some(1),
             channel: "preview".to_string(),
             prerelease: false,
             base_version: "9.9.9".to_string(),
@@ -2606,6 +2643,7 @@ mod cross_platform_tests {
             },
         )]);
         let manifest = PreviewManifest {
+            endpoint_generation: Some(1),
             channel: "preview".to_string(),
             prerelease: false,
             base_version: "9.9.9".to_string(),
@@ -2734,6 +2772,9 @@ mod tests {
             build_id: None,
             commit: None,
             target_protocol,
+            target_endpoint_generation: Some(
+                crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+            ),
             download_url: "https://example.com/herdr".to_string(),
             sha256: None,
             asset_format: None,
@@ -3004,44 +3045,62 @@ mod tests {
     }
 
     #[test]
-    fn update_requires_server_restart_when_target_protocol_differs_or_unknown() {
-        let server = crate::api::RuntimeStatus {
+    fn update_requires_server_restart_only_without_the_endpoint_baseline() {
+        let release = fake_release("0.5.6", Some(4));
+        let compatible = crate::api::RuntimeStatus {
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
-            binary: None,
+            capabilities: Some(crate::api::schema::ServerCapabilities {
+                live_handoff: true,
+                detached_server_daemon: true,
+                endpoint_protocol_generation: Some(
+                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                ),
+                surface_interest: true,
+                health_check: true,
+            }),
+        };
+        let missing_baseline = crate::api::RuntimeStatus {
             capabilities: None,
+            ..compatible.clone()
         };
-        let compatible_release = ReleaseInfo {
-            version: Version::parse("0.5.6").unwrap(),
-            identity: "0.5.6".to_string(),
-            runtime_identity: "0.5.6".to_string(),
-            release_version: None,
-            build_id: None,
-            commit: None,
-            target_protocol: Some(2),
-            download_url: "https://example.com/herdr".to_string(),
-            sha256: None,
-            asset_format: None,
-            notes_body: "### Changed\n- One".to_string(),
-        };
-        let incompatible_release = ReleaseInfo {
-            target_protocol: Some(4),
-            ..compatible_release.clone()
-        };
-        let unknown_release = ReleaseInfo {
-            target_protocol: None,
-            ..compatible_release.clone()
+        let incompatible_generation = crate::api::RuntimeStatus {
+            capabilities: Some(crate::api::schema::ServerCapabilities {
+                endpoint_protocol_generation: Some(
+                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION + 1,
+                ),
+                ..compatible.capabilities.clone().unwrap()
+            }),
+            ..compatible.clone()
         };
 
-        assert!(!update_requires_server_restart(
-            &server,
-            &compatible_release
+        assert!(!update_requires_server_restart(&compatible, &release));
+        assert!(update_requires_server_restart(&missing_baseline, &release));
+        assert!(update_requires_server_restart(
+            &incompatible_generation,
+            &release
+        ));
+
+        let unknown_release = ReleaseInfo {
+            target_endpoint_generation: None,
+            ..release.clone()
+        };
+        assert!(update_requires_server_restart(
+            &compatible,
+            &unknown_release
         ));
         assert!(update_requires_server_restart(
-            &server,
-            &incompatible_release
+            &missing_baseline,
+            &unknown_release
         ));
-        assert!(update_requires_server_restart(&server, &unknown_release));
+
+        let future_release = ReleaseInfo {
+            target_endpoint_generation: Some(
+                crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION + 1,
+            ),
+            ..release
+        };
+        assert!(update_requires_server_restart(&compatible, &future_release));
     }
 
     #[test]
@@ -3069,6 +3128,11 @@ mod tests {
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     live_handoff: true,
                     detached_server_daemon: true,
+                    endpoint_protocol_generation: Some(
+                        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                    ),
+                    surface_interest: true,
+                    health_check: true,
                 }),
             },
         };
@@ -3182,9 +3246,8 @@ mod tests {
         let work_client_socket = crate::session::client_socket_path_for(Some("work"));
         fs::create_dir_all(work_client_socket.parent().unwrap()).unwrap();
         let work_client_listener = UnixListener::bind(&work_client_socket).unwrap();
-        let release = fake_release("9.8.7", Some(77));
 
-        let err = plan_running_server_updates(&release).unwrap_err();
+        let err = plan_running_server_updates(&fake_release("9.8.7", Some(77))).unwrap_err();
 
         drop(work_client_listener);
         let _ = fs::remove_dir_all(config_home);
@@ -3265,6 +3328,9 @@ mod tests {
             build_id: None,
             commit: None,
             target_protocol: Some(3),
+            target_endpoint_generation: Some(
+                crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+            ),
             download_url: "https://example.com/herdr".to_string(),
             sha256: None,
             asset_format: None,
@@ -3297,6 +3363,52 @@ mod tests {
         assert!(!complete);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
+    }
+
+    #[test]
+    fn noninteractive_plain_update_completes_with_compatible_server() {
+        assert!(
+            !io::stdin().is_terminal(),
+            "this test relies on noninteractive test stdin"
+        );
+        let release = fake_release("9.8.7", Some(77));
+        let plan = RunningServerUpdatePlan {
+            target: RunningUpdateTarget {
+                name: Some("work".to_string()),
+                label: "work".to_string(),
+                stop_command: "herdr session stop work".to_string(),
+                attach_command: Some("herdr session attach work".to_string()),
+                socket_path: crate::session::api_socket_path_for(Some("work")),
+                client_socket_path: crate::session::client_socket_path_for(Some("work")),
+                must_be_running: true,
+            },
+            requires_server_restart: false,
+            server: crate::api::RuntimeStatus {
+                version: Some("9.8.6".to_string()),
+                protocol: Some(76),
+                capabilities: Some(crate::api::schema::ServerCapabilities {
+                    live_handoff: true,
+                    detached_server_daemon: true,
+                    endpoint_protocol_generation: Some(
+                        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                    ),
+                    surface_interest: true,
+                    health_check: true,
+                }),
+            },
+        };
+        let decisions = confirm_running_server_update_action(
+            vec![plan],
+            &release,
+            SelfUpdateOptions {
+                live_handoff: false,
+            },
+        )
+        .unwrap();
+
+        assert!(prompt_to_complete_plain_update(&decisions, &release).unwrap());
+        let decisions = mark_plain_update_stop_decisions(decisions);
+        assert_eq!(decisions[0].action, RunningServerUpdateAction::None);
     }
 
     #[test]
@@ -3402,6 +3514,9 @@ mod tests {
             build_id: None,
             commit: None,
             target_protocol: Some(77),
+            target_endpoint_generation: Some(
+                crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+            ),
             download_url: "https://example.com/herdr".to_string(),
             sha256: None,
             asset_format: None,

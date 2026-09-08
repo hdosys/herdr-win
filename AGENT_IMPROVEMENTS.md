@@ -292,14 +292,49 @@ configuration repository.
   `scripts/local_windows_installer.py`, its focused tests, and the Candidate
   procedure in `CONTRIBUTING.md`.
 
-- **Status: proposed. Finalize interdependent mailboxes as one atomic queue
-  transaction.** Accept an ordered set of owner worktrees or trees, construct all
-  replacement mailboxes in temporary state, and publish them only after the whole
-  queue reproduces the accepted tree. Evidence: a release refactor changed files
-  shared by mailboxes 0003, 0004, 0006, and 0009; seven one-owner finalizer cycles
-  took 38 to 43 seconds each, while reverse application stopped successively on
-  shared `src/platform/windows.rs`, `src/app/mod.rs`, `CHANGELOG.md`, and
-  `src/update.rs`. Expected benefit: preserve logical ownership without temporary
-  owner leakage, repeated worktrees, or serial conflict discovery. Owner:
-  `scripts/delta_workflow.py`, focused finalizer tests, and the promotion procedure
-  in `CONTRIBUTING.md`.
+- **Status: done. Finalize interdependent mailboxes as one verified queue
+  replacement.** `delta_workflow.py refresh` accepts a reviewed linear logical
+  stack, stages binary-safe mailboxes privately, preserves retained metadata, and
+  proves the complete accepted tree before replacing the queue and stable base.
+  Evidence: the merged v0.9.0 source could not use the single-owner linear WIP
+  finalizer. The new owner produced 13 independently compiled mailboxes with exact
+  replay equality while preserving published development ancestry. The existing
+  single-owner finalizer remains the narrow ordinary-edit path. Owner:
+  `scripts/delta_workflow.py`, its focused tests, and `CONTRIBUTING.md`.
+
+- **Status: done. Integrate the linked product target without weakening the main
+  checkout guard.** The repository's exact-base `integrate-development` operation
+  reuses source-checkout validation and runs under the same resource key as
+  development publication. Evidence: the generic helper correctly rejected the
+  linked `candidate/development` checkout; the repository operation integrated the
+  reviewed source in 5.980 seconds. Its focused check rejects stale bases and dirty
+  source before fast-forwarding. Owner: `scripts/delta_workflow.py` and
+  `CONTRIBUTING.md`. No global helper change or second lock implementation.
+
+- **Status: done. Remove remote publication from the local artifact prerequisite.**
+  Candidate now requires clean integrated development source and complete topic
+  ancestry, not equality with the remote tip. Evidence: the completed v0.9.0 port
+  was rejected before Cargo solely because it was not pushed, contradicting the
+  artifact-first procedure. The focused gate now accepts the local milestone without
+  network activity; publication remains required afterward. Owner:
+  `scripts/local_windows_installer.py`, its focused test, and `CONTRIBUTING.md`.
+
+- **Status: proposed. Reuse one caller-owned prefix cache during a stable-refresh
+  correction cycle.** The mandatory 13-prefix pass took 718.804 seconds, including
+  repeated single-crate checks around 40 seconds; earlier failed decomposition
+  attempts also repeated cold Zig setup. Allow the existing prefix command to reuse
+  one task-owned cache across corrections, while retaining all-core compilation,
+  exact prefix provenance, and terminal cleanup. Expected benefit: avoid cold native
+  dependency work without weakening prefix independence or adding persistent queue
+  state. Owner: `scripts/delta_workflow.py` and its refresh procedure. Its Windows
+  extended-path cleanup already removed the demonstrated over-260-character Zig
+  residuals successfully.
+
+- **Status: proposed. Document bounded recovery of demonstrably incomplete native
+  caches.** A recovered checkout had empty Zig package directories and stale compiled
+  references; rebuilding with a fresh cache resolved the unchanged source build.
+  Preserve the suspect cache on the same filesystem until the clean build succeeds,
+  then remove only that task-owned cache. Avoid repairing individual dependency
+  entries or changing versions. Expected benefit: one diagnostic recovery cycle
+  instead of serial cache surgery. Owner: the existing Candidate troubleshooting
+  procedure, not a new automatic retry or fallback.

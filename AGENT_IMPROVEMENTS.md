@@ -66,6 +66,10 @@ configuration repository.
   on a full target volume, so Candidate now requires 2 GiB free and refuses a cache
   already above its 2 GiB iteration budget before compiling. Cleanup is explicit
   and requires quiescent ownership; no automatic pruning or fallback was added.
+  The actual canonical Candidate subsequently completed in 131.332 seconds,
+  including 72.841 seconds compiling, 8.561 seconds for its native launch probe,
+  and 35.198 seconds packaging. Empty compiler lock files are accepted by the cache
+  budget owner rather than mistaken for invalid installer payloads.
   Owner: `scripts/local_windows_installer.py`, its focused test, and
   `CONTRIBUTING.md`.
 

@@ -39,6 +39,7 @@ TYPE_HEADINGS = {
 }
 TYPE_ORDER = ("Added", "Fixed", "Performance", "Maintenance", "Other")
 COMMIT_RE = re.compile(r"^(?P<kind>[a-z]+)(?:\([^)]+\))?!?:\s+(?P<body>.+)$")
+ENDPOINT_PROTOCOL_SOURCE_PATH = Path("src/protocol/endpoint.rs")
 
 
 def run_git(args: list[str]) -> str:
@@ -47,6 +48,24 @@ def run_git(args: list[str]) -> str:
 
 def normalize_version(version: str) -> str:
     return version.strip().removeprefix("v")
+
+
+def validate_endpoint_generation(value: int) -> int:
+    if type(value) is not int or not 1 <= value <= 0xFFFFFFFF:
+        raise ValueError("endpoint_generation must be a positive u32 integer")
+    return value
+
+
+def read_endpoint_protocol_generation(
+    source_path: Path = ENDPOINT_PROTOCOL_SOURCE_PATH,
+) -> int:
+    content = source_path.read_text(encoding="utf-8")
+    match = re.search(r"pub const ENDPOINT_PROTOCOL_GENERATION: u32 = ([0-9]+);", content)
+    if not match:
+        raise ValueError(
+            f"could not read ENDPOINT_PROTOCOL_GENERATION from {source_path}"
+        )
+    return validate_endpoint_generation(int(match.group(1)))
 
 
 def latest_stable_tag(ref: str | None = None) -> str:
@@ -287,6 +306,7 @@ def build_manifest(
     built_at: str,
     base_version: str,
     protocol: int,
+    endpoint_generation: int,
     notes: str,
     shas: dict[str, str],
     retain: int,
@@ -294,6 +314,7 @@ def build_manifest(
 ) -> str:
     if not re.fullmatch(r"[0-9a-f]{12}\.[0-9a-f]{12}", build_id):
         raise ValueError("build_id must be two lowercase 12-hex components")
+    validate_endpoint_generation(endpoint_generation)
     urls = default_asset_urls(repo, tag, release_version)
     assets = asset_objects(urls, shas)
     current = read_json(output) or {}
@@ -305,6 +326,7 @@ def build_manifest(
         "commit": commit,
         "built_at": built_at,
         "protocol": protocol,
+        "endpoint_generation": endpoint_generation,
         "tag": tag,
         "prerelease": False,
         "assets": assets,
@@ -328,6 +350,7 @@ def build_manifest(
         "commit": commit,
         "built_at": built_at,
         "protocol": protocol,
+        "endpoint_generation": endpoint_generation,
         "notes": notes.strip(),
         "assets": assets,
         "builds": ordered_builds,
@@ -355,6 +378,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         built_at=args.built_at,
         base_version=args.base_version,
         protocol=args.protocol,
+        endpoint_generation=args.endpoint_generation,
         notes=notes,
         shas=shas,
         retain=args.retain,
@@ -368,6 +392,11 @@ def cmd_current_commit(args: argparse.Namespace) -> int:
     commit = previous_preview_commit(Path(args.manifest))
     if commit:
         print(commit)
+    return 0
+
+
+def cmd_endpoint_generation(args: argparse.Namespace) -> int:
+    print(read_endpoint_protocol_generation(Path(args.source)))
     return 0
 
 
@@ -429,11 +458,16 @@ def main() -> int:
     manifest.add_argument("--built-at", required=True)
     manifest.add_argument("--base-version", required=True)
     manifest.add_argument("--protocol", required=True, type=int)
+    manifest.add_argument("--endpoint-generation", required=True, type=int)
     manifest.add_argument("--notes", required=True)
     manifest.add_argument("--sha-file")
     manifest.add_argument("--retain", type=int, default=30)
     manifest.add_argument("--release-version", required=True)
     manifest.set_defaults(func=cmd_manifest)
+
+    endpoint_generation = sub.add_parser("endpoint-generation")
+    endpoint_generation.add_argument("--source", default=str(ENDPOINT_PROTOCOL_SOURCE_PATH))
+    endpoint_generation.set_defaults(func=cmd_endpoint_generation)
 
     asset_names = sub.add_parser("herdr-win-asset-names")
     asset_names.add_argument("--release-version", required=True)

@@ -251,6 +251,12 @@ jobs:
           }
           "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
           "protocol=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          $endpointGeneration = & python ..\source\scripts\preview.py endpoint-generation `
+            --source ..\source\src\protocol\endpoint.rs
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not read replayed endpoint protocol generation"
+          }
+          "endpoint_generation=$endpointGeneration" >> $env:GITHUB_OUTPUT
           $replaySha = (git -C ..\source rev-parse HEAD).Trim()
           $replayTree = (git -C ..\source rev-parse 'HEAD^{tree}').Trim()
           "HERDR_REPLAY_SHA=$replaySha" >> $env:GITHUB_ENV
@@ -284,6 +290,8 @@ jobs:
           python -m unittest scripts.test_package_windows_conpty
           python -m unittest `
             scripts.test_preview.PreviewNotesTests.test_build_manifest_archives_current_assets `
+            scripts.test_preview.PreviewNotesTests.test_endpoint_generation_reads_source_and_rejects_invalid_u32 `
+            scripts.test_preview.PreviewNotesTests.test_manifest_rejects_invalid_endpoint_generation `
             scripts.test_preview.PreviewNotesTests.test_preview_assets_require_sha256 `
             scripts.test_preview.PreviewNotesTests.test_manifest_preserves_legacy_zip_only_archived_build `
             scripts.test_preview.PreviewNotesTests.test_manifest_build_id_uses_two_hex_components
@@ -572,6 +580,7 @@ jobs:
           REPLAY_TREE: ${{ steps.replay.outputs.replay_tree }}
           BASE_VERSION: ${{ steps.replay.outputs.base_version }}
           PROTOCOL: ${{ steps.replay.outputs.protocol }}
+          ENDPOINT_GENERATION: ${{ steps.replay.outputs.endpoint_generation }}
           RELEASE_VERSION: ${{ steps.release_identity.outputs.release_version }}
           ASSET_NAMES_JSON: ${{ steps.release_identity.outputs.asset_names_json }}
         run: |
@@ -590,6 +599,7 @@ jobs:
             build_id = $env:BUILD_ID
             base_version = $env:BASE_VERSION
             protocol = [int] $env:PROTOCOL
+            endpoint_generation = [uint32] $env:ENDPOINT_GENERATION
             release_version = $env:RELEASE_VERSION
             asset_names = ($env:ASSET_NAMES_JSON | ConvertFrom-Json)
           }
@@ -599,6 +609,7 @@ jobs:
           $roundTrip = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
           if ([long] $roundTrip.workflow_run_id -ne [long] $env:GITHUB_RUN_ID -or
               [string] $roundTrip.build_id -cne $env:BUILD_ID -or
+              [uint32] $roundTrip.endpoint_generation -ne [uint32] $env:ENDPOINT_GENERATION -or
               [string] $roundTrip.release_version -cne $env:RELEASE_VERSION) {
             throw "release candidate metadata did not round-trip exactly"
           }
@@ -984,6 +995,10 @@ jobs:
              and ((.protocol | type) == "number")
              and (.protocol >= 0)
              and ((.protocol | floor) == .protocol)
+             and ((.endpoint_generation | type) == "number")
+             and (.endpoint_generation >= 1)
+             and (.endpoint_generation <= 4294967295)
+             and ((.endpoint_generation | floor) == .endpoint_generation)
              and (.release_version | test("^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]*$"))
              and ((.asset_names | type) == "object")
              and (.asset_names | keys) == $asset_keys
@@ -1009,6 +1024,7 @@ jobs:
           replay_tree="$(jq -er .replay_tree "$metadata")"
           base_version="$(jq -er .base_version "$metadata")"
           protocol="$(jq -er .protocol "$metadata")"
+          endpoint_generation="$(jq -er .endpoint_generation "$metadata")"
           portable_keys=(linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64)
           zip="$(jq -er '.asset_names["windows-x86_64"]' "$metadata")"
           installer="$(jq -er '.asset_names["windows-x86_64-installer"]' "$metadata")"
@@ -1087,6 +1103,7 @@ jobs:
             echo "REPLAY_TREE=$replay_tree"
             echo "BASE_VERSION=$base_version"
             echo "PROTOCOL=$protocol"
+            echo "ENDPOINT_GENERATION=$endpoint_generation"
             echo "RELEASE_VERSION=$release_version"
             echo "ASSET_NAMES_JSON=$asset_names_json"
             echo "ARTIFACT_NAME=$artifact_name"
@@ -1364,6 +1381,7 @@ jobs:
             --built-at "$BUILT_AT" \
             --base-version "$BASE_VERSION" \
             --protocol "$PROTOCOL" \
+            --endpoint-generation "$ENDPOINT_GENERATION" \
             --notes "$notes" \
             --sha-file "$shas" \
             --release-version "$RELEASE_VERSION" \
@@ -1376,6 +1394,7 @@ jobs:
             --arg base_version "$BASE_VERSION" \
             --arg release_version "$RELEASE_VERSION" \
             --argjson protocol "$PROTOCOL" \
+            --argjson endpoint_generation "$ENDPOINT_GENERATION" \
             --arg tag "$TAG" \
             --argjson names "$ASSET_NAMES_JSON" \
             --argjson asset_keys "$asset_keys" \
@@ -1401,11 +1420,13 @@ jobs:
              and .commit == $commit
              and .base_version == $base_version
              and .protocol == $protocol
+             and .endpoint_generation == $endpoint_generation
              and (.assets | keys == $asset_keys)
              and (.builds[$build_id].assets | keys == $asset_keys)
              and .builds[$build_id].assets == .assets
              and .builds[$build_id].release_version == $release_version
              and .builds[$build_id].prerelease == false
+             and .builds[$build_id].endpoint_generation == $endpoint_generation
              and ([$asset_keys[] as $key
                    | .assets[$key].url == ($prefix + $tag + "/" + $names[$key])
                      and .assets[$key].sha256 == $shas[0][$key]] | all)

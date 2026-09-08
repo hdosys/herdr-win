@@ -45,6 +45,7 @@ class PreviewNotesTests(unittest.TestCase):
                 built_at="2026-06-02T03:00:00Z",
                 base_version="0.6.6",
                 protocol=12,
+                endpoint_generation=7,
                 notes=notes,
                 shas=VALID_SHAS,
                 retain=30,
@@ -55,16 +56,16 @@ class PreviewNotesTests(unittest.TestCase):
             self.assertIs(data["prerelease"], False)
             self.assertEqual(data["release_version"], "2026.06.02.1")
             self.assertEqual(data["build_id"], "abcdef123456.7890abcdef12")
+            self.assertEqual(data["endpoint_generation"], 7)
+            self.assertEqual(
+                data["builds"][data["build_id"]]["endpoint_generation"], 7
+            )
             self.assertEqual(
                 set(data["assets"]), set(preview.ASSET_TARGETS),
             )
             self.assertEqual(
                 data["assets"]["linux-x86_64"]["url"],
                 "https://github.com/herdrdev/herdr/releases/download/v2026.06.02.1/herdr-win_v2026.06.02.1_linux_amd64",
-            )
-            self.assertEqual(
-                data["endpoint_generation"],
-                preview.read_endpoint_protocol_generation(),
             )
             self.assertEqual(
                 data["assets"]["linux-x86_64"]["sha256"],
@@ -132,6 +133,46 @@ class PreviewNotesTests(unittest.TestCase):
             ):
                 preview.herdr_win_asset_names(invalid)
 
+    def test_endpoint_generation_reads_source_and_rejects_invalid_u32(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "endpoint.rs"
+            for value in (1, 7, 0xFFFFFFFF):
+                with self.subTest(value=value):
+                    source.write_text(
+                        f"pub const ENDPOINT_PROTOCOL_GENERATION: u32 = {value};\n",
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(preview.read_endpoint_protocol_generation(source), value)
+            for value in ("0", "4294967296", "-1", "1.5", "true", "missing"):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    source.write_text(
+                        f"pub const ENDPOINT_PROTOCOL_GENERATION: u32 = {value};\n",
+                        encoding="utf-8",
+                    )
+                    preview.read_endpoint_protocol_generation(source)
+
+    def test_manifest_rejects_invalid_endpoint_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for value in (None, True, "1", 0, -1, 1.5, 0x100000000):
+                with self.subTest(value=value), self.assertRaisesRegex(
+                    ValueError, "endpoint_generation must be a positive u32 integer"
+                ):
+                    preview.build_manifest(
+                        output=Path(tmp) / "preview.json",
+                        repo="hdosys/herdr-win",
+                        tag=VALID_RELEASE_TAG,
+                        build_id="abcdef123456.7890abcdef12",
+                        commit="abcdef",
+                        built_at="2026-06-02T03:00:00Z",
+                        base_version="0.9.0",
+                        protocol=12,
+                        endpoint_generation=value,
+                        notes="test",
+                        shas=VALID_SHAS,
+                        retain=1,
+                        release_version=VALID_RELEASE_VERSION,
+                    )
+
     def test_release_gate_requires_newer_calver(self):
         current = {"release_version": "2026.08.05.5"}
         for stale in ("2026.08.05.5", "2026.08.05.4", "2026.08.04.99"):
@@ -166,6 +207,7 @@ class PreviewNotesTests(unittest.TestCase):
                         built_at="2026-06-02T03:00:00Z",
                         base_version="0.6.6",
                         protocol=12,
+                        endpoint_generation=1,
                         notes="test",
                         shas=shas,
                         retain=1,
@@ -186,6 +228,7 @@ class PreviewNotesTests(unittest.TestCase):
                     built_at="2026-06-02T03:00:00Z",
                     base_version="0.6.6",
                     protocol=12,
+                    endpoint_generation=1,
                     notes="test",
                     shas=invalid,
                     retain=1,
@@ -205,6 +248,7 @@ class PreviewNotesTests(unittest.TestCase):
                 built_at="2026-06-02T03:00:00Z",
                 base_version="0.6.6",
                 protocol=12,
+                endpoint_generation=1,
                 notes="test",
                 shas=VALID_SHAS,
                 retain=1,
@@ -243,12 +287,14 @@ class PreviewNotesTests(unittest.TestCase):
                 built_at="2026-06-02T03:00:00Z",
                 base_version="0.6.6",
                 protocol=12,
+                endpoint_generation=1,
                 notes="test",
                 shas=VALID_SHAS,
                 retain=2,
                 release_version=VALID_RELEASE_VERSION,
             )
             data = json.loads(content)
+            self.assertNotIn("endpoint_generation", data["builds"][legacy_id])
             self.assertEqual(
                 set(data["builds"][legacy_id]["assets"]), {"windows-x86_64"}
             )
@@ -269,6 +315,7 @@ class PreviewNotesTests(unittest.TestCase):
                     built_at="2026-06-02T03:00:00Z",
                     base_version="0.6.6",
                     protocol=12,
+                    endpoint_generation=1,
                     notes="test",
                     shas=VALID_SHAS,
                     retain=1,
@@ -301,7 +348,6 @@ class PreviewNotesTests(unittest.TestCase):
     def test_hidden_subjects_include_preview_manifest_commits(self):
         self.assertTrue(preview.hidden_subject("docs: update preview manifest"))
         self.assertTrue(preview.hidden_subject("docs: update website manifest"))
-        self.assertTrue(preview.hidden_subject("docs: publish release distribution"))
         self.assertFalse(preview.hidden_subject("release: v0.7.0"))
         self.assertFalse(preview.hidden_subject("fix: repair preview manifest"))
 

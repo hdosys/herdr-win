@@ -1,4 +1,4 @@
-From b450b118a20c0e0a831f43d63a80b8d1bfd2377c Mon Sep 17 00:00:00 2001
+From 9ff923800beaf0a7ee0e4f472f69f2dbe7a85a58 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Thu, 20 Aug 2026 17:49:01 +0200
 Subject: [PATCH 6/13] fix(worktree): scope Git trust to selected paths
@@ -14,8 +14,8 @@ Refs herdrdev/herdr#3044
  src/pane.rs                       | 24 ++++++++++++++++++++++--
  src/pty/actor.rs                  | 30 +++++++++++++++++++++++++++++-
  src/terminal/runtime.rs           |  4 ++--
- src/worktree.rs                   | 12 ++++++------
- 10 files changed, 88 insertions(+), 26 deletions(-)
+ src/worktree.rs                   | 16 ++++++++++------
+ 10 files changed, 92 insertions(+), 26 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index ba2ce0eddf76597aaa90354568f5fdf52eb731a7..2865c99c4604f262eaf794e00244f9401d27c9ad 100644
@@ -296,7 +296,7 @@ index 57d45b9276869ddbf0284d58d0ddeb0e534ce7bc..f98b0f9d552678ff23903829ca958947
  
      #[cfg(unix)]
 diff --git a/src/worktree.rs b/src/worktree.rs
-index 523bc502983ff4327dafd8754d5fc4a8c557d637..aacf0438ec531558c65e50625858178ad1510c5d 100644
+index 523bc502983ff4327dafd8754d5fc4a8c557d637..89b4ebad6dffce8c5ab4488744edc7e4739bd8c7 100644
 --- a/src/worktree.rs
 +++ b/src/worktree.rs
 @@ -157,12 +157,12 @@ fn repository_git_command(repo_root: &Path, trust_repository: bool) -> std::proc
@@ -318,6 +318,24 @@ index 523bc502983ff4327dafd8754d5fc4a8c557d637..aacf0438ec531558c65e50625858178a
      args.push("-C".to_string());
      args.push(repo_root.display().to_string());
      args
+@@ -784,6 +784,8 @@ prunable stale
+         assert_eq!(
+             command.args,
+             vec![
++                "-c",
++                "safe.directory=/repo/herdr",
+                 "-C",
+                 "/repo/herdr",
+                 "worktree",
+@@ -804,6 +806,8 @@ prunable stale
+         assert_eq!(
+             command.args,
+             vec![
++                "-c",
++                "safe.directory=/repo/herdr",
+                 "-C",
+                 "/repo/herdr",
+                 "worktree",
 -- 
 2.55.0.windows.3
 

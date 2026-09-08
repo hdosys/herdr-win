@@ -117,7 +117,7 @@ herdr --remote workbox
 herdr --remote workbox --provision --yes --json
 ```
 
-所有受支持的客户端都可以连接 x86_64 和 ARM64 Windows 主机。Herdr 使用 `PATH` 或稳定的 `%USERPROFILE%\.herdr\remote\herdr.exe` 负载中版本与协议完全匹配的二进制。显式配置会传输并验证完整的便携 ZIP,不会运行受管理安装程序或更改远程 `PATH`;普通非交互式连接永远不会安装。Windows OpenSSH 的默认 shell 必须是 `cmd.exe` 或 PowerShell 7,服务器会在 SSH 用户现有的活动桌面会话中启动,因此 SSH 断开后仍可继续运行。Windows PowerShell 5.1、未知 shell 或不明确的桌面会话都会 fail-closed。Windows 目标主机不支持实时交接。
+所有受支持的客户端都可以连接 x86_64 和 ARM64 Windows 主机。普通连接和已保存的机器会复用 `PATH` 或 `%USERPROFILE%\.herdr\remote\herdr.exe` 中端点兼容的二进制,不会仅因版本不同而替换。显式配置则要求所选运行时身份完全匹配,并在任何已批准的服务器停止之前验证完整的便携 ZIP。它不会运行受管理安装程序或更改远程 `PATH`。已保存连接的重连不会安装或重启服务器,并保持明确选择的会话。Windows OpenSSH 的默认 shell 必须是 `cmd.exe` 或 PowerShell 7。服务器在 SSH 用户现有的活动桌面会话中启动,因此 SSH 断开后仍可继续运行。Windows PowerShell 5.1、未知 shell 或不明确的桌面会话都会被拒绝。Windows 目标主机不支持实时交接。
 
 Windows 更新使用受管理的安装程序资产。现有会话继续使用当前的不可变运行时,活动租约结束后,后续启动会切换到新运行时。实时交接仅限 Unix。
 

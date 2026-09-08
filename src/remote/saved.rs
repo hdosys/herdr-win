@@ -20,12 +20,12 @@ pub(crate) fn connect_saved_ssh(
     validate_profile_path_id(profile_id)?;
     crate::session::validate_name(session)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let ssh = RemoteSsh::new_noninteractive(target.to_owned());
+    let ssh = RemoteSsh::new_noninteractive(target.to_owned(), session.to_owned());
     let remote_herdr = find_installed_remote_herdr(&ssh)?;
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
-        super::attach::remote_bridge_command(&remote_herdr, session, None)?,
+        super::attach::remote_bridge_command(&remote_herdr, session)?,
         path.clone(),
         ssh.options(),
         true,

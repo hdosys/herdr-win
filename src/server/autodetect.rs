@@ -116,13 +116,26 @@ fn client_protocol_accepts_hello(socket_path: &Path, read_timeout: Duration) -> 
         Err(err) => return Err(err),
     };
 
-    let hello = crate::protocol::ClientMessage::TerminalHello {
-        version: crate::protocol::PROTOCOL_VERSION,
-        cols: 80,
-        rows: 24,
+    use crate::protocol::endpoint::*;
+    let probe = EndpointClientHello {
+        generation: ENDPOINT_PROTOCOL_GENERATION,
+        surface_size: crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        direct_graphics: false,
+        endpoint_keybindings: false,
+        mouse_capture: false,
+        surface_active: false,
+        surface_cursor_color: false,
+        snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
+        surface_codecs: vec![SURFACE_CODEC_V1.into()],
+        input_codecs: vec![INPUT_CODEC_V1.into()],
+        blob_codecs: vec![BLOB_CODEC_V1.into()],
+    };
+    let hello = crate::protocol::ClientMessage::EndpointControl {
+        kind: ENDPOINT_HELLO_KIND.into(),
+        data: serde_json::to_string(&probe).map_err(io::Error::other)?,
     };
 
     match crate::protocol::write_message(&mut stream, &hello) {
@@ -153,12 +166,13 @@ fn client_protocol_welcome_is_ready(
     welcome: Result<crate::protocol::ServerMessage, crate::protocol::FramingError>,
 ) -> io::Result<bool> {
     match welcome {
-        Ok(crate::protocol::ServerMessage::Welcome {
-            version,
-            error: None,
-            ..
-        }) => Ok(version == crate::protocol::PROTOCOL_VERSION),
-        Ok(crate::protocol::ServerMessage::Welcome { error: Some(_), .. }) => Ok(false),
+        Ok(crate::protocol::ServerMessage::EndpointControl { kind, data })
+            if kind == crate::protocol::endpoint::ENDPOINT_WELCOME_KIND =>
+        {
+            let welcome: crate::protocol::endpoint::EndpointServerWelcome =
+                serde_json::from_str(&data).map_err(io::Error::other)?;
+            Ok(welcome.supports_required_codecs())
+        }
         Ok(_) | Err(crate::protocol::FramingError::UnexpectedEof) => Ok(false),
         Err(crate::protocol::FramingError::Io(err))
             if matches!(
@@ -380,6 +394,36 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn shell_readiness_checks_generation_and_codecs_not_private_versions() {
+        use crate::protocol::endpoint::*;
+        let ready = |welcome: EndpointServerWelcome| {
+            super::client_protocol_welcome_is_ready(Ok(
+                crate::protocol::ServerMessage::EndpointControl {
+                    kind: ENDPOINT_WELCOME_KIND.into(),
+                    data: serde_json::to_string(&welcome).unwrap(),
+                },
+            ))
+            .unwrap()
+        };
+        let mut welcome = EndpointServerWelcome::compatible(Vec::new());
+        welcome.server_version = "older-compatible-build".into();
+        assert!(ready(welcome.clone()));
+        welcome.input_codec = "unsupported".into();
+        assert!(!ready(welcome));
+        let mut welcome = EndpointServerWelcome::compatible(Vec::new());
+        welcome.generation += 1;
+        assert!(!ready(welcome));
+        assert!(!ready(EndpointServerWelcome::incompatible(
+            "rejected",
+            "not ready"
+        )));
+        assert!(!super::client_protocol_welcome_is_ready(Err(
+            crate::protocol::FramingError::UnexpectedEof
+        ))
+        .unwrap());
+    }
     use super::*;
     use std::ffi::OsStr;
     use std::io::{BufRead, BufReader, Write};

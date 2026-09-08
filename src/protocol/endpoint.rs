@@ -113,6 +113,15 @@ impl EndpointClientHello {
 }
 
 impl EndpointServerWelcome {
+    pub(crate) fn supports_required_codecs(&self) -> bool {
+        self.error.is_none()
+            && self.generation == ENDPOINT_PROTOCOL_GENERATION
+            && self.snapshot_codec == SNAPSHOT_CODEC_V1
+            && self.surface_codec == SURFACE_CODEC_V1
+            && self.input_codec == INPUT_CODEC_V1
+            && self.blob_codec == BLOB_CODEC_V1
+    }
+
     pub fn compatible(methods: Vec<String>) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,

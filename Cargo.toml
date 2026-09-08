@@ -15,7 +15,6 @@ include = [
     "assets/sounds/*",
     "docs/next/api/herdr-api.schema.json",
     "skills/herdr/SKILL.md",
-    "distribution/install.ps1",
     "README.md",
     "LICENSE",
     "Cargo.toml",

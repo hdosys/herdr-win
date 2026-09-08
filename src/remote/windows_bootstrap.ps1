@@ -187,7 +187,8 @@ function Invoke-HerdrRemoteStageInstall {
         $status = & $exe status client --json | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or
             [string]$status.version -cne $ExpectedRuntimeVersion -or
-            [int]$status.protocol -ne $ExpectedProtocol) {
+            [int]$status.protocol -ne $ExpectedProtocol -or
+            [string]::IsNullOrWhiteSpace([string]$status.binary)) {
             throw 'portable payload runtime identity or protocol mismatch'
         }
 
@@ -272,4 +273,5 @@ function Invoke-HerdrRemoteActivateInstall {
     ) {
         throw 'activated remote Herdr runtime identity or protocol mismatch'
     }
+    $client | ConvertTo-Json -Compress -Depth 8
 }

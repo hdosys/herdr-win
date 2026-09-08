@@ -253,9 +253,14 @@ pub(crate) fn configure_remote_sidecar_child(_command: &mut std::process::Comman
 fn ensure_remote_server_running() -> io::Result<()> {
     let socket_path = crate::server::socket_paths::client_socket_path();
     if let Some(status) = crate::server::autodetect::read_server_status()? {
-        if status.protocol != Some(crate::protocol::PROTOCOL_VERSION) {
+        if status
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.endpoint_protocol_generation)
+            != Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+        {
             return Err(io::Error::other(
-                "remote herdr server must restart before this bridge can attach",
+                "remote herdr server needs the stable endpoint protocol before this bridge can attach",
             ));
         }
         return crate::server::autodetect::wait_for_server_socket(
@@ -383,44 +388,14 @@ fn cmd_herdr_command(
     Ok(command)
 }
 
-pub(super) fn powershell_herdr_probe_command(
-    executable: &str,
-    sidecar: bool,
-    expected_payload_sha256: Option<&str>,
-) -> String {
-    let sidecar_environment = if sidecar {
-        format!(
-            "$env:{} = '1'; Remove-Item Env:{} -ErrorAction SilentlyContinue; ",
-            sidecar_environment_name(),
-            crate::HERDR_ENV_VAR,
-        )
-    } else {
-        String::new()
-    };
-    let payload_check = if sidecar {
-        let expected = expected_payload_sha256
-            .map(|sha256| format!(" {}", powershell_quote(sha256)))
-            .unwrap_or_default();
-        format!(
-            "& $herdr {}{expected}; if ($LASTEXITCODE -ne 0) {{ exit 1 }}; ",
-            powershell_quote(REMOTE_SIDECAR_VALIDATE_ARG)
-        )
-    } else {
-        String::new()
-    };
-    let script = format!(
-        "$ErrorActionPreference = 'Stop'; $herdr = {}; {sidecar_environment}{payload_check}$status = & $herdr status client --json; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; [Console]::Out.WriteLine($status); exit 0",
-        powershell_quote(executable)
-    );
-    encoded_powershell_command(&script)
-}
-
 pub(super) fn powershell_attach_probe_command(
     expected_runtime_version: &str,
     expected_protocol: u32,
     expected_payload_sha256: Option<&str>,
     allow_path_candidate: bool,
     session_name: Option<&str>,
+    require_surface_interest: bool,
+    exact_identity: bool,
 ) -> String {
     let server_arguments = match session_name {
         Some(session_name) => format!("@('--session', {})", powershell_quote(session_name)),
@@ -430,7 +405,7 @@ pub(super) fn powershell_attach_probe_command(
         .map(powershell_quote)
         .unwrap_or_else(|| "$null".to_string());
     let variables = format!(
-        "$ExpectedRuntime = {}\n$ExpectedProtocol = {}\n$ExpectedPayloadSha256 = {}\n$V = {}\n$AllowPathCandidate = {}\n$ServerArguments = {}\n",
+        "$Runtime = {}\n$Protocol = {}\n$Hash = {}\n$V = {}\n$AllowPath = {}\n$Session = {}\n",
         powershell_quote(expected_runtime_version),
         expected_protocol,
         expected_payload_sha256,
@@ -449,7 +424,25 @@ pub(super) fn powershell_attach_probe_command(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    let script = format!("{variables}{probe}");
+    let requirements = format!(
+        "$Exact = ${}\n$Generation = {}\n$Capabilities = @({})\n",
+        if exact_identity { "true" } else { "false" },
+        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+        if require_surface_interest {
+            [
+                crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY,
+                crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
+                crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
+            ]
+            .into_iter()
+            .map(powershell_quote)
+            .collect::<Vec<_>>()
+            .join(",")
+        } else {
+            String::new()
+        },
+    );
+    let script = format!("{variables}{requirements}{probe}");
     encoded_powershell_command(&script)
 }
 
@@ -725,13 +718,16 @@ mod tests {
     #[test]
     fn windows_attach_probe_combines_platform_binary_and_server_inspection() {
         let expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let expected_runtime = "2026.09.08.2359Z+0123456789ab.0123456789ab";
         let session = "a".repeat(64);
         let command = powershell_attach_probe_command(
-            "local",
+            expected_runtime,
             20,
             Some(expected_sha256),
             true,
             Some(&session),
+            true,
+            true,
         );
         let script = decoded_powershell_command(&command);
 
@@ -740,12 +736,12 @@ mod tests {
             "encoded attach probe has {} UTF-16 code units",
             command.encode_utf16().count()
         );
-        assert!(script.contains("$ExpectedRuntime = 'local'"));
-        assert!(script.contains("$ExpectedProtocol = 20"));
-        assert!(script.contains(&format!("$ExpectedPayloadSha256 = '{expected_sha256}'")));
+        assert!(script.contains(&format!("$Runtime = '{expected_runtime}'")));
+        assert!(script.contains("$Protocol = 20"));
+        assert!(script.contains(&format!("$Hash = '{expected_sha256}'")));
         assert!(script.contains(&format!("$V = '{REMOTE_SIDECAR_VALIDATE_ARG}'")));
-        assert!(script.contains("$AllowPathCandidate = $true"));
-        assert!(script.contains(&format!("$ServerArguments = @('--session', '{session}')")));
+        assert!(script.contains("$AllowPath = $true"));
+        assert!(script.contains(&format!("$Session = @('--session', '{session}')")));
         assert!(script.contains("PROCESSOR_ARCHITECTURE"));
         assert!(script.contains("default_shell"));
         assert!(script.contains("OpenSSH"));

@@ -63,6 +63,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             cache.mkdir(parents=True)
             data = cache / "retained.bin"
             data.write_bytes(b"retained")
+            (cache / "compiler.lock").write_bytes(b"")
             with patch("scripts.local_windows_installer.shutil.disk_usage") as usage:
                 usage.return_value.free = 0
                 with self.assertRaisesRegex(LocalInstallerError, "at least 2 GiB free"):

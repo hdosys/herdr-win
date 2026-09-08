@@ -502,7 +502,19 @@ def _require_candidate_cache_budget(cargo_target: Path) -> None:
             "volume; inspect disk usage before retrying. No cache was deleted."
         )
     cache = cargo_target / WINDOWS_TARGET / "release" / "incremental"
-    size = sum(path.stat().st_size for path in _files(cache).values()) if cache.exists() else 0
+    size = 0
+    if cache.exists():
+        _safe_path(cache, "incremental cache", directory=True)
+        for directory, folders, files in os.walk(cache, followlinks=False):
+            for name in folders:
+                _safe_path(Path(directory) / name, "cache directory", directory=True)
+            for name in files:
+                path = Path(directory) / name
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & REPARSE_POINT:
+                    raise LocalInstallerError(f"incremental cache contains an unsafe entry: {path}")
+                # Empty compiler lock files are valid, unlike installer payload files.
+                size += info.st_size
     if size > MAXIMUM_CANDIDATE_INCREMENTAL_CACHE_BYTES:
         raise LocalInstallerError(
             f"Candidate incremental cache exceeds its 2 GiB iteration budget: {cache}. "

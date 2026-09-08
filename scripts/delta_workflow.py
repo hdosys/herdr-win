@@ -1161,6 +1161,33 @@ def materialize_delta_worktree(
     )
 
 
+def integrate_development_worktree(
+    worktree: Path,
+    base: str,
+    head: str,
+    project_root: Path = PROJECT_ROOT,
+) -> DevelopmentResult:
+    """Fast-forward the linked source target inside the caller's resource lock."""
+
+    _require_control_master(project_root)
+    worktree, branch = _require_clean_delta_worktree(project_root, worktree)
+    if branch != DEVELOPMENT_BRANCH:
+        raise DeltaWorkflowError(f"integration target must use {DEVELOPMENT_BRANCH}")
+    if BASE_RE.fullmatch(base) is None or BASE_RE.fullmatch(head) is None:
+        raise DeltaWorkflowError("integration requires full base and head commit IDs")
+    current = _run_git(worktree, ["rev-parse", "HEAD"]).stdout.strip()
+    if current != base:
+        raise DeltaWorkflowError(f"stale integration base: expected {base}, found {current}")
+    _run_git(worktree, ["cat-file", "-e", f"{head}^{{commit}}"])
+    _run_git(worktree, ["merge-base", "--is-ancestor", base, head])
+    _run_git(worktree, ["merge", "--ff-only", head])
+    actual = _run_git(worktree, ["rev-parse", "HEAD"]).stdout.strip()
+    if actual != head:
+        raise DeltaWorkflowError(f"integration head changed: expected {head}, found {actual}")
+    tree = _run_git(worktree, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
+    return DevelopmentResult(path=worktree, head=actual, tree=tree)
+
+
 def publish_development_worktree(
     worktree: Path,
     project_root: Path = PROJECT_ROOT,
@@ -1305,6 +1332,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="absolute path to an existing delta worktree at BASE",
     )
 
+    integrate_development = commands.add_parser(
+        "integrate-development",
+        help="under the repository resource lock, fast-forward the linked source target",
+    )
+    integrate_development.add_argument("--worktree", required=True, type=Path)
+    integrate_development.add_argument("--base", required=True)
+    integrate_development.add_argument("--head", required=True)
+
     publish_development = commands.add_parser(
         "publish-development",
         help="push the clean cumulative development source state",
@@ -1393,6 +1428,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
             print(f"source-tree: {result.source_tree}")
             print(f"replay-tree: {result.replay_tree}")
             print("mailbox-updated: yes")
+            return 0
+
+        if options.command == "integrate-development":
+            result = integrate_development_worktree(
+                options.worktree, options.base, options.head
+            )
+            print(f"worktree: {result.path}")
+            print(f"head: {result.head}")
+            print(f"tree: {result.tree}")
+            print("development-integrated: yes")
             return 0
 
         if options.command == "publish-development":

@@ -15,6 +15,7 @@ from scripts.delta_workflow import (
     _git_command,
     compile_delta_prefixes,
     finalize_delta_mailbox,
+    integrate_development_worktree,
     materialize_delta_worktree,
     publish_development_worktree,
     start_delta_worktree,
@@ -118,6 +119,27 @@ class DeltaFixture:
 
 
 class DeltaWorkflowTests(unittest.TestCase):
+    def test_linked_development_integration_requires_exact_clean_base(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = DeltaFixture(root)
+            worktree = root / "development"
+            started = start_delta_worktree("integration", worktree, fixture.control)
+            run_git(worktree, ["branch", "-m", DEVELOPMENT_BRANCH])
+            head = run_git(
+                fixture.control,
+                ["commit-tree", fixture.source_tree, "-p", started.head, "-m", "milestone"],
+            )
+            with self.assertRaisesRegex(DeltaWorkflowError, "stale integration base"):
+                integrate_development_worktree(worktree, fixture.base, head, fixture.control)
+            (worktree / "value.txt").write_bytes(b"unfinished\n")
+            with self.assertRaisesRegex(DeltaWorkflowError, "source worktree must be clean"):
+                integrate_development_worktree(worktree, started.head, head, fixture.control)
+            (worktree / "value.txt").write_bytes(b"first\n")
+            result = integrate_development_worktree(worktree, started.head, head, fixture.control)
+            self.assertEqual(result.head, head)
+            self.assertEqual(result.tree, fixture.source_tree)
+
     @staticmethod
     def integration_module(integration: str, version: int, *files: str) -> str:
         constant = integration.upper().replace("-", "_")

@@ -69,8 +69,8 @@ one cumulative development state. Documentation and control-plane changes stay i
 the control checkout. Ordinary sessions reopen, coordinate, and work directly in
 that development tree. They do not create a worktree per issue.
 
-Integrate every completed topic into `candidate/development` immediately after its
-focused check and push that cumulative branch. An explicit current-user patch or
+Integrate every coherent completed topic into `candidate/development`, build the
+fixed installer, then run focused checks and push that cumulative branch. An explicit current-user patch or
 release request gates patch-queue promotion, not routine integration of completed
 development work.
 
@@ -105,18 +105,22 @@ check, merge the finished commit into `candidate/development`, publish it throug
 branch, and any temporary remote ref. Never ask the user to classify or clean
 these internal resources.
 
-For every interactive development update:
+The cumulative product source is a linked checkout, unlike control `master`.
+Use `delta_workflow.py integrate-development --worktree <development-path>
+--base <full-current-development-oid> --head <full-coherent-topic-oid>` for its
+exact-base fast-forward. It validates the same repository, clean source state,
+branch, and ancestry, and performs no build, replay, fetch, or publication.
+In concurrent mode, run the entire command through the global `resource-lock`
+entrypoint with key `resource:herdr-win-candidate-development`. Use that same key
+around `publish-development`; never hold it during builds or tests. The generic
+control-branch integration helper intentionally accepts only the main checkout.
 
-1. Obtain exclusive ownership for overlapping files and build resources in the
-   shared development tree.
-2. Make the smallest source change and run its focused check.
-3. Commit every completed change to the development branch. Integrate any completed
-   topic lanes, review the cumulative diff, and push the branch to
-   `origin/candidate/development` through `delta_workflow.py publish-development`.
-4. Build the fixed installer only from that pushed cumulative commit. Never report
-   a topic artifact.
-5. Tell the user only the fixed path, hash, included outcomes, result, and next
-   action. Internal worktrees, refs, and integration state are not user decisions.
+The global interactive-delivery order applies. This repository's source-target
+exception is that the coherent source commit must first reach
+`candidate/development`, because only that branch may build the canonical setup.
+Build and report it before behavioral checks and publication. Never report a topic
+artifact. Normal publication uses `delta_workflow.py publish-development` and does
+not authorize a release.
 
 Both development publication and the fixed installer inspect registered linked
 topic worktrees. A committed topic head that is not an ancestor of the development

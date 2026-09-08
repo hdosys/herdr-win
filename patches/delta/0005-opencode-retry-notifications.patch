@@ -1,42 +1,108 @@
-From fc1868fb6a6bfbb1a5e94d43f8de7a66991f2dd9 Mon Sep 17 00:00:00 2001
+From 9e00bce5f01c0769506d6df4508301b9fc781ecc Mon Sep 17 00:00:00 2001
 From: hdosys <71881005+hdosys@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 19:41:54 +0200
-Subject: [PATCH 4/17] fix(opencode): preserve truthful lifecycle state
+Subject: [PATCH 4/13] fix(opencode): preserve truthful lifecycle state
 
 Defer root-session errors until idle or a bounded fallback, cancel them when explicit continuing status follows, and prevent terminal blocked state from being overwritten by legacy idle events. Keep outstanding root and child prompts blocked until their exact replies arrive so unrelated busy or idle events cannot erase user-waiting state.
 ---
- CHANGELOG.md                                  |    3 +
- .../assets/opencode/herdr-agent-state.js      |  995 +++++++++++--
- .../assets/opencode/herdr-agent-state.test.ts | 1273 ++++++++++++++++-
- .../assets/opencode/herdr-tui-session.js      |    9 +-
- .../assets/opencode/herdr-tui-session.test.ts |   15 +
+ src/agent_resume.rs                           |   23 +-
+ src/app/agents.rs                             |   13 +-
+ .../assets/opencode/herdr-agent-state.js      |  959 +++++++++--
+ .../assets/opencode/herdr-agent-state.test.ts | 1431 ++++++++++++++++-
+ .../assets/opencode/herdr-tui-session.js      |  123 +-
+ .../assets/opencode/herdr-tui-session.test.ts |  157 +-
  src/integration/mod.rs                        |    2 +-
- 6 files changed, 2160 insertions(+), 137 deletions(-)
+ 7 files changed, 2488 insertions(+), 220 deletions(-)
 
-diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 05f368084241fc56b7f437bd1232edce40f12b0b..576a7abcdf532aad296c5bb7a0092393d92808c1 100644
---- a/CHANGELOG.md
-+++ b/CHANGELOG.md
-@@ -2,6 +2,9 @@
+diff --git a/src/agent_resume.rs b/src/agent_resume.rs
+index 075c396fe6c3af0267f157756c5544ba739e10a0..1e9ef6cdef2188debaebfc6750de5430b7e50d78 100644
+--- a/src/agent_resume.rs
++++ b/src/agent_resume.rs
+@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
+ const MAX_SESSION_ID_LEN: usize = 512;
+ const MAX_SESSION_PATH_LEN: usize = 4096;
  
- ## Unreleased
- 
-+### Added
-+- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
++pub(crate) fn opencode_local_server_argv() -> Vec<String> {
++    ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns"]
++        .map(str::to_string)
++        .into()
++}
 +
- ## [0.8.2] - 2026-08-19
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct AgentSessionRef {
+     pub kind: AgentSessionRefKind,
+@@ -184,11 +190,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
+             ]
+         }
+         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
+-            vec![
+-                "opencode".into(),
+-                "--session".into(),
+-                session_ref.value.clone(),
+-            ]
++            let mut argv = opencode_local_server_argv();
++            argv.extend(["--session".into(), session_ref.value.clone()]);
++            argv
+         }
+         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
+             vec![
+@@ -446,7 +450,14 @@ mod tests {
+             )
+             .unwrap()
+             .argv,
+-            vec!["opencode", "--session", "opencode-session"]
++            vec![
++                "opencode",
++                "--hostname=127.0.0.1",
++                "--port=0",
++                "--no-mdns",
++                "--session",
++                "opencode-session"
++            ]
+         );
+         assert_eq!(
+             plan(
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index 5033505dc4d65e60241ee947edfdabc1239b898b..e23c67fa84a16c431a10ad3f4ee804c0de9aa1d2 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -19,6 +19,16 @@ fn valid_agent_name(name: &str) -> bool {
+         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+ }
  
- ### Added
++fn agent_launch_argv(kind: crate::detect::Agent, args: Vec<String>) -> Vec<String> {
++    let mut argv = if kind == crate::detect::Agent::OpenCode && args.is_empty() {
++        crate::agent_resume::opencode_local_server_argv()
++    } else {
++        vec![crate::detect::interactive_agent_executable(kind).to_string()]
++    };
++    argv.extend(args);
++    argv
++}
++
+ impl App {
+     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
+         self.state
+@@ -194,8 +204,7 @@ impl App {
+         let shell_name = available_shell_name(runtime)
+             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+ 
+-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
+-        argv.extend(params.args);
++        let argv = agent_launch_argv(kind, params.args);
+         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
+             .ok_or(AgentStartError::InvalidArgument)?;
+         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
 diff --git a/src/integration/assets/opencode/herdr-agent-state.js b/src/integration/assets/opencode/herdr-agent-state.js
-index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139ddc7d2ac5 100644
+index 45032335c15b9401f3eabf1868f6c80e0d9c8336..24377b426e9aaeecc6af127e4cc093f1bc679f36 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.js
 +++ b/src/integration/assets/opencode/herdr-agent-state.js
-@@ -2,19 +2,24 @@
+@@ -2,19 +2,25 @@
  // managed by herdr; reinstalling or updating the integration overwrites this file.
  // add custom hooks/plugins beside this file instead of editing it.
  // HERDR_INTEGRATION_ID=opencode
--// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=19
+-// HERDR_INTEGRATION_VERSION=11
++// HERDR_INTEGRATION_VERSION=21
  
 +import { createHash } from "node:crypto";
  import net from "node:net";
@@ -48,8 +114,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 -let reportedRootSessionID;
  
 -// Track child sessions so their events cannot replace the pane's root session.
--// Their user prompts still project state without attaching the child session id.
--const childSessions = new Set();
+-// User prompts carry the root id to preserve its identity and cross-talk guard.
+-const childSessions = new Map();
 +const ERROR_FALLBACK_MS = 5_000;
 +const ERROR_RETRY_GRACE_MS = 1_000;
 +const ERROR_MAX_FALLBACK_MS = 2_147_483_647;
@@ -58,11 +124,12 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +const MAX_RESPONSE_CHARACTERS = 64 * 1024;
 +const PANE_WIDTH_TO_HEIGHT_RATIO = 2;
 +const SERVER_PROBE_TIMEOUT_MS = 500;
++const STATUS_TIMEOUT_MS = 500;
 +
  const CHILD_EVENT_STATES = new Map([
    ["permission.asked", "blocked"],
    ["question.asked", "blocked"],
-@@ -23,17 +28,6 @@ const CHILD_EVENT_STATES = new Map([
+@@ -23,17 +29,6 @@ const CHILD_EVENT_STATES = new Map([
    ["question.rejected", "working"],
  ]);
  
@@ -80,7 +147,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
  const SESSION_STATE_BY_STATUS = new Map([
    ["idle", "idle"],
    ["active", "working"],
-@@ -45,80 +39,46 @@ const SESSION_STATE_BY_STATUS = new Map([
+@@ -45,80 +40,45 @@ const SESSION_STATE_BY_STATUS = new Map([
    ["working", "working"],
  ]);
  
@@ -99,9 +166,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 -  requestChain = pending.catch(() => {});
 -  return pending;
 +function sessionIDFromProperties(properties) {
-+  return typeof properties?.sessionID === "string" && properties.sessionID
-+    ? properties.sessionID
-+    : undefined;
++  const id = properties?.sessionID ?? properties?.info?.id;
++  return typeof id === "string" && id ? id : undefined;
  }
  
 -function requestOnce(method, params) {
@@ -189,7 +255,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
    if (
      process.env.HERDR_ENV !== "1" ||
      !process.env.HERDR_SOCKET_PATH ||
-@@ -127,45 +87,865 @@ export const HerdrAgentStatePlugin = async () => {
+@@ -127,51 +87,812 @@ export const HerdrAgentStatePlugin = async () => {
      return {};
    }
  
@@ -203,9 +269,9 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +  const sessionLifecycle = new Map();
 +  const activePrompts = new Map();
 +  const children = new Map();
-+  const retiredChildren = new Set();
-+  const serverCreatedSessions = new Set();
++  const deletedSessions = new Set();
 +  const activeClients = new Map();
++  const activeStatusRequests = new Set();
 +
 +  const attachServerUrl = serverUrl instanceof URL ? serverUrl.toString() : undefined;
 +  const defaultDirectory = typeof directory === "string" && directory ? directory : undefined;
@@ -236,6 +302,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      }
 +
 +      let client;
++      let timeout;
 +      let responseBuffer = "";
 +      let finished = false;
 +      const finish = (response) => {
@@ -243,6 +310,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +          return;
 +        }
 +        finished = true;
++        clearTimeout(timeout);
 +        if (client) {
 +          activeClients.delete(client);
 +          client.destroy();
@@ -304,7 +372,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +        finish();
 +        return;
 +      }
-+      client.setTimeout(500, finish);
++      timeout = setTimeout(finish, 500);
++      timeout.unref?.();
 +      client.on("data", receive);
 +      client.on("error", finish);
 +      client.on("end", finishFromBuffer);
@@ -345,17 +414,6 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +    );
 +    reportRequestChain = pending.catch(() => {});
 +    return pending;
-+  }
-+
-+  function reportSession(sessionID, sessionStartSource) {
-+    if (disposed || !sessionID) {
-+      return Promise.resolve();
-+    }
-+    const params = { agent_session_id: sessionID };
-+    if (sessionStartSource) {
-+      params.session_start_source = sessionStartSource;
-+    }
-+    return reportRequest("pane.report_agent_session", params);
 +  }
 +
 +  function reportState(state, sessionID, suppressCompletion = false) {
@@ -459,14 +517,6 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +    };
 +  }
 +
-+  function layoutPaneIDs(layout) {
-+    return new Set(
-+      (Array.isArray(layout?.panes) ? layout.panes : [])
-+        .map((pane) => pane?.pane_id)
-+        .filter((paneID) => typeof paneID === "string" && paneID),
-+    );
-+  }
-+
 +  async function acquirePanePlacement() {
 +    const previousPanePlacement = panePlacementChain;
 +    let releasePanePlacement = () => {};
@@ -477,37 +527,22 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +    return releasePanePlacement;
 +  }
 +
-+  async function recoverPendingSplit(sessionID, allowWhileDisposing = false) {
-+    const child = children.get(sessionID);
-+    const previousPaneIDs = child?.pendingSplitPaneIDs;
-+    const rootPaneID = process.env.HERDR_PANE_ID;
-+    if (!child || !(previousPaneIDs instanceof Set) || !rootPaneID) {
-+      return undefined;
-+    }
-+    const layoutResponse = await paneRequest(
-+      "pane.layout",
-+      { pane_id: rootPaneID },
-+      allowWhileDisposing,
-+    );
-+    const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-+    const newPaneIDs = [...layoutPaneIDs(layout)].filter(
-+      (paneID) => !previousPaneIDs.has(paneID),
-+    );
-+    if (newPaneIDs.length !== 1) {
-+      return undefined;
-+    }
-+    const paneID = newPaneIDs[0];
-+    child.paneID = paneID;
-+    child.pendingSplitPaneIDs = undefined;
-+    return paneID;
-+  }
-+
 +  async function childSessionState(sessionID) {
 +    if (typeof client?.session?.status !== "function") {
 +      return "idle";
 +    }
++    if (disposing || disposed) return undefined;
++    const controller = new AbortController();
++    activeStatusRequests.add(controller);
++    const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
++    const cancelled = new Promise((resolve) => {
++      controller.signal.addEventListener("abort", () => resolve(undefined), { once: true });
++    });
 +    try {
-+      const response = await client.session.status();
++      const response = await Promise.race([
++        client.session.status({ signal: controller.signal }),
++        cancelled,
++      ]);
 +      const statuses = response?.data;
 +      if (!statuses || typeof statuses !== "object") {
 +        return undefined;
@@ -516,6 +551,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      return status === undefined ? "idle" : stateFromSessionStatus(status);
 +    } catch {
 +      return undefined;
++    } finally {
++      clearTimeout(timeout);
++      activeStatusRequests.delete(controller);
++      controller.abort();
 +    }
 +  }
 +
@@ -559,9 +598,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      !child ||
 +      !info ||
 +      info.parentID !== currentRootSessionID ||
-+      retiredChildren.has(sessionID) ||
++      deletedSessions.has(sessionID) ||
 +      !child.working ||
 +      child.paneID ||
++      child.splitUnconfirmed ||
 +      child.spawning
 +    ) {
 +      return;
@@ -569,7 +609,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +
 +    child.spawning = true;
 +    try {
-+      if (!(await serverAcceptsAttach()) || disposing || retiredChildren.has(sessionID)) {
++      if (!(await serverAcceptsAttach()) || disposing || deletedSessions.has(sessionID)) {
 +        return;
 +      }
 +
@@ -583,50 +623,46 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +          disposing ||
 +          !child.working ||
 +          child.paneID ||
-+          retiredChildren.has(sessionID) ||
++          deletedSessions.has(sessionID) ||
 +          info.parentID !== currentRootSessionID
 +        ) {
 +          return;
 +        }
 +        directory = childDirectory(info);
-+        if (child.pendingSplitPaneIDs) {
-+          paneID = await recoverPendingSplit(sessionID);
-+        } else {
-+          const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
-+          const layout = responseResult(layoutResponse, "pane_layout")?.layout;
-+          const target = splitTarget(layout);
-+          if (
-+            disposing ||
-+            !target ||
-+            !child.working ||
-+            retiredChildren.has(sessionID)
-+          ) {
-+            return;
-+          }
++        const layoutResponse = await paneRequest("pane.layout", { pane_id: rootPaneID });
++        const layout = responseResult(layoutResponse, "pane_layout")?.layout;
++        const target = splitTarget(layout);
++        if (
++          disposing ||
++          !target ||
++          !child.working ||
++          deletedSessions.has(sessionID) ||
++          info.parentID !== currentRootSessionID
++        ) {
++          return;
++        }
 +
-+          child.pendingSplitPaneIDs = layoutPaneIDs(layout);
-+          const splitResponse = await paneRequest("pane.split", {
-+            target_pane_id: target.paneID,
-+            direction: target.direction,
-+            ratio: target.ratio,
-+            ...(directory ? { cwd: directory } : {}),
-+            focus: false,
-+            env: { [SUBAGENT_SESSION_ENV]: sessionID },
-+          });
-+          paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
-+          if (typeof paneID === "string" && paneID) {
-+            child.pendingSplitPaneIDs = undefined;
-+          } else if (responseErrorCode(splitResponse)) {
-+            child.pendingSplitPaneIDs = undefined;
-+          } else {
-+            paneID = await recoverPendingSplit(sessionID, disposing);
-+          }
++        // Only the correlated split response can establish ownership. If it is
++        // lost, neither adopt a layout difference nor issue a duplicate split.
++        child.splitUnconfirmed = true;
++        const splitResponse = await paneRequest("pane.split", {
++          target_pane_id: target.paneID,
++          direction: target.direction,
++          ratio: target.ratio,
++          ...(directory ? { cwd: directory } : {}),
++          focus: false,
++          env: { [SUBAGENT_SESSION_ENV]: sessionID },
++        });
++        paneID = responseResult(splitResponse, "pane_info")?.pane?.pane_id;
++        if ((typeof paneID === "string" && paneID) || responseErrorCode(splitResponse)) {
++          child.splitUnconfirmed = false;
 +        }
 +        if (typeof paneID !== "string" || !paneID) {
 +          return;
 +        }
 +        child.paneID = paneID;
-+        if (disposing || !child.working || retiredChildren.has(sessionID)) {
++        if (disposing || !child.working || deletedSessions.has(sessionID) ||
++            info.parentID !== currentRootSessionID) {
 +          await closeChildPane(sessionID, disposing);
 +          return;
 +        }
@@ -666,24 +702,17 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      if (children.get(sessionID) !== child) {
 +        return;
 +      }
-+      if (child.working && !disposing && !retiredChildren.has(sessionID)) {
++      const selected = rootSessionFor(sessionID) === currentRootSessionID;
++      if (child.working && selected && !disposing && !deletedSessions.has(sessionID)) {
 +        if (!child.paneID) {
 +          await openChildPane(sessionID);
 +        }
 +        return;
 +      }
-+      if (!child.paneID && child.pendingSplitPaneIDs) {
-+        const releasePanePlacement = await acquirePanePlacement();
-+        try {
-+          await recoverPendingSplit(sessionID, allowWhileDisposing || disposing);
-+        } finally {
-+          releasePanePlacement();
-+        }
-+      }
 +      if (!child.paneID) {
 +        return;
 +      }
-+      if (!disposing && !retiredChildren.has(sessionID)) {
++      if (selected && !disposing && !deletedSessions.has(sessionID)) {
 +        const liveState = await childSessionState(sessionID);
 +        if (child.working) {
 +          return;
@@ -756,7 +785,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      return "blocked";
 +    }
 +    activePrompts.delete(key);
-+    return activePrompts.size > 0 ? "blocked" : "working";
++    return hasActivePrompts() ? "blocked" : "working";
 +  }
 +
 +  async function retireChild(sessionID) {
@@ -764,7 +793,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      return;
 +    }
 +    clearPromptsForSession(sessionID);
-+    retiredChildren.add(sessionID);
++    deletedSessions.add(sessionID);
 +    const child = children.get(sessionID);
 +    if (!child) {
 +      return;
@@ -773,50 +802,55 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +    await reconcileChildPane(sessionID);
 +    if (
 +      !child.paneID &&
-+      !child.pendingSplitPaneIDs &&
 +      children.get(sessionID) === child
 +    ) {
 +      children.delete(sessionID);
 +    }
 +  }
 +
-+  function retireChildrenOutsideRoot(rootSessionID) {
-+    for (const [childSessionID, child] of children) {
-+      if (child.info.parentID !== rootSessionID) {
-+        void retireChild(childSessionID);
-+      }
++  function rootSessionFor(sessionID) {
++    const visited = new Set();
++    while (children.has(sessionID)) {
++      if (visited.has(sessionID)) return undefined;
++      visited.add(sessionID);
++      sessionID = children.get(sessionID).info.parentID;
 +    }
-+  }
-+
-+  function retireAllChildren() {
-+    for (const childSessionID of [...children.keys()]) {
-+      void retireChild(childSessionID);
-+    }
++    return sessionID;
 +  }
 +
 +  function establishRootSession(sessionID) {
-+    if (!sessionID) {
++    if (!sessionID || sessionID === currentRootSessionID) {
 +      return;
 +    }
-+    serverCreatedSessions.delete(sessionID);
-+    if (currentRootSessionID && currentRootSessionID !== sessionID) {
++    if (currentRootSessionID) {
 +      clearSessionLifecycle(currentRootSessionID);
-+      clearPromptsForSession(currentRootSessionID);
 +    }
-+    retireChildrenOutsideRoot(sessionID);
-+    clearSessionLifecycle(sessionID);
 +    currentRootSessionID = sessionID;
++    if (hasActivePrompts()) void reportState("blocked", sessionID);
++    for (const childSessionID of children.keys()) {
++      void reconcileChildPane(childSessionID);
++    }
 +  }
 +
-+  function acceptsRootEvent(sessionID) {
-+    if (!sessionID) {
-+      return true;
++  async function syncRootSelection() {
++    const paneID = process.env.HERDR_PANE_ID;
++    const response = await paneRequest("pane.get", { pane_id: paneID });
++    const pane = responseResult(response, "pane_info")?.pane;
++    const session = pane?.agent_session;
++    if (disposing || disposed || pane?.pane_id !== paneID ||
++        session?.source !== SOURCE || session?.agent !== AGENT ||
++        session?.kind !== "id" || typeof session.value !== "string" ||
++        !session.value || deletedSessions.has(session.value)) {
++      return false;
 +    }
-+    if (!currentRootSessionID) {
-+      establishRootSession(sessionID);
-+      return true;
-+    }
-+    return sessionID === currentRootSessionID;
++    // The TUI reports selection to Herdr. Server-global events only consume it.
++    establishRootSession(session.value);
++    return true;
++  }
++
++  function hasActivePrompts() {
++    return [...activePrompts.values()].some((sessionID) =>
++      !sessionID || rootSessionFor(sessionID) === currentRootSessionID);
 +  }
 +
 +  function markSessionContinuing(sessionID, status) {
@@ -885,13 +919,16 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +
 +  async function reportContinuing(state, sessionID, status) {
 +    markSessionContinuing(sessionID, status);
-+    if (!unscopedErrorBlocked && activePrompts.size === 0) {
++    if (sessionID && sessionID === currentRootSessionID) {
++      unscopedErrorBlocked = false;
++    }
++    if (!unscopedErrorBlocked && !hasActivePrompts()) {
 +      await reportState(state, sessionID);
 +    }
 +  }
 +
 +  async function reportIdleOrConfirmError(sessionID, suppressCompletion = false) {
-+    if (unscopedErrorBlocked || activePrompts.size > 0) {
++    if (unscopedErrorBlocked || hasActivePrompts()) {
 +      return;
 +    }
 +    const lifecycle = sessionID ? sessionLifecycle.get(sessionID) : undefined;
@@ -911,6 +948,9 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      return;
 +    }
 +    disposing = true;
++    for (const controller of activeStatusRequests) {
++      controller.abort();
++    }
 +    for (const child of children.values()) {
 +      child.working = false;
 +    }
@@ -928,8 +968,7 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +    sessionLifecycle.clear();
 +    activePrompts.clear();
 +    children.clear();
-+    retiredChildren.clear();
-+    serverCreatedSessions.clear();
++    deletedSessions.clear();
 +    currentRootSessionID = undefined;
 +    unscopedErrorBlocked = false;
 +    reportRequestChain = Promise.resolve();
@@ -942,14 +981,13 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +      if (
 +        disposed || disposing ||
 +        (sessionID &&
-+          (retiredChildren.has(sessionID) || children.has(sessionID)))
++          (deletedSessions.has(sessionID) || children.has(sessionID)))
 +      ) {
          return;
        }
 -      await reportState("working", sessionID);
-+      establishRootSession(sessionID);
-+      if (!unscopedErrorBlocked && activePrompts.size === 0) {
-+        await reportState("working", sessionID);
++      if (await syncRootSelection() && sessionID === currentRootSessionID) {
++        await reportContinuing("working", sessionID, "working");
 +      }
      },
      event: async ({ event }) => {
@@ -961,115 +999,104 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
        const sessionID = sessionIDFromProperties(properties);
 -
        const info = properties.info;
-+
-+      if (type === "session.deleted" && info?.id && info.parentID) {
-+        await retireChild(info.id);
-+        return;
-+      }
-+
-+      if (
-+        (sessionID && retiredChildren.has(sessionID)) ||
-+        (info?.id && retiredChildren.has(info.id))
-+      ) {
-+        return;
-+      }
-+
-       if (info?.id && info.parentID) {
--        childSessions.add(info.id);
-+        if (!currentRootSessionID || info.parentID === currentRootSessionID) {
-+          const child = children.get(info.id) ?? {
-+            info,
-+            working: false,
-+            spawning: false,
-+            paneID: undefined,
-+            pendingSplitPaneIDs: undefined,
-+            reconcileChain: Promise.resolve(),
-+          };
-+          child.info = info;
-+          children.set(info.id, child);
-+          if (type === "session.created" && info.parentID === currentRootSessionID) {
-+            child.working = true;
-+            await reconcileChildPane(info.id);
-+          }
-+        } else {
-+          await retireChild(info.id);
-+        }
-+        return;
-       }
+-      if (info?.id && info.parentID) {
+-        childSessions.set(info.id, info.parentID);
+-      }
 -      if (sessionID && childSessions.has(sessionID)) {
 -        const state = CHILD_EVENT_STATES.get(type);
 -        if (state) {
--          await reportState(state);
+-          let rootSessionID = sessionID;
+-          while (childSessions.has(rootSessionID)) {
+-            rootSessionID = childSessions.get(rootSessionID);
+-          }
+-          await reportState(state, rootSessionID);
 +
-+      if (sessionID && children.has(sessionID)) {
-+        if (type === "session.deleted") {
-+          await retireChild(sessionID);
-+          return;
-+        }
-+        const childStatus = type === "session.status"
-+          ? stateFromSessionStatus(properties.status)
-+          : undefined;
-+        const child = children.get(sessionID);
-+        if (childStatus === "working") {
++      if (type === "session.deleted" && sessionID) {
++        const descendants = [...children.keys()].filter((id) =>
++          rootSessionFor(id) === sessionID);
++        await Promise.all([sessionID, ...descendants].map(retireChild));
++        clearSessionLifecycle(sessionID);
++        clearPromptsForSession(sessionID);
++        if (sessionID === currentRootSessionID) currentRootSessionID = undefined;
++        return;
++      }
++
++      if (sessionID && deletedSessions.has(sessionID)) {
++        return;
++      }
++
++      if ((type === "session.created" || type === "session.updated") && info?.id && info.parentID) {
++        const child = children.get(info.id) ?? {
++          info,
++          working: false,
++          spawning: false,
++          paneID: undefined,
++          splitUnconfirmed: false,
++          reconcileChain: Promise.resolve(),
++        };
++        child.info = info;
++        children.set(info.id, child);
++        if (type === "session.created") {
 +          child.working = true;
-+          await reconcileChildPane(sessionID);
-+        } else if (childStatus === "idle" || type === "session.idle") {
-+          child.working = false;
-+          await reconcileChildPane(sessionID);
++        }
++        if (await syncRootSelection()) {
++          await reconcileChildPane(info.id);
          }
+         return;
+       }
+ 
++      if (type === "session.created" || type === "session.updated") return;
++      if (!(type?.startsWith("session.") || CHILD_EVENT_STATES.has(type) ||
++            type === "tool.execute.before" || type === "tool.execute.after")) return;
++      const child = children.get(sessionID);
++      const childStatus = type === "session.status"
++        ? stateFromSessionStatus(properties.status)
++        : type === "session.idle" ? "idle" : undefined;
++      if (child && childStatus) child.working = childStatus === "working";
++      const selectionKnown = await syncRootSelection();
++      if (disposing || disposed) return;
++
++      if (child) {
++        if (childStatus && selectionKnown) await reconcileChildPane(sessionID);
 +        const state = updatePromptState(type, properties, sessionID)
 +          ?? CHILD_EVENT_STATES.get(type);
-+        if (state && !unscopedErrorBlocked) {
-+          await reportState(state, currentRootSessionID);
++        if (state && selectionKnown && rootSessionFor(sessionID) === currentRootSessionID &&
++            !unscopedErrorBlocked) {
++          await reportState(state, rootSessionFor(sessionID));
 +        }
 +        return;
 +      }
 +
-+      if (
-+        type !== "session.created" &&
-+        type !== "session.updated" &&
-+        type !== "session.deleted" &&
-+        !acceptsRootEvent(sessionID)
-+      ) {
-         return;
-       }
- 
 +      updatePromptState(type, properties, sessionID);
++      if (!selectionKnown || (sessionID && sessionID !== currentRootSessionID)) {
++        return;
++      }
 +
        switch (type) {
-         case "session.created":
+-        case "session.created":
 -          // Creation is server-global, so an attached client may own it. The
 -          // TUI plugin separately reports the root selected in this pane.
 -          reportedRootSessionID = sessionID;
-+          // Creation is server-global, so another attached client may own it.
-+          // The TUI plugin reports the root selected in this pane.
-+          if (sessionID) {
-+            serverCreatedSessions.add(sessionID);
-+          }
-           break;
-         case "session.updated":
+-          break;
+-        case "session.updated":
 -          if (sessionID && sessionID !== reportedRootSessionID) {
-+          if (
-+            sessionID &&
-+            !currentRootSessionID &&
-+            !serverCreatedSessions.has(sessionID)
-+          ) {
-+            establishRootSession(sessionID);
-             await reportSession(sessionID);
-           }
-           break;
+-            await reportSession(sessionID);
+-          }
+-          break;
          case "session.status": {
            const state = stateFromSessionStatus(properties.status);
 -          if (state) {
 -            await reportState(state, sessionID);
+-          } else {
+-            await reportSession(sessionID);
 +          if (state === "working") {
 +            await reportContinuing(state, sessionID, properties.status);
 +          } else if (state === "idle") {
 +            await reportIdleOrConfirmError(sessionID);
-           } else {
-             await reportSession(sessionID);
            }
-@@ -177,21 +957,44 @@ export const HerdrAgentStatePlugin = async () => {
+           break;
+         }
+@@ -181,21 +902,35 @@ export const HerdrAgentStatePlugin = async () => {
          case "question.replied":
          case "question.rejected":
          case "session.compacted":
@@ -1082,6 +1109,8 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +          clearSessionLifecycle(sessionID);
            await reportState("blocked", sessionID);
            break;
+-        case "session.idle":
+-          await reportState("idle", sessionID);
 +        case "session.error":
 +          if (isSessionAbort(properties.error)) {
 +            clearSessionLifecycle(sessionID);
@@ -1096,19 +1125,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
 +            break;
 +          }
 +          deferSessionError(sessionID);
-+          break;
-         case "session.idle":
--          await reportState("idle", sessionID);
-+          await reportIdleOrConfirmError(sessionID);
            break;
-         case "session.deleted":
-+          serverCreatedSessions.delete(sessionID);
-+          clearSessionLifecycle(sessionID);
-+          clearPromptsForSession(sessionID);
-+          if (sessionID && sessionID === currentRootSessionID) {
-+            currentRootSessionID = undefined;
-+            retireAllChildren();
-+          }
+-        case "session.deleted":
++        case "session.idle":
++          await reportIdleOrConfirmError(sessionID);
            break;
          default:
            break;
@@ -1118,10 +1138,10 @@ index 2840c221ac252444bda54c36ba0370d51268726e..5cc4b6e82e84d1dfdb0c8689a8a6139d
    };
  };
 diff --git a/src/integration/assets/opencode/herdr-agent-state.test.ts b/src/integration/assets/opencode/herdr-agent-state.test.ts
-index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd70378b28501 100644
+index a3eea848433a557253f95f17710bf13d19acc4a3..d700858b04ddc73f2aaad54e71be2033c446ef48 100644
 --- a/src/integration/assets/opencode/herdr-agent-state.test.ts
 +++ b/src/integration/assets/opencode/herdr-agent-state.test.ts
-@@ -1,34 +1,46 @@
+@@ -1,37 +1,65 @@
 -import { beforeEach, expect, mock, test } from "bun:test";
 +import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
 +import { createHash } from "node:crypto";
@@ -1133,6 +1153,8 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
  let autoAcknowledge = true;
  let importCounter = 0;
 +let originalFetch: typeof globalThis.fetch;
++let selectedRootSessionID: string | undefined;
++let selectionAvailable = true;
  
  type FakeClient = {
 -  emit: (event: string) => void;
@@ -1150,6 +1172,21 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
          write(input: string) {
 -          requests.push(JSON.parse(input.trim()));
 +          const request = JSON.parse(input.trim());
++          if (request.method === "pane.get") {
++            const result = selectionAvailable ? {
++              type: "pane_info",
++              pane: {
++                pane_id: "test:p1",
++                ...(selectedRootSessionID ? { agent_session: {
++                  source: "herdr:opencode", agent: "opencode", kind: "id",
++                  value: selectedRootSessionID,
++                } } : {}),
++              },
++            } : { type: "ok" };
++            queueMicrotask(() => client.emit("data", `${JSON.stringify({ id: request.id, result })}\n`));
++            return;
++          }
++          clients.push(client);
 +          requests.push(request);
            requestWaiters.shift()?.();
            if (autoAcknowledge) {
@@ -1176,13 +1213,18 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +          handlers.get(event)?.(data);
          },
        };
-       clients.push(client);
-@@ -42,22 +54,122 @@ beforeEach(() => {
+-      clients.push(client);
+       queueMicrotask(onConnect);
+       return client;
+     },
+@@ -42,22 +70,124 @@ beforeEach(() => {
    requests.length = 0;
    clients.length = 0;
    requestWaiters.length = 0;
 +  methodResults.clear();
    autoAcknowledge = true;
++  selectedRootSessionID = "root-session";
++  selectionAvailable = true;
    process.env.HERDR_ENV = "1";
    process.env.HERDR_SOCKET_PATH = "test.sock";
    process.env.HERDR_PANE_ID = "test:p1";
@@ -1302,7 +1344,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
  test("serializes lifecycle reports", async () => {
    autoAcknowledge = false;
    const plugin = await loadPlugin();
-@@ -79,10 +191,10 @@ test("serializes lifecycle reports", async () => {
+@@ -79,10 +209,10 @@ test("serializes lifecycle reports", async () => {
    });
    expect(clients).toHaveLength(1);
  
@@ -1315,7 +1357,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
    await Promise.all([working, idle]);
  
    expect(requests.map(requestState)).toEqual(["working", "idle"]);
-@@ -91,7 +203,7 @@ test("serializes lifecycle reports", async () => {
+@@ -91,7 +221,7 @@ test("serializes lifecycle reports", async () => {
    expect(sequences[1]).toBe((sequences[0] as number) + 1);
  });
  
@@ -1324,7 +1366,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
    const plugin = await loadPlugin();
  
    await plugin.event({
-@@ -107,11 +219,8 @@ test("suppresses redundant same-session updates", async () => {
+@@ -107,14 +237,12 @@ test("suppresses redundant same-session updates", async () => {
      event: { type: "session.updated", properties: { sessionID: "replacement-session" } },
    });
  
@@ -1338,7 +1380,39 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
  });
  
  test("does not classify server activity in another root session as a selection", async () => {
-@@ -160,8 +269,395 @@ test("reports retry status as working", async () => {
++  selectedRootSessionID = "visible-session";
+   const plugin = await loadPlugin();
+ 
+   await plugin["chat.message"]({ sessionID: "visible-session" });
+@@ -122,15 +250,14 @@ test("does not classify server activity in another root session as a selection",
+ 
+   expect(requests.map(requestMethod)).toEqual([
+     "pane.report_agent",
+-    "pane.report_agent",
+   ]);
+   expect(requests.map(requestSessionID)).toEqual([
+     "visible-session",
+-    "attached-client-session",
+   ]);
+ });
+ 
+ test("does not classify server-global root creation as a local selection", async () => {
++  selectedRootSessionID = undefined;
+   const plugin = await loadPlugin();
+ 
+   await plugin.event({
+@@ -141,6 +268,10 @@ test("does not classify server-global root creation as a local selection", async
+   });
+   await plugin["chat.message"]({ sessionID: "attached-session" });
+ 
++  expect(requests).toHaveLength(0);
++  selectedRootSessionID = "attached-session";
++  await plugin["chat.message"]({ sessionID: "attached-session" });
++
+   expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
+   expect(requests.map(requestSessionID)).toEqual(["attached-session"]);
+ });
+@@ -160,69 +291,1247 @@ test("reports retry status as working", async () => {
    expect(requests.map(requestSessionID)).toEqual(["root-session"]);
  });
  
@@ -1448,8 +1522,9 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +});
 +
 +test("unrelated status cannot cancel another session pending error", async () => {
-+  const plugin = await loadPlugin();
-+
++  selectedRootSessionID = "first-session";
+   const plugin = await loadPlugin();
+ 
 +  await plugin.event(apiErrorEvent("first-session"));
 +  await plugin.event(
 +    sessionStatusEvent("second-session", {
@@ -1473,7 +1548,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    await plugin.event({
 +      event: {
 +        type: "session.deleted",
-+        properties: { sessionID: "root-session" },
++        properties: { info: { id: "root-session" } },
 +      },
 +    });
 +
@@ -1489,7 +1564,9 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  vi.useFakeTimers();
 +  try {
 +    const plugin = await loadPlugin();
++    selectedRootSessionID = "old-session";
 +    await plugin.event(apiErrorEvent("old-session"));
++    selectedRootSessionID = "new-session";
 +    await plugin["chat.message"]({ sessionID: "new-session" });
 +
 +    await plugin.event(sessionStatusEvent("old-session", { type: "idle" }));
@@ -1511,21 +1588,39 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  }
 +});
 +
-+test("unscoped error remains blocked across current root busy", async () => {
++test("owned busy clears an unscoped error but not an outstanding question", async () => {
 +  const plugin = await loadPlugin();
-+  await plugin.event({
-+    event: {
-+      type: "session.created",
+   await plugin.event({
+     event: {
+       type: "session.created",
+-      properties: {
+-        info: { id: "child-session", parentID: "root-session" },
+-      },
 +      properties: { sessionID: "root-session" },
-+    },
-+  });
+     },
+   });
 +  requests.length = 0;
-+
+ 
+-  for (const type of ["permission.asked", "question.asked"]) {
+-    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
+-  }
+-  for (const type of ["permission.replied", "question.replied", "question.rejected"]) {
+-    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
++  await plugin.event(apiErrorEvent());
++  await plugin.event(sessionStatusEvent("foreign-root", { type: "busy" }));
++  expect(requests.map(requestState)).toEqual(["blocked"]);
++  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
++  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
++  await plugin.event({ event: { type: "question.asked", properties: {
++    id: "question-1", sessionID: "root-session",
++  } } });
 +  await plugin.event(apiErrorEvent());
 +  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
-+
-+  expect(requests.map(requestState)).toEqual(["blocked"]);
-+  expect(requests.map(requestSessionID)).toEqual([undefined]);
++  expect(requests.map(requestState)).toEqual(["blocked", "working", "blocked", "blocked"]);
++  await plugin.event({ event: { type: "question.replied", properties: {
++    requestID: "question-1", sessionID: "root-session",
++  } } });
++  expect(requests.map(requestState).at(-1)).toBe("working");
 +});
 +
 +test("dispose cancels pending fallback and ignores later events", async () => {
@@ -1541,42 +1636,72 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    expect(requests).toHaveLength(0);
 +  } finally {
 +    vi.useRealTimers();
-+  }
+   }
 +});
-+
-+test("session.updated establishes only the initial current session", async () => {
+ 
+-  expect(requests.map(requestState)).toEqual([
+-    "blocked",
+-    "blocked",
+-    "working",
+-    "working",
+-    "working",
+-  ]);
+-  expect(requests.map(requestSessionID)).toEqual([
+-    "root-session",
+-    "root-session",
+-    "root-session",
+-    "root-session",
+-    "root-session",
++test("SDK lifecycle info IDs never establish selection and deletion releases the old root", async () => {
++  selectedRootSessionID = undefined;
 +  const plugin = await loadPlugin();
 +  await plugin.event({
 +    event: {
 +      type: "session.updated",
-+      properties: { sessionID: "startup-root" },
++      properties: { info: { id: "startup-root" } },
 +    },
 +  });
 +  await plugin.event({
 +    event: {
 +      type: "session.updated",
-+      properties: { sessionID: "background-session" },
++      properties: { info: { id: "background-session" } },
 +    },
 +  });
++  expect(requests).toHaveLength(0);
++  selectedRootSessionID = "startup-root";
 +  await plugin.event(sessionStatusEvent("startup-root", { type: "busy" }));
++  await plugin.event(sessionStatusEvent("background-session", { type: "busy" }));
++  await plugin.event({ event: { type: "session.deleted", properties: { info: { id: "startup-root" } } } });
++  await plugin.event(sessionStatusEvent("startup-root", { type: "busy" }));
++  selectedRootSessionID = "background-session";
 +  await plugin.event(sessionStatusEvent("background-session", { type: "busy" }));
 +
 +  expect(requests.map(requestMethod)).toEqual([
-+    "pane.report_agent_session",
 +    "pane.report_agent",
-+  ]);
-+  expect(requests.map(requestSessionID)).toEqual(["startup-root", "startup-root"]);
-+});
-+
++    "pane.report_agent",
+   ]);
++  expect(requests.map(requestSessionID)).toEqual(["startup-root", "background-session"]);
+ });
+ 
+-test("routes nested child prompts to their own root, not the last active root", async () => {
 +test("background session.updated cannot steal a pending terminal root", async () => {
-+  const plugin = await loadPlugin();
++  selectedRootSessionID = "root-a";
+   const plugin = await loadPlugin();
+-  for (const info of [
+-    { id: "child-session", parentID: "root-session" },
+-    { id: "nested-session", parentID: "child-session" },
+-  ]) {
+-    await plugin.event({ event: { type: "session.created", properties: { info } } });
+-  }
+-  await plugin["chat.message"]({ sessionID: "other-root" });
 +  await plugin.event(apiErrorEvent("root-a"));
-+  await plugin.event({
+   await plugin.event({
+-    event: { type: "permission.asked", properties: { sessionID: "nested-session" } },
 +    event: {
 +      type: "session.updated",
 +      properties: { sessionID: "root-b" },
 +    },
-+  });
+   });
 +  await plugin.event(sessionStatusEvent("root-a", { type: "idle" }));
 +
 +  expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
@@ -1584,9 +1709,11 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  expect(requests.map(requestSessionID)).toEqual(["root-a"]);
 +});
 +
-+test("chat.message establishes new root ownership", async () => {
-   const plugin = await loadPlugin();
-+  await plugin.event({
++test("chat.message consumes only the selection read from the pane owner", async () => {
++  selectedRootSessionID = "root-a";
++  const plugin = await loadPlugin();
+   await plugin.event({
+-    event: { type: "permission.replied", properties: { sessionID: "nested-session" } },
 +    event: {
 +      type: "session.created",
 +      properties: { sessionID: "root-a" },
@@ -1594,13 +1721,14 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  });
 +  await plugin["chat.message"]({ sessionID: "root-b" });
 +  await plugin.event(sessionStatusEvent("root-a", { type: "busy" }));
++  selectedRootSessionID = "root-b";
 +  await plugin.event(sessionStatusEvent("root-b", { type: "busy" }));
 +
 +  expect(requests.map(requestMethod)).toEqual([
 +    "pane.report_agent",
 +    "pane.report_agent",
 +  ]);
-+  expect(requests.map(requestSessionID)).toEqual(["root-b", "root-b"]);
++  expect(requests.map(requestSessionID)).toEqual(["root-a", "root-b"]);
 +});
 +
 +test("tiles five concurrent direct children across the complete tab", async () => {
@@ -1731,32 +1859,31 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    type: "agent_started",
 +    agent: { pane_id: "test:p2" },
 +    argv: [],
-+  });
- 
-   await plugin.event({
-     event: {
-@@ -173,29 +669,730 @@ test("reports child prompts without replacing the root session", async () => {
-     },
    });
++
+   await plugin.event({
+-    event: { type: "session.idle", properties: { sessionID: "nested-session" } },
++    event: {
++      type: "session.created",
++      properties: {
++        sessionID: "child-session",
++        info: { id: "child-session", parentID: "root-session" },
++      },
++    },
+   });
+-  await plugin["chat.message"]({ sessionID: "nested-session" });
  
--  for (const type of ["permission.asked", "question.asked"]) {
--    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
--  }
--  for (const type of ["permission.replied", "question.replied", "question.rejected"]) {
--    await plugin.event({ event: { type, properties: { sessionID: "child-session" } } });
--  }
+-  expect(requests.map(requestState)).toEqual(["working", "blocked", "working"]);
+-  expect(requests.map(requestSessionID)).toEqual([
+-    "other-root",
+-    "root-session",
+-    "root-session",
 +  const split = requests.find((request) => requestMethod(request) === "pane.split");
 +  expect(requestParam(split, "target_pane_id")).toBe("test:p1");
 +  expect(requestParam(split, "direction")).toBe("down");
 +  expect(requestParam(split, "ratio")).toBe(0.5);
 +});
- 
--  expect(requests.map(requestState)).toEqual([
--    "blocked",
--    "blocked",
--    "working",
--    "working",
--    "working",
++
 +test("does not let a pending agent start block later pane placement", async () => {
 +  const plugin = await loadPlugin({
 +    directory: "C:\\repo",
@@ -1847,13 +1974,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    "pane.layout",
 +    "pane.split",
 +    "agent.start",
-   ]);
--  expect(requests.map(requestSessionID)).toEqual([
--    undefined,
--    undefined,
--    undefined,
--    undefined,
--    undefined,
++  ]);
 +});
 +
 +test("retains a child pane when the agent start response is lost", async () => {
@@ -2022,7 +2143,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  ]);
 +});
 +
-+test("recovers pane ownership when a successful split response is lost", async () => {
++test("a lost split response never adopts or closes an independently created pane", async () => {
 +  const plugin = await loadPlugin({
 +    directory: "C:\\repo",
 +    serverUrl: new URL("http://127.0.0.1:4096"),
@@ -2052,33 +2173,15 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  });
 +  await splitDispatched;
 +
-+  const recoveryLayoutDispatched = waitForNextRequest();
 +  clients[1]?.emit("close");
-+  await recoveryLayoutDispatched;
-+  const startDispatched = waitForNextRequest();
-+  acknowledgeRequest(2, 2, {
-+    result: {
-+      type: "pane_layout",
-+      layout: {
-+        panes: [
-+          { pane_id: "test:p1", rect: { width: 100, height: 50 } },
-+          { pane_id: "test:p2", rect: { width: 100, height: 50 } },
-+        ],
-+      },
-+    },
-+  });
-+  await startDispatched;
-+  acknowledgeRequest(3, 3, {
-+    result: {
-+      type: "agent_started",
-+      agent: { pane_id: "test:p2" },
-+      argv: [],
-+    },
-+  });
 +  await created;
-+
-+  const closeDispatched = waitForNextRequest();
-+  const retired = plugin.event({
++  autoAcknowledge = true;
++  enqueueResult("pane.layout", { type: "pane_layout", layout: { panes: [
++    { pane_id: "test:p1", rect: { width: 100, height: 50 } },
++    { pane_id: "foreign:p2", rect: { width: 100, height: 50 } },
++  ] } });
++  await plugin.event(sessionStatusEvent("child-session", { type: "busy" }));
++  await plugin.event({
 +    event: {
 +      type: "session.deleted",
 +      properties: {
@@ -2087,19 +2190,90 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +      },
 +    },
 +  });
-+  await closeDispatched;
-+  acknowledgeRequest(4, 4);
-+  await retired;
++  await plugin.dispose();
 +
 +  expect(requests.map(requestMethod)).toEqual([
 +    "pane.layout",
 +    "pane.split",
-+    "pane.layout",
-+    "agent.start",
-+    "pane.close",
 +  ]);
-+  expect(requestParam(requests[3], "pane_id")).toBe("test:p2");
-+  expect(requestParam(requests[4], "pane_id")).toBe("test:p2");
++});
++
++test("dispose aborts a stalled SDK status request and closes only its known child", async () => {
++  let signal: AbortSignal | undefined;
++  let started!: () => void;
++  const statusStarted = new Promise<void>((resolve) => { started = resolve; });
++  const plugin = await loadPlugin({
++    directory: "C:\\repo", serverUrl: new URL("http://127.0.0.1:4096"),
++    client: { session: { status: (options: { signal: AbortSignal }) => {
++      signal = options.signal;
++      started();
++      return new Promise(() => {});
++    } } },
++  });
++  await openDirectChild(plugin);
++  requests.length = 0;
++  const idle = plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  await statusStarted;
++  await plugin.dispose();
++  await idle;
++  expect(signal?.aborted).toBe(true);
++  expect(requests.map(requestMethod)).toEqual(["pane.close"]);
++  expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
++}, 1500);
++
++test("a stalled SDK status times out without treating unknown state as idle", async () => {
++  let signal: AbortSignal | undefined;
++  const plugin = await loadPlugin({
++    directory: "C:\\repo", serverUrl: new URL("http://127.0.0.1:4096"),
++    client: { session: { status: (options: { signal: AbortSignal }) => {
++      signal = options.signal;
++      return new Promise(() => {});
++    } } },
++  });
++  await openDirectChild(plugin);
++  requests.length = 0;
++  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
++  expect(signal?.aborted).toBe(true);
++  expect(requests).toHaveLength(0);
++  await plugin.dispose();
++}, 1500);
++
++test("A/B/A selection preserves live child prompts and ignores foreign chat", async () => {
++  const plugin = await loadPlugin();
++  await plugin.event({ event: { type: "session.created", properties: {
++    info: { id: "child-session", parentID: "root-session" },
++  } } });
++  await plugin["chat.message"]({ sessionID: "foreign-root" });
++  expect(requests).toHaveLength(0);
++  selectedRootSessionID = "other-root";
++  await plugin["chat.message"]({ sessionID: "other-root" });
++  await plugin.event({ event: { type: "question.asked", properties: {
++    id: "q1", sessionID: "child-session",
++  } } });
++  expect(requests.map(requestState)).toEqual(["working"]);
++  selectedRootSessionID = "root-session";
++  await plugin.event(sessionStatusEvent("root-session", { type: "busy" }));
++  expect(requests.map(requestState)).toEqual(["working", "blocked"]);
++  await plugin.event({ event: { type: "question.asked", properties: {
++    id: "q2", sessionID: "child-session",
++  } } });
++  await plugin.event({ event: { type: "question.replied", properties: {
++    requestID: "q1", sessionID: "child-session",
++  } } });
++  await plugin.event({ event: { type: "question.replied", properties: {
++    requestID: "q2", sessionID: "child-session",
++  } } });
++  expect(requests.map(requestState)).toEqual(["working", "blocked", "blocked", "blocked", "working"]);
++  expect(requests.map(requestSessionID)).toEqual(["other-root", "root-session", "root-session", "root-session", "root-session"]);
++});
++
++test("an unavailable selection never starts children or reports a foreign root", async () => {
++  selectionAvailable = false;
++  const plugin = await loadPlugin({ serverUrl: new URL("http://127.0.0.1:4096") });
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  await openDirectChild(plugin);
++  expect(requests).toHaveLength(0);
++  await plugin.dispose();
 +});
 +
 +test("retains pane ownership when close is not acknowledged", async () => {
@@ -2166,7 +2340,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  expect(requests).toHaveLength(0);
 +});
 +
-+test("same-root chat cannot clear an unscoped error block", async () => {
++test("an accepted same-root turn clears an unscoped error block", async () => {
 +  const plugin = await loadPlugin();
 +  await plugin.event({
 +    event: {
@@ -2179,11 +2353,12 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  await plugin.event(apiErrorEvent());
 +  await plugin["chat.message"]({ sessionID: "root-session" });
 +
-+  expect(requests.map(requestState)).toEqual(["blocked"]);
-+  expect(requests.map(requestSessionID)).toEqual([undefined]);
++  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
++  expect(requests.map(requestSessionID)).toEqual([undefined, "root-session"]);
 +});
 +
 +test("old child reply is dropped after root replacement", async () => {
++  selectedRootSessionID = "old-root";
 +  const plugin = await loadPlugin();
 +  await plugin["chat.message"]({ sessionID: "old-root" });
 +  requests.length = 0;
@@ -2196,6 +2371,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +      },
 +    },
 +  });
++  selectedRootSessionID = "new-root";
 +  await plugin["chat.message"]({ sessionID: "new-root" });
 +  await plugin.event({
 +    event: {
@@ -2271,7 +2447,8 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +  expect(requests).toHaveLength(0);
 +});
 +
-+test("initial root retires children learned for another parent", async () => {
++test("initial selected root filters children learned for another parent", async () => {
++  selectedRootSessionID = undefined;
 +  const plugin = await loadPlugin();
 +  await plugin.event({
 +    event: {
@@ -2282,12 +2459,8 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +      },
 +    },
 +  });
-+  await plugin.event({
-+    event: {
-+      type: "session.updated",
-+      properties: { sessionID: "new-root" },
-+    },
-+  });
++  selectedRootSessionID = "new-root";
++  await plugin.event({ event: { type: "session.updated", properties: { info: { id: "new-root" } } } });
 +  await plugin.event({
 +    event: {
 +      type: "question.replied",
@@ -2295,12 +2468,11 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    },
 +  });
 +
-+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent_session"]);
-+  expect(requests.map(requestSessionID)).toEqual(["new-root"]);
-+  expect(requests.map(requestState)).toEqual([undefined]);
++  expect(requests).toHaveLength(0);
 +});
 +
-+test("initial status root retires children learned for another parent", async () => {
++test("initial selected root ignores other children without adopting their chat", async () => {
++  selectedRootSessionID = undefined;
 +  const plugin = await loadPlugin();
 +  await plugin.event({
 +    event: {
@@ -2311,6 +2483,7 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +      },
 +    },
 +  });
++  selectedRootSessionID = "new-root";
 +  await plugin.event(sessionStatusEvent("new-root", { type: "busy" }));
 +  await plugin.event({
 +    event: {
@@ -2375,7 +2548,6 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    event: {
 +      type: "session.created",
 +      properties: {
-+        sessionID: "child-session",
 +        info: { id: "child-session", parentID: "root-session" },
 +      },
 +    },
@@ -2402,6 +2574,49 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
 +    "root-session",
 +    "root-session",
 +  ]);
++});
++
++test("retired nested child prompts cannot target the newly selected root", async () => {
++  const plugin = await loadPlugin();
++  for (const info of [
++    { id: "child-session", parentID: "root-session" },
++    { id: "nested-session", parentID: "child-session" },
++  ]) {
++    await plugin.event({ event: { type: "session.created", properties: { info } } });
++  }
++  selectedRootSessionID = "other-root";
++  await plugin["chat.message"]({ sessionID: "other-root" });
++  await plugin.event({
++    event: { type: "permission.asked", properties: { sessionID: "nested-session" } },
++  });
++  await plugin.event({
++    event: { type: "permission.replied", properties: { sessionID: "nested-session" } },
++  });
++  await plugin.event({
++    event: { type: "session.idle", properties: { sessionID: "nested-session" } },
++  });
++  await plugin["chat.message"]({ sessionID: "nested-session" });
++
++  expect(requests.map(requestState)).toEqual(["working"]);
++  expect(requests.map(requestSessionID)).toEqual(["other-root"]);
++});
++
++test("nested child prompts report their selected root without opening nested panes", async () => {
++  const plugin = await loadPlugin();
++  await plugin["chat.message"]({ sessionID: "root-session" });
++  for (const info of [
++    { id: "child-session", parentID: "root-session" },
++    { id: "nested-session", parentID: "child-session" },
++  ]) {
++    await plugin.event({ event: { type: "session.created", properties: { info } } });
++  }
++  requests.length = 0;
++  for (const type of ["permission.asked", "permission.replied"]) {
++    await plugin.event({ event: { type, properties: { sessionID: "nested-session" } } });
++  }
++  expect(requests.map(requestState)).toEqual(["blocked", "working"]);
++  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
++  expect(requests.map(requestMethod)).toEqual(["pane.report_agent", "pane.report_agent"]);
 +});
 +
 +test("root prompts stay blocked until every request completes", async () => {
@@ -2485,27 +2700,111 @@ index 6f8ee59002d0205f6b28689c1497db787dd113a0..ffc80a31fcc7a7de2980b07cd7ecd703
    return isRecord(request) ? request.method : undefined;
  }
 diff --git a/src/integration/assets/opencode/herdr-tui-session.js b/src/integration/assets/opencode/herdr-tui-session.js
-index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..03e69b66f24232236ed41c441094abd1e684f047 100644
+index f4f08d57a8b7f309f2e6d22ad70a8d189b03a59e..2f8906001e51a6345e697136f8a4377b1d16c7a8 100644
 --- a/src/integration/assets/opencode/herdr-tui-session.js
 +++ b/src/integration/assets/opencode/herdr-tui-session.js
 @@ -1,7 +1,7 @@
  // installed by herdr
  // managed by herdr; reinstalling or updating the integration overwrites this file.
  // HERDR_INTEGRATION_ID=opencode-tui
--// HERDR_INTEGRATION_VERSION=10
-+// HERDR_INTEGRATION_VERSION=19
+-// HERDR_INTEGRATION_VERSION=11
++// HERDR_INTEGRATION_VERSION=21
  
  import net from "node:net";
  
-@@ -9,6 +9,7 @@ const SOURCE = "herdr:opencode";
+@@ -9,11 +9,12 @@ const SOURCE = "herdr:opencode";
  const AGENT = "opencode";
  const ROUTE_POLL_INTERVAL_MS = 100;
  const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
 +const SUBAGENT_SESSION_ENV = "HERDR_OPENCODE_SUBAGENT_SESSION_ID";
++const MAX_RESPONSE_CHARACTERS = 64 * 1024;
  
- function requestOnce(sessionID) {
-   const paneId = process.env.HERDR_PANE_ID;
-@@ -72,7 +73,11 @@ export default {
+-function requestOnce(sessionID) {
+-  const paneId = process.env.HERDR_PANE_ID;
++function requestOnce(method, params, signal) {
+   const socketPath = process.env.HERDR_SOCKET_PATH;
+-  if (!paneId || !socketPath) {
++  if (!socketPath || signal.aborted) {
+     return Promise.resolve();
+   }
+ 
+@@ -23,30 +24,47 @@ function requestOnce(sessionID) {
+     id: `${SOURCE}:tui:${Date.now()}:${Math.floor(Math.random() * 1_000_000)
+       .toString()
+       .padStart(6, "0")}`,
+-    method: "pane.report_agent_session",
+-    params: {
+-      pane_id: paneId,
+-      source: SOURCE,
+-      agent: AGENT,
+-      agent_session_id: sessionID,
+-      session_start_source: "select",
+-    },
++    method,
++    params,
+   };
+ 
+   return new Promise((resolve) => {
+-    const client = net.createConnection(socketEndpoint, () => {
++    let client;
++    let buffer = "";
++    let finished = false;
++    const finish = (response) => {
++      if (finished) return;
++      finished = true;
++      clearTimeout(timeout);
++      signal.removeEventListener("abort", abort);
++      client?.destroy();
++      resolve(response);
++    };
++    const abort = () => finish();
++    const timeout = setTimeout(abort, 500);
++    signal.addEventListener("abort", abort, { once: true });
++    client = net.createConnection(socketEndpoint, () => {
++      if (signal.aborted) return abort();
+       client.write(`${JSON.stringify(request)}\n`);
+     });
+-    const finish = () => {
+-      client.destroy();
+-      resolve();
+-    };
+-
+-    client.setTimeout(500, finish);
+-    client.on("data", finish);
+-    client.on("error", finish);
+-    client.on("end", finish);
+-    client.on("close", resolve);
++    client.on("data", (chunk) => {
++      buffer += chunk.toString();
++      if (buffer.length > MAX_RESPONSE_CHARACTERS) return abort();
++      let newline;
++      while ((newline = buffer.indexOf("\n")) >= 0) {
++        const line = buffer.slice(0, newline);
++        buffer = buffer.slice(newline + 1);
++        try {
++          const response = JSON.parse(line);
++          if (response?.id === request.id) return finish(response);
++        } catch {
++          // Only a complete, correlated response acknowledges this request.
++        }
++      }
++    });
++    client.on("error", abort);
++    client.on("end", abort);
++    client.on("close", abort);
+   });
+ }
+ 
+@@ -65,14 +83,20 @@ export default {
+     let retryIndex = 0;
+     let nextReportAt = 0;
+     let reportPending = false;
++    const controller = new AbortController();
+     const syncSelectedSession = async () => {
++      if (controller.signal.aborted) return;
+       const route = api.route.current;
+       const sessionID = route?.name === "session" ? route.params?.sessionID : undefined;
+       const session =
          typeof sessionID === "string" && sessionID
            ? api.state.session.get(sessionID)
            : undefined;
@@ -2518,11 +2817,163 @@ index b5be5bbc81b9fcb556b4584cbd0c3eb1aa029eaf..03e69b66f24232236ed41c441094abd1
          selectedSessionID = undefined;
          retryIndex = 0;
          nextReportAt = 0;
+@@ -89,25 +113,68 @@ export default {
+ 
+       const reportingSessionID = sessionID;
+       reportPending = true;
++      let confirmed = false;
+       try {
+-        await requestOnce(reportingSessionID);
++        const paneID = process.env.HERDR_PANE_ID;
++        const response = await requestOnce("pane.report_agent_session", {
++          pane_id: paneID,
++          source: SOURCE,
++          agent: AGENT,
++          agent_session_id: reportingSessionID,
++          session_start_source: "select",
++        }, controller.signal);
++        if (response?.result?.type === "ok") {
++          // A report can be received but rejected or pending process detection.
++          // Read back the existing authority instead of counting delivery attempts.
++          const observed = await requestOnce("pane.get", { pane_id: paneID }, controller.signal);
++          const pane = observed?.result?.type === "pane_info" ? observed.result.pane : undefined;
++          const session = pane?.agent_session;
++          confirmed = pane?.pane_id === paneID && session?.source === SOURCE &&
++            session?.agent === AGENT && session?.kind === "id" &&
++            session?.value === reportingSessionID;
++        }
+       } catch {
+         // Best-effort reporting retries below while the selected route remains active.
+       } finally {
+         reportPending = false;
+       }
+-      if (selectedSessionID !== reportingSessionID) {
++      if (controller.signal.aborted) return;
++      if (selectedSessionID !== reportingSessionID ||
++          api.route.current?.params?.sessionID !== reportingSessionID) {
+         retryIndex = 0;
+         nextReportAt = 0;
+         return;
+       }
++      if (confirmed) {
++        retryIndex = 0;
++        nextReportAt = Number.POSITIVE_INFINITY;
++        return;
++      }
+       const retryDelay = SELECTION_RETRY_DELAYS_MS[retryIndex];
+       retryIndex += 1;
+       nextReportAt = retryDelay === undefined ? Number.POSITIVE_INFINITY : Date.now() + retryDelay;
+     };
+ 
+-    await syncSelectedSession();
++    const stopStatus = api.event.on("session.status", (event) => {
++      if (event.properties.sessionID === selectedSessionID &&
++          retryIndex > SELECTION_RETRY_DELAYS_MS.length) {
++        retryIndex = 0;
++        nextReportAt = 0;
++        void syncSelectedSession();
++      }
++    });
++    const stopConnected = api.event.on("server.connected", () => {
++      retryIndex = 0;
++      nextReportAt = 0;
++      void syncSelectedSession();
++    });
+     const routePoll = setInterval(() => void syncSelectedSession(), ROUTE_POLL_INTERVAL_MS);
+-    api.lifecycle.onDispose(() => clearInterval(routePoll));
++    api.lifecycle.onDispose(() => {
++      controller.abort();
++      clearInterval(routePoll);
++      stopStatus();
++      stopConnected();
++    });
++    await syncSelectedSession();
+   },
+ };
 diff --git a/src/integration/assets/opencode/herdr-tui-session.test.ts b/src/integration/assets/opencode/herdr-tui-session.test.ts
-index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..98aff058fed93921a86f90b6b23c6a3086753830 100644
+index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..46c94b09689092afe1cb13aadd679a54ae24396c 100644
 --- a/src/integration/assets/opencode/herdr-tui-session.test.ts
 +++ b/src/integration/assets/opencode/herdr-tui-session.test.ts
-@@ -36,6 +36,7 @@ beforeEach(() => {
+@@ -1,27 +1,64 @@
+-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
++import { afterEach, beforeEach, expect, mock, test, vi } from "bun:test";
+ 
+ const requests: unknown[] = [];
+ const activeDisposers: Array<() => void> = [];
+ const requestWaiters: Array<() => void> = [];
+ let importCounter = 0;
++let acknowledgement = "ok";
++let accepted = true;
++let reportedSessionID: unknown;
++let readbacks = 0;
++let inFlight = 0;
+ 
+ mock.module("node:net", () => ({
+   default: {
+     createConnection(_path: string, onConnect: () => void) {
+-      const handlers = new Map<string, () => void>();
++      const handlers = new Map<string, (data?: unknown) => void>();
++      let destroyed = false;
++      inFlight += 1;
+       const client = {
+         write(input: string) {
+-          requests.push(JSON.parse(input.trim()));
++          const request = JSON.parse(input.trim());
++          if (request.method === "pane.get") {
++            readbacks += 1;
++            queueMicrotask(() => client.emit("data", `${JSON.stringify({ id: request.id, result: {
++              type: "pane_info", pane: { pane_id: "test:p1", agent_session: {
++                source: "herdr:opencode", agent: "opencode", kind: "id",
++                value: accepted ? reportedSessionID : "previous-session",
++              } },
++            } })}\n`));
++            return;
++          }
++          reportedSessionID = request.params.agent_session_id;
++          requests.push(request);
+           requestWaiters.shift()?.();
+-          queueMicrotask(() => client.emit("data"));
++          queueMicrotask(() => {
++            if (["close", "end", "error"].includes(acknowledgement)) {
++              client.emit(acknowledgement);
++            } else if (acknowledgement === "timeout") {
++              // The production wall-clock deadline owns termination.
++            } else {
++              const response = acknowledgement === "rejected"
++                ? { id: request.id, error: { code: "pane_not_found" } }
++                : { id: acknowledgement === "wrong-id" ? "another-request" : request.id,
++                    result: { type: "ok" } };
++              const data = `${JSON.stringify(response)}\n`;
++              client.emit("data", data.slice(0, 7));
++              client.emit("data", data.slice(7));
++              if (acknowledgement === "wrong-id") client.emit("end");
++            }
++          });
+         },
+         setTimeout() {},
+-        on(event: string, handler: () => void) {
++        on(event: string, handler: (data?: unknown) => void) {
+           handlers.set(event, handler);
+         },
+-        destroy() {},
+-        emit(event: string) {
+-          handlers.get(event)?.();
++        destroy() {
++          if (!destroyed) inFlight -= 1;
++          destroyed = true;
++        },
++        emit(event: string, data?: unknown) {
++          if (!destroyed) handlers.get(event)?.(data);
+         },
+       };
+       queueMicrotask(onConnect);
+@@ -33,9 +70,13 @@ mock.module("node:net", () => ({
+ beforeEach(() => {
+   requests.length = 0;
+   requestWaiters.length = 0;
++  acknowledgement = "ok";
++  accepted = true;
++  readbacks = 0;
    process.env.HERDR_ENV = "1";
    process.env.HERDR_SOCKET_PATH = "test.sock";
    process.env.HERDR_PANE_ID = "test:p1";
@@ -2530,7 +2981,65 @@ index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..98aff058fed93921a86f90b6b23c6a30
  });
  
  afterEach(() => {
-@@ -156,6 +157,20 @@ test("does not replace the root session with a selected child session", async ()
+@@ -54,6 +95,7 @@ function fakeApi() {
+   const sessions = new Map<string, { id: string; parentID?: string }>();
+   let current: { name: string; params?: { sessionID: string } } = { name: "home" };
+   let dispose: (() => void) | undefined;
++  const listeners = new Map<string, (event: unknown) => void>();
+   activeDisposers.push(() => dispose?.());
+ 
+   return {
+@@ -76,6 +118,12 @@ function fakeApi() {
+           return () => {};
+         },
+       },
++      event: {
++        on(type: string, handler: (event: unknown) => void) {
++          listeners.set(type, handler);
++          return () => listeners.delete(type);
++        },
++      },
+     },
+     addSession(session: { id: string; parentID?: string }) {
+       sessions.set(session.id, session);
+@@ -86,6 +134,9 @@ function fakeApi() {
+     dispose() {
+       dispose?.();
+     },
++    emit(type: string, sessionID?: string) {
++      listeners.get(type)?.({ type, properties: { sessionID } });
++    },
+   };
+ }
+ 
+@@ -109,19 +160,24 @@ test("reports a root session when only the local route changes", async () => {
+   expect(requestParam(requests[0], "seq")).toBeUndefined();
+ });
+ 
+-test("retries an initial selection while Herdr detects the process", async () => {
++test("receipt alone retries until the selected session is read back", async () => {
++  accepted = false;
+   const plugin = await loadPlugin();
+   const tui = fakeApi();
+   tui.addSession({ id: "session-a" });
+   tui.select("session-a");
+ 
+   await plugin.tui(tui.api);
+-  await new Promise((resolve) => setTimeout(resolve, 125));
++  expect(readbacks).toBe(1);
++  accepted = true;
++  await new Promise((resolve) => setTimeout(resolve, 150));
++  await new Promise((resolve) => setTimeout(resolve, 150));
+ 
+   expect(requests.map((request) => requestParam(request, "agent_session_id"))).toEqual([
+     "session-a",
+     "session-a",
+   ]);
++  expect(readbacks).toBe(2);
+ });
+ 
+ test("does not report root sessions not selected by this TUI", async () => {
+@@ -156,6 +212,20 @@ test("does not replace the root session with a selected child session", async ()
    expect(requestParam(requests[0], "agent_session_id")).toBe("root-session");
  });
  
@@ -2551,16 +3060,90 @@ index 1bcb1f81e37a7ca5bf7e041f056708b02ce53258..98aff058fed93921a86f90b6b23c6a30
  test("stops route polling when the TUI plugin is disposed", async () => {
    const plugin = await loadPlugin();
    const tui = fakeApi();
+@@ -169,6 +239,73 @@ test("stops route polling when the TUI plugin is disposed", async () => {
+   expect(requests).toHaveLength(0);
+ });
+ 
++test.each(["close", "end", "error", "wrong-id", "rejected", "timeout"])(
++  "%s is not a selection acknowledgement", async (mode) => {
++    acknowledgement = mode;
++    const plugin = await loadPlugin();
++    const tui = fakeApi();
++    tui.addSession({ id: "session-a" });
++    tui.select("session-a");
++    await plugin.tui(tui.api);
++    tui.dispose();
++    expect(requests).toHaveLength(1);
++    expect(readbacks).toBe(0);
++    expect(inFlight).toBe(0);
++  },
++);
++
++test("exhausted delivery resumes on selected-session activity, not a retry daemon", async () => {
++  let now = Date.now();
++  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
++  try {
++    acknowledgement = "rejected";
++    const plugin = await loadPlugin();
++    const tui = fakeApi();
++    tui.addSession({ id: "session-a" });
++    tui.select("session-a");
++    await plugin.tui(tui.api);
++    for (let attempt = 0; attempt < 3; attempt += 1) {
++      now += 2_000;
++      await new Promise((resolve) => setTimeout(resolve, 125));
++    }
++    expect(requests).toHaveLength(4);
++    now += 60_000;
++    tui.emit("session.status", "foreign-session");
++    await new Promise((resolve) => setTimeout(resolve, 125));
++    expect(requests).toHaveLength(4);
++    acknowledgement = "ok";
++    tui.emit("session.status", "session-a");
++    await new Promise((resolve) => setTimeout(resolve, 125));
++    expect(requests).toHaveLength(5);
++    expect(readbacks).toBe(1);
++    tui.emit("session.status", "session-a");
++    await new Promise((resolve) => setTimeout(resolve, 125));
++    expect(requests).toHaveLength(5);
++    tui.emit("server.connected");
++    await new Promise((resolve) => setTimeout(resolve, 125));
++    expect(requests).toHaveLength(6);
++    tui.dispose();
++    expect(inFlight).toBe(0);
++  } finally {
++    clock.mockRestore();
++  }
++});
++
++test("disposal cancels the pending selection request", async () => {
++  acknowledgement = "timeout";
++  const plugin = await loadPlugin();
++  const tui = fakeApi();
++  tui.addSession({ id: "session-a" });
++  tui.select("session-a");
++  const dispatched = waitForNextRequest();
++  const starting = plugin.tui(tui.api);
++  await dispatched;
++  tui.dispose();
++  await starting;
++  expect(inFlight).toBe(0);
++  expect(readbacks).toBe(0);
++});
++
+ function requestParam(request: unknown, name: string): unknown {
+   if (!isRecord(request) || !isRecord(request.params)) {
+     return undefined;
 diff --git a/src/integration/mod.rs b/src/integration/mod.rs
-index c87ccac6ccd3a0a268f09067a72523fe6750f016..4b376ff46972b17861dbd1a25c70e76f1ad31616 100644
+index 3f7176b3d822b37aaa59d215a7ac43a33adad900..00df1953c09d6fda6e7b29c7f91ab912fe56fafc 100644
 --- a/src/integration/mod.rs
 +++ b/src/integration/mod.rs
 @@ -170,7 +170,7 @@ const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-st
  const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
  const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
  const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
--const OPENCODE_INTEGRATION_VERSION: u32 = 10;
-+const OPENCODE_INTEGRATION_VERSION: u32 = 19;
+-const OPENCODE_INTEGRATION_VERSION: u32 = 11;
++const OPENCODE_INTEGRATION_VERSION: u32 = 21;
  const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
  const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
  const KILO_INTEGRATION_VERSION: u32 = 4;

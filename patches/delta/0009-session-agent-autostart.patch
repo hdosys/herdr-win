@@ -1,86 +1,63 @@
-From f0e6d692ad7e2501b2b2b6576b6a8bfd94fd1b20 Mon Sep 17 00:00:00 2001
+From ced7b845014948f1eddcf3291ba84efc8812c7de Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 18:22:00 +0200
-Subject: [PATCH 8/17] feat(session): auto-start configured agent
+Subject: [PATCH 7/13] feat(session): auto-start configured agent
 
 Refs herdrdev/herdr#321
 ---
- CHANGELOG.md                                  |   8 +-
- docs/next/CHANGELOG.md                        |   5 +
+ CHANGELOG.md                                  |  11 +
  .../src/content/docs/configuration.mdx        |  11 +
  .../website/src/data/config-reference.json    |   6 +
- justfile                                      |   9 +-
- src/agent_resume.rs                           |  23 +-
  src/app/agent_resume.rs                       |  55 +---
- src/app/agents.rs                             | 284 +++++++++++++++++-
+ src/app/agents.rs                             | 271 +++++++++++++++++-
  src/app/api/panes.rs                          |  30 ++
  src/app/api/tabs.rs                           |  10 +-
- src/app/api/workspaces.rs                     |   2 +-
- src/app/creation.rs                           |   9 +-
- src/app/runtime.rs                            |   3 +
+ src/app/creation.rs                           |   2 +
+ src/app/mod.rs                                |  30 ++
+ src/app/runtime.rs                            |   1 +
  src/config.rs                                 |  20 ++
  src/config/io.rs                              |  18 ++
  src/config/model.rs                           |  22 +-
+ src/main.rs                                   |   4 +
  src/pane.rs                                   |  28 +-
  src/platform/fallback.rs                      |   4 -
  src/platform/linux.rs                         |   4 -
  src/platform/macos.rs                         |   4 -
- src/platform/mod.rs                           | 253 +++++++++++++---
- src/server/headless.rs                        |   2 +
+ src/platform/mod.rs                           | 224 ++++++++++++---
+ src/platform/windows.rs                       | 234 +++++++--------
+ src/server/headless.rs                        |   2 +-
  src/terminal/runtime.rs                       |   4 +
- 23 files changed, 700 insertions(+), 114 deletions(-)
+ 22 files changed, 780 insertions(+), 215 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 07da9d2b86c17639a06bf8c981010a292fa00933..35908aa8e1731f27b614c5dc0142ff3bbb092a8b 100644
+index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..639c78a827c9520d6f23baa7401cc158ecf9badb 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -3,11 +3,17 @@
- ## Unreleased
- 
- ### Added
--- Direct OpenCode subagents now open in adaptive unfocused splits beside their parent and close when the child session becomes idle or is deleted.
-+- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits that evenly tile the complete tab across both axes, then close when the child session becomes idle or is deleted.
-+- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
- 
- ### Fixed
-+- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
-+- Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
- - Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
- 
-+### Changed
-+- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
-+
- ## [0.8.2] - 2026-08-19
- 
- ### Added
-diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index 4048b9fef48bda76a7063882fb053f84ec68a3ed..a15a03c2da80222f9654e5d5864965a08ca69ea2 100644
---- a/docs/next/CHANGELOG.md
-+++ b/docs/next/CHANGELOG.md
-@@ -2,11 +2,16 @@
+@@ -2,6 +2,17 @@
  
  ## Unreleased
  
 +### Added
-+- New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
++- Direct OpenCode subagents from Herdr-managed roots now open in adaptive unfocused splits that evenly tile the complete tab across both axes, then close when the child session becomes idle or is deleted.
++- Local herdr-win binaries and Windows setup now lead with one sortable UTC `YYYY.MM.DD.HHMMZ` build label while retaining the exact build ID as secondary provenance.
 +
- ### Changed
- - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
++### Fixed
++- Windows Agent autostart now treats `nu` and `nu.exe` as the same Nushell executable, so either accepted shell spelling reaches the existing new-tab launch path.
++- Windows setup now recognizes the managed `local.<build-id>` identity written by earlier local candidates, so a current candidate can upgrade them in place.
++- Windows worktree removal now waits for terminal sessions to release the checkout before unregistering it, preventing locked directories that cannot be retried by workspace ID.
++
++### Changed
++- `herdr --remote <target> --yes` now approves installation or restart for one normal attach. Windows updates reuse the initial candidate and server inspection, transfer the portable payload once, and perform an approved stop, activation, and deployed-client verification in one remote operation. Interactive progress again reports every real phase.
+ ## [0.9.0] - 2026-09-07
  
- ### Fixed
-+- Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
- - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
-+- Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
- 
- ## [0.8.2] - 2026-08-19
- 
+ ### Added
 diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
-index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..4314e1c1e960cdab0b47680c08b289085709b2b4 100644
+index 8503373d75c7f2c7fa162d427e8c4599660282ce..6fa1c411cb663f45f665406c26dc41ffac3f0a13 100644
 --- a/docs/next/website/src/content/docs/configuration.mdx
 +++ b/docs/next/website/src/content/docs/configuration.mdx
-@@ -480,6 +480,17 @@ kitty_graphics = true
+@@ -523,6 +523,17 @@ The legacy `experimental.kitty_graphics` setting remains accepted for existing c
  
- Enable it only when testing terminal image behavior.
+ Changing this setting requires restarting the affected Herdr server or reattaching the client. In remote sessions, the server's setting controls pane graphics parsing and API availability, while the local client's setting controls output to the outer terminal.
  
 +## Start an Agent in every new tab
 +
@@ -97,10 +74,10 @@ index 68c5a501e1bb6bca0e4d3989658e2e46ab4c2efa..4314e1c1e960cdab0b47680c08b28908
  
  Herdr resumes supported Agent conversations after a server restart by default:
 diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
-index 60cc83c35a009e9c2d2e36ba7896da262e401660..8198ea516cee6c65922263cbb00d09527b21151c 100644
+index 68408a91d186e64c6077e199c2e64d5c72a0f60a..8878b81af014cd72b4b9eb7ab643edd021c5751f 100644
 --- a/docs/next/website/src/data/config-reference.json
 +++ b/docs/next/website/src/data/config-reference.json
-@@ -1147,6 +1147,12 @@
+@@ -1397,6 +1397,12 @@
        "id": "session",
        "title": "Session",
        "keys": [
@@ -113,77 +90,8 @@ index 60cc83c35a009e9c2d2e36ba7896da262e401660..8198ea516cee6c65922263cbb00d0952
          {
            "key": "session.resume_agents_on_restore",
            "type": "boolean",
-diff --git a/justfile b/justfile
-index 1c53286322d85961c75c2608e6c17c68da4c03e6..7e6c68a518ac44d641a20cf32e52db36a0ad36ca 100644
---- a/justfile
-+++ b/justfile
-@@ -9,8 +9,15 @@ test:
-     just plugin-marketplace-test
- 
- # Run one nextest filter, e.g. `just test-one codex_stale_working`
-+[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
-+[windows]
-+test-one filter:
-+    cargo nextest run --locked --bin herdr "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
-+    exit $LASTEXITCODE
-+
-+[unix]
- test-one filter:
--    cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
-+    cargo nextest run --locked "{{ filter }}" --status-level fail --final-status-level fail --failure-output final --success-output never
- 
- # Enforce deterministic UI hot-path architecture boundaries
- ui-hot-path-architecture-test:
-diff --git a/src/agent_resume.rs b/src/agent_resume.rs
-index cd1ae7bb2fe39f7952189edcef8db9fc5697b094..3624f878f835e59c6c3919fdc1899dfb487d4b34 100644
---- a/src/agent_resume.rs
-+++ b/src/agent_resume.rs
-@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
- const MAX_SESSION_ID_LEN: usize = 512;
- const MAX_SESSION_PATH_LEN: usize = 4096;
- 
-+pub(crate) fn opencode_local_server_argv() -> Vec<String> {
-+    ["opencode", "--hostname=127.0.0.1", "--port=0", "--no-mdns"]
-+        .map(str::to_string)
-+        .into()
-+}
-+
- #[derive(Debug, Clone, PartialEq, Eq)]
- pub struct AgentSessionRef {
-     pub kind: AgentSessionRefKind,
-@@ -166,11 +172,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
-             ]
-         }
-         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
--            vec![
--                "opencode".into(),
--                "--session".into(),
--                session_ref.value.clone(),
--            ]
-+            let mut argv = opencode_local_server_argv();
-+            argv.extend(["--session".into(), session_ref.value.clone()]);
-+            argv
-         }
-         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
-             vec![
-@@ -394,7 +398,14 @@ mod tests {
-             )
-             .unwrap()
-             .argv,
--            vec!["opencode", "--session", "opencode-session"]
-+            vec![
-+                "opencode",
-+                "--hostname=127.0.0.1",
-+                "--port=0",
-+                "--no-mdns",
-+                "--session",
-+                "opencode-session"
-+            ]
-         );
-         assert_eq!(
-             plan(
 diff --git a/src/app/agent_resume.rs b/src/app/agent_resume.rs
-index 29c2c31768d2a581885c94b92a0d169f635b4c89..d96e66c5b1d82802b3c54e0b51cee3da06eb80c9 100644
+index 2cbd93ab38e0549d9957b6c7f55408874d8cb228..35f23fb5a3e17003206fcef5db6572e0127d869d 100644
 --- a/src/app/agent_resume.rs
 +++ b/src/app/agent_resume.rs
 @@ -217,12 +217,18 @@ impl App {
@@ -274,7 +182,7 @@ index 29c2c31768d2a581885c94b92a0d169f635b4c89..d96e66c5b1d82802b3c54e0b51cee3da
 -    }
  }
 diff --git a/src/app/agents.rs b/src/app/agents.rs
-index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b55f99284 100644
+index e23c67fa84a16c431a10ad3f4ee804c0de9aa1d2..ce50665b74c0fa90bf384f47d04c5bf813eee72e 100644
 --- a/src/app/agents.rs
 +++ b/src/app/agents.rs
 @@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
@@ -294,24 +202,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b
  fn valid_agent_name(name: &str) -> bool {
      let mut chars = name.chars();
      matches!(chars.next(), Some('a'..='z'))
-@@ -19,6 +18,16 @@ fn valid_agent_name(name: &str) -> bool {
-         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
- }
- 
-+fn agent_launch_argv(kind: crate::detect::Agent, args: Vec<String>) -> Vec<String> {
-+    let mut argv = if kind == crate::detect::Agent::OpenCode && args.is_empty() {
-+        crate::agent_resume::opencode_local_server_argv()
-+    } else {
-+        vec![crate::detect::interactive_agent_executable(kind).to_string()]
-+    };
-+    argv.extend(args);
-+    argv
-+}
-+
- impl App {
-     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
-         self.state
-@@ -142,6 +151,186 @@ impl App {
+@@ -152,6 +151,186 @@ impl App {
              })
      }
  
@@ -498,17 +389,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b
      pub(super) fn start_agent(
          &mut self,
          params: AgentStartParams,
-@@ -192,8 +381,7 @@ impl App {
-         let shell_name = available_shell_name(runtime)
-             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
- 
--        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
--        argv.extend(params.args);
-+        let argv = agent_launch_argv(kind, params.args);
-         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
-             .ok_or(AgentStartError::InvalidArgument)?;
-         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
-@@ -468,7 +656,8 @@ pub(super) enum AgentRenameError {
+@@ -482,7 +661,8 @@ pub(super) enum AgentRenameError {
  
  #[cfg(test)]
  mod tests {
@@ -518,7 +399,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b
  
      #[test]
      fn agent_names_use_a_small_cli_safe_grammar() {
-@@ -488,4 +677,89 @@ mod tests {
+@@ -502,4 +682,89 @@ mod tests {
              assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
          }
      }
@@ -543,7 +424,7 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b
 +        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
 +        let mut app = super::super::App::new(
 +            &crate::config::Config::default(),
-+            true,
++            crate::app::AppPolicy::TEST,
 +            None,
 +            api_rx,
 +            crate::api::EventHub::default(),
@@ -609,10 +490,10 @@ index b2aac01cf404b98824ecdda9fb509238a1ffcc07..99f342d10ea119454d03ff1769e13e5b
 +    }
  }
 diff --git a/src/app/api/panes.rs b/src/app/api/panes.rs
-index 6615fa0a198eeac5bba0671c78ba99573d2f2be2..5118382806722a9e80d810ce852cc86dffea56ed 100644
+index 9b9a28cc7b2e647bd4f60f41beabaee95f582729..7f6cca85aa17f34c8277d951227a1585cdd3dfe6 100644
 --- a/src/app/api/panes.rs
 +++ b/src/app/api/panes.rs
-@@ -1924,6 +1924,36 @@ mod tests {
+@@ -2224,6 +2224,36 @@ mod tests {
          (app, public_pane_id)
      }
  
@@ -650,7 +531,7 @@ index 6615fa0a198eeac5bba0671c78ba99573d2f2be2..5118382806722a9e80d810ce852cc86d
      fn pane_input_set_changes_only_the_target_pane() {
          let (mut app, public_pane_id) = app_with_test_workspace();
 diff --git a/src/app/api/tabs.rs b/src/app/api/tabs.rs
-index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392e7108812 100644
+index c1bd86e9e36ea41862881bc4630c488ec7f0be2c..7d9ff5c93d91287b9aa138fe7d69e35ab50b8b12 100644
 --- a/src/app/api/tabs.rs
 +++ b/src/app/api/tabs.rs
 @@ -117,6 +117,7 @@ impl App {
@@ -661,7 +542,7 @@ index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392
                  self.schedule_session_save();
                  self.emit_tab_created_events(ws_idx, tab_idx);
                  encode_success(
-@@ -456,10 +457,11 @@ mod tests {
+@@ -426,7 +427,7 @@ mod tests {
      }
  
      #[tokio::test]
@@ -669,12 +550,16 @@ index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392
 +    async fn tab_create_follows_cached_cwd_and_queues_configured_agent_for_root() {
          let event_hub = crate::api::EventHub::default();
          let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-         let mut app = App::new(&Config::default(), true, None, api_rx, event_hub);
+         let mut app = App::new(
+@@ -436,6 +437,7 @@ mod tests {
+             api_rx,
+             event_hub,
+         );
 +        app.tab_auto_start_agent = Some(crate::detect::Agent::OpenCode);
          app.state.default_shell = exiting_test_command().into();
          app.state.shell_mode = ShellModeConfig::NonLogin;
          let workspace = Workspace::test_new("tabs");
-@@ -489,12 +491,18 @@ mod tests {
+@@ -465,12 +467,18 @@ mod tests {
          let success: SuccessResponse = serde_json::from_str(&response).unwrap();
          assert!(matches!(success.result, ResponseResult::TabCreated { .. }));
          let created = &app.state.workspaces[0].tabs[1];
@@ -693,60 +578,19 @@ index 42d2b029a4261a642bf8ea4f30cfb13b7e2a865d..70487f66b1c7080cdf4c638fcb585392
          shutdown_test_runtimes(&mut app);
      }
  }
-diff --git a/src/app/api/workspaces.rs b/src/app/api/workspaces.rs
-index 76b5866ba96dcf95f356c748fb9c7a9911804153..2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75 100644
---- a/src/app/api/workspaces.rs
-+++ b/src/app/api/workspaces.rs
-@@ -52,7 +52,7 @@ impl App {
-             Ok(env) => env,
-             Err((code, message)) => return encode_error(id, &code, message),
-         };
--        match self.create_workspace_with_launch_env(cwd, params.focus, extra_env) {
-+        match self.create_workspace_with_launch_env(cwd, params.focus, extra_env, true) {
-             Ok(index) => {
-                 if let Some(label) = params.label {
-                     if let Some(workspace) = self.state.workspaces.get_mut(index) {
 diff --git a/src/app/creation.rs b/src/app/creation.rs
-index c3edff59945f4c8eb656779dcb372f3b505b260c..3e1139430f4d51f109d5f201ff7888ccd55cadb9 100644
+index b3c1798589f1323c4eb786b6bc12c4f98706e6b6..7160aa5982c493a398ae65846ee2d9908ae3f342 100644
 --- a/src/app/creation.rs
 +++ b/src/app/creation.rs
-@@ -223,7 +223,7 @@ impl App {
-         initial_cwd: PathBuf,
-         focus: bool,
-     ) -> std::io::Result<usize> {
--        self.create_workspace_with_launch_env(initial_cwd, focus, Vec::new())
-+        self.create_workspace_with_launch_env(initial_cwd, focus, Vec::new(), true)
-     }
- 
-     #[cfg(test)]
-@@ -242,6 +242,7 @@ impl App {
-         initial_cwd: PathBuf,
-         focus: bool,
-         extra_env: Vec<(String, String)>,
-+        queue_auto_start_agent: bool,
-     ) -> std::io::Result<usize> {
-         let (rows, cols) = self.state.estimate_pane_size();
-         let (ws, terminal, runtime) = Workspace::new_with_extra_env(
-@@ -270,6 +271,10 @@ impl App {
+@@ -156,6 +156,7 @@ impl App {
              self.state.switch_workspace(idx);
              self.state.mode = Mode::Terminal;
          }
-+        self.initial_default_workspace_auto_start_pending = false;
-+        if queue_auto_start_agent {
-+            self.queue_tab_auto_start_agent(idx, 0);
-+        }
++        self.queue_tab_auto_start_agent(idx, 0);
          self.schedule_session_save();
          Ok(idx)
      }
-@@ -298,6 +303,7 @@ impl App {
-             crate::terminal::TerminalState::new(terminal_id.clone(), initial_cwd),
-         );
-         self.state.workspaces.push(workspace);
-+        self.initial_default_workspace_auto_start_pending = false;
-         let idx = self.state.workspaces.len() - 1;
-         self.state.remove_alias_shadowed_by_new_pane(pane_id);
-         let workspace_id = self.state.workspaces[idx].id.clone();
-@@ -363,6 +369,7 @@ impl App {
+@@ -266,6 +267,7 @@ impl App {
              self.render_dirty.clone(),
          )?;
          self.terminal_runtimes.insert(terminal_id.clone(), runtime);
@@ -754,32 +598,85 @@ index c3edff59945f4c8eb656779dcb372f3b505b260c..3e1139430f4d51f109d5f201ff7888cc
          self.schedule_session_save();
          Ok(())
      }
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 76d2991527c31ac07753ffc9cecf9ecb998bc527..212d3f33e46f6d1eba522745db6433be613835dc 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -106,6 +106,14 @@ pub(crate) struct DeferredWorkspaceShell {
+     pub(crate) extra_env: Vec<(String, String)>,
+ }
+ 
++#[derive(Debug)]
++pub(crate) struct PendingTabAutoStartAgent {
++    kind: crate::detect::Agent,
++    name: String,
++    pane_id: String,
++    deadline: Instant,
++}
++
+ pub struct App {
+     pub state: AppState,
+     pub(crate) pane_graphics: pane_graphics::Runtime,
+@@ -141,6 +149,8 @@ pub struct App {
+     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
+     pub(crate) agent_metadata_deadline: Option<Instant>,
+     pub(crate) pending_agent_resume_deadline: Option<Instant>,
++    pub(crate) tab_auto_start_agent: Option<crate::detect::Agent>,
++    pub(crate) pending_tab_auto_start_agents: Vec<PendingTabAutoStartAgent>,
+     pub(crate) session_save_deadline: Option<Instant>,
+     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
+     pub(crate) startup_session_save_blocked: bool,
+@@ -611,6 +621,11 @@ impl App {
+             loaded_host_cursor: config.ui.host_cursor,
+             agent_metadata_deadline: None,
+             pending_agent_resume_deadline: None,
++            tab_auto_start_agent: policy
++                .persist_session
++                .then(|| config.session_auto_start_agent())
++                .flatten(),
++            pending_tab_auto_start_agents: Vec::new(),
+             session_save_deadline: None,
+             session_save_thread: None,
+             startup_session_save_blocked: false,
+@@ -806,6 +821,21 @@ impl App {
+         let invalid_section =
+             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+ 
++        if !invalid_section("session") {
++            let next_agent = self
++                .policy
++                .persist_session
++                .then(|| config.session_auto_start_agent())
++                .flatten();
++            if next_agent != self.tab_auto_start_agent {
++                self.pending_tab_auto_start_agents.clear();
++                self.tab_auto_start_agent = next_agent;
++                if next_agent.is_some() {
++                    self.queue_existing_tab_auto_start_agents();
++                }
++            }
++        }
++
+         if !invalid_section("keys") {
+             match config.live_keybinds_with_diagnostics() {
+                 Ok((live, keybind_diagnostics)) => {
 diff --git a/src/app/runtime.rs b/src/app/runtime.rs
-index 2991954f67e250de046a7dc518c983917f2526ee..5bb655ba251100d9c9d6e40341af0d10d9334768 100644
+index 252e6c584c84b9eb2bf906204cdf5d4c9a66c766..26a5e553bd337c9ddcf3a667fc87d0a3d7de31e8 100644
 --- a/src/app/runtime.rs
 +++ b/src/app/runtime.rs
-@@ -299,6 +299,8 @@ impl App {
-             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
-         }
- 
-+        changed |= self.try_start_tab_auto_start_agents(now);
-+
-         if self
-             .config_diagnostic_deadline
-             .is_some_and(|deadline| now >= deadline)
-@@ -625,6 +627,7 @@ impl App {
-             self.next_auto_update_check,
+@@ -162,6 +162,7 @@ impl App {
              self.next_agent_manifest_update_check,
              self.agent_metadata_deadline,
-+            self.tab_auto_start_deadline(),
              self.pending_agent_resume_deadline,
++            self.tab_auto_start_deadline(),
              self.session_save_deadline,
-             self.selection_autoscroll_deadline,
+             self.next_tab_bar_status_deadline(),
+             render_deadline,
 diff --git a/src/config.rs b/src/config.rs
-index b803a17f883dff8366dcbc1d1b90bf0be0129355..c1c2d50a4e4a455d1017c3ec0b7596063ac878c4 100644
+index 6e7d0b3cbd6a2d1f67a4279e06709c0d2379f5a1..67b7b958019cb8228dda214babe911228f2d7c39 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -90,11 +90,31 @@ impl Config {
+@@ -120,11 +120,31 @@ impl Config {
              .chain(self.ui.sound.diagnostics())
              .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
              .chain(window_title_diagnostics(&self.ui.window_title))
@@ -856,10 +753,10 @@ index 898cf07715b2576caca00fa865c296fe80c9db49..baab49580367a5485bcaa0b54ec837a4
  
      #[test]
 diff --git a/src/config/model.rs b/src/config/model.rs
-index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d18759a4bc 100644
+index 9346ba4b789c22e0edfcee48374ad7c0196f89d8..d9f8acbe09408cea8998aa9712161247eb28615a 100644
 --- a/src/config/model.rs
 +++ b/src/config/model.rs
-@@ -241,6 +241,9 @@ pub struct TerminalConfig {
+@@ -234,6 +234,9 @@ pub struct TerminalConfig {
  #[derive(Debug, Deserialize)]
  #[serde(default)]
  pub struct SessionConfig {
@@ -869,7 +766,7 @@ index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d1
      /// Resume supported AI-agent panes into their native conversation sessions
      /// when restoring a Herdr session. Default: true.
      pub resume_agents_on_restore: bool,
-@@ -249,6 +252,7 @@ pub struct SessionConfig {
+@@ -242,6 +245,7 @@ pub struct SessionConfig {
  impl Default for SessionConfig {
      fn default() -> Self {
          Self {
@@ -877,7 +774,7 @@ index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d1
              resume_agents_on_restore: true,
          }
      }
-@@ -1267,16 +1271,32 @@ new_cwd = "~/Projects"
+@@ -1324,16 +1328,32 @@ new_cwd = "~/Projects"
      }
  
      #[test]
@@ -911,11 +808,26 @@ index e06fd6a35abcaccdd21883b19e304e8229cb205d..cd6b329fe59fd0b7afa3233454cbc2d1
      }
  
      #[test]
+diff --git a/src/main.rs b/src/main.rs
+index 24d619798488245842565ddaee489af9e6e97972..bd1842ee807dab1a0909211f94b48a631e5663cd 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -388,6 +388,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # droid = "off"
+ 
+ [session]
++# Start one supported interactive Agent in the root pane of each new tab in a
++# persistent session. Uses the same kind labels as `herdr agent start`.
++# Enabling this during live reload also starts eligible existing tab roots.
++# auto_start_agent = "opencode"
+ # Resume supported AI-agent panes into their native conversation sessions after
+ # a Herdr server restart. Requires official integrations that report session refs.
+ # resume_agents_on_restore = true
 diff --git a/src/pane.rs b/src/pane.rs
-index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e53a53cd0c 100644
+index 429d97a30e9b9cdbb1f273a8059200800690c223..127c8a49d076fa03736b3890d04616343bbde86b 100644
 --- a/src/pane.rs
 +++ b/src/pane.rs
-@@ -1400,6 +1400,10 @@ impl<'a> PaneShellConfig<'a> {
+@@ -1611,6 +1611,10 @@ impl<'a> PaneShellConfig<'a> {
              mode,
          }
      }
@@ -926,7 +838,7 @@ index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e5
  }
  
  /// Target platform for shell launch policy. Parameterized (instead of raw
-@@ -1504,7 +1508,12 @@ fn pane_shell_command_builder_for_target(
+@@ -1715,7 +1719,12 @@ fn pane_shell_command_builder_for_target(
      shell_config: PaneShellConfig<'_>,
      target: ShellLaunchTarget,
  ) -> io::Result<CommandBuilder> {
@@ -940,7 +852,7 @@ index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e5
      if shell_mode_uses_login_shell(shell_config.mode, target) {
          let mut cmd = CommandBuilder::new_default_prog();
          cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
-@@ -1539,7 +1548,7 @@ fn uses_windows_powershell_pane_shell_for_target(
+@@ -1750,7 +1759,7 @@ fn uses_windows_powershell_pane_shell_for_target(
  ) -> bool {
      target == ShellLaunchTarget::Windows
          && !shell_mode_uses_login_shell(shell_config.mode, target)
@@ -949,7 +861,7 @@ index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e5
  }
  
  fn is_powershell_shell(shell: &str) -> bool {
-@@ -2985,6 +2994,12 @@ impl PaneRuntime {
+@@ -3284,6 +3293,12 @@ impl PaneRuntime {
          crate::platform::process_cwd(pid)
      }
  
@@ -962,7 +874,7 @@ index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e5
      pub fn child_pid(&self) -> Option<u32> {
          let pid = self.child_pid.load(Ordering::Acquire);
          (pid > 0).then_some(pid)
-@@ -3428,6 +3443,15 @@ mod tests {
+@@ -3747,6 +3762,15 @@ mod tests {
          .unwrap();
  
          assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("cmd.exe")]);
@@ -979,10 +891,10 @@ index 16c23de4256f918cef97412d20dd20a3a7d92849..d0b48ded627f3b14d79340e8746740e5
  
      #[test]
 diff --git a/src/platform/fallback.rs b/src/platform/fallback.rs
-index b6b6575fee9c76dbc55f4472105880c45af12587..a0255f5cf7a140322386fd0b0b3345f19406b2f4 100644
+index 7e6470372562d97aa40f178f3ab82e5d65e07167..ff024d2ee2f59fb0083865c823c036aecfe868e5 100644
 --- a/src/platform/fallback.rs
 +++ b/src/platform/fallback.rs
-@@ -130,10 +130,6 @@ pub(crate) fn pane_custom_command_pty_builder_platform(
+@@ -145,10 +145,6 @@ pub(crate) fn pane_custom_command_pty_builder_platform(
      portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
  }
  
@@ -994,10 +906,10 @@ index b6b6575fee9c76dbc55f4472105880c45af12587..a0255f5cf7a140322386fd0b0b3345f1
  pub(crate) fn scrollback_editor_argv(_path: &std::path::Path) -> std::io::Result<Vec<String>> {
      Err(std::io::Error::new(
 diff --git a/src/platform/linux.rs b/src/platform/linux.rs
-index 04737d1e563ac125c56fb801c067d2b31208a477..d1c5a68a589269bd6d7b8c33245ce379d35e5741 100644
+index 3cc5b8bd2cc2602bbf360f4ee7fc5c80216e570b..6b5152a6555b833c432f4a08042892c3f3916a28 100644
 --- a/src/platform/linux.rs
 +++ b/src/platform/linux.rs
-@@ -109,10 +109,6 @@ pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<
+@@ -110,10 +110,6 @@ pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<
      Ok(vec!["/bin/sh".to_string(), "-c".to_string(), command])
  }
  
@@ -1009,10 +921,10 @@ index 04737d1e563ac125c56fb801c067d2b31208a477..d1c5a68a589269bd6d7b8c33245ce379
      if !value.is_empty()
          && value.chars().all(|ch| {
 diff --git a/src/platform/macos.rs b/src/platform/macos.rs
-index 1fef08fe6f4badbcf1238cc6deb53b171e31b651..20dcf38feb474fe4376705863b3e9a8d1f925a61 100644
+index e1cd6742bd878109c8e43129d19e4dfb4ec52fb1..9b6a9a2ca7e15a2230e1751ad6855724b40d2bc2 100644
 --- a/src/platform/macos.rs
 +++ b/src/platform/macos.rs
-@@ -51,10 +51,6 @@ pub(crate) fn scrollback_editor_argv(path: &Path) -> std::io::Result<Vec<String>
+@@ -52,10 +52,6 @@ pub(crate) fn scrollback_editor_argv(path: &Path) -> std::io::Result<Vec<String>
      Ok(vec!["/bin/sh".to_string(), "-c".to_string(), command])
  }
  
@@ -1024,10 +936,10 @@ index 1fef08fe6f4badbcf1238cc6deb53b171e31b651..20dcf38feb474fe4376705863b3e9a8d
      if !value.is_empty()
          && value.chars().all(|ch| {
 diff --git a/src/platform/mod.rs b/src/platform/mod.rs
-index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169ac7ad963c 100644
+index 42eb5cf2b577d8d13f6a6defa80681af7abbf398..b04fc9b85f39197c27b2906ce24d4323a0e9efd8 100644
 --- a/src/platform/mod.rs
 +++ b/src/platform/mod.rs
-@@ -279,7 +279,6 @@ fn normalized_process_name(name: &str) -> String {
+@@ -347,7 +347,6 @@ fn normalized_process_name(name: &str) -> String {
          .to_ascii_lowercase()
  }
  
@@ -1035,7 +947,7 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
  pub(crate) fn is_powershell_process_name(name: &str) -> bool {
      matches!(
          normalized_process_name(name).as_str(),
-@@ -287,19 +286,80 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
+@@ -355,19 +354,80 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
      )
  }
  
@@ -1126,7 +1038,7 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
      for part in parts {
          command.push(' ');
          command.push_str(&quote(part));
-@@ -307,6 +367,93 @@ pub(crate) fn interactive_unix_shell_command(
+@@ -375,6 +435,64 @@ pub(crate) fn interactive_unix_shell_command(
      Some(command)
  }
  
@@ -1188,39 +1100,10 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
 +    }
 +}
 +
-+fn quote_windows_command_line_arg(value: &str) -> String {
-+    if !value.is_empty()
-+        && !value
-+            .chars()
-+            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
-+    {
-+        return value.to_string();
-+    }
-+
-+    let mut quoted = String::from("\"");
-+    let mut backslashes = 0;
-+    for ch in value.chars() {
-+        if ch == '\\' {
-+            backslashes += 1;
-+            continue;
-+        }
-+        if ch == '"' {
-+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-+        } else {
-+            quoted.push_str(&"\\".repeat(backslashes));
-+        }
-+        backslashes = 0;
-+        quoted.push(ch);
-+    }
-+    quoted.push_str(&"\\".repeat(backslashes * 2));
-+    quoted.push('"');
-+    quoted
-+}
-+
- pub(crate) fn quote_powershell_arg(value: &str) -> String {
+ fn quote_windows_command_line_arg(value: &str) -> String {
      if !value.is_empty()
-         && value.bytes().all(|byte| {
-@@ -321,8 +468,13 @@ pub(crate) fn quote_powershell_arg(value: &str) -> String {
+         && !value
+@@ -419,8 +537,13 @@ pub(crate) fn quote_powershell_arg(value: &str) -> String {
  
  pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
      let normalized = normalized_process_name(name);
@@ -1235,7 +1118,7 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
          "sh" | "bash"
              | "dash"
              | "zsh"
-@@ -333,10 +485,6 @@ pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
+@@ -431,10 +554,6 @@ pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
              | "tcsh"
              | "elvish"
              | "xonsh"
@@ -1246,7 +1129,7 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
      )
  }
  
-@@ -405,6 +553,57 @@ impl PrefixInputSource for RealPrefixInputSource {
+@@ -503,6 +622,57 @@ impl PrefixInputSource for RealPrefixInputSource {
      }
  }
  
@@ -1301,10 +1184,10 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
 +    }
 +}
 +
- #[cfg(all(test, unix))]
- mod tests {
-     use super::*;
-@@ -475,28 +674,6 @@ mod tests {
+ #[cfg(all(test, any(unix, windows)))]
+ #[test]
+ fn child_exit_classification_only_checkpoints_interruptions() {
+@@ -592,28 +762,6 @@ mod tests {
          assert_eq!(parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"), None);
      }
  
@@ -1333,24 +1216,325 @@ index d125f74a52480146b691adf61d1e78cc90625e00..91a62b94385f5f3674bd156cd1b8169a
      #[test]
      fn read_limited_reader_returns_complete_data_under_limit() {
          let input = std::io::Cursor::new(b"image".to_vec());
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index 1e53244cc185cdebdf0e670156eaca6f55c758dd..fdd1d6e539afa25149d264a37e4d60378198eeb7 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -669,83 +669,6 @@ fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString
+         .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
+ }
+ 
+-pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
+-    let shell_name = shell_name.to_ascii_lowercase();
+-    let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
+-    let script = powershell_agent_script(argv)?;
+-    if powershell {
+-        Some(script)
+-    } else {
+-        Some(cmd_encoded_powershell_command(&script))
+-    }
+-}
+-
+-fn powershell_agent_script(argv: &[String]) -> Option<String> {
+-    let (program, args) = argv.split_first()?;
+-    if args.is_empty() {
+-        return Some(format!("& {}", super::quote_powershell_arg(program)));
+-    }
+-
+-    let powershell_args = args
+-        .iter()
+-        .map(|arg| super::quote_powershell_arg(arg))
+-        .collect::<Vec<_>>()
+-        .join(" ");
+-    let command_line = args
+-        .iter()
+-        .map(|arg| quote_windows_command_line_arg(arg))
+-        .collect::<Vec<_>>()
+-        .join(" ");
+-    Some(format!(
+-        "if((Get-Command {} -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){{& {} {}}}else{{Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait}}",
+-        super::quote_powershell_arg(program),
+-        super::quote_powershell_arg(program),
+-        powershell_args,
+-        super::quote_powershell_arg(program),
+-        super::quote_powershell_arg(&command_line),
+-    ))
+-}
+-
+-fn quote_windows_command_line_arg(value: &str) -> String {
+-    if !value.is_empty()
+-        && !value
+-            .chars()
+-            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
+-    {
+-        return value.to_string();
+-    }
+-
+-    let mut quoted = String::from("\"");
+-    let mut backslashes = 0;
+-    for ch in value.chars() {
+-        if ch == '\\' {
+-            backslashes += 1;
+-            continue;
+-        }
+-        if ch == '"' {
+-            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+-        } else {
+-            quoted.push_str(&"\\".repeat(backslashes));
+-        }
+-        backslashes = 0;
+-        quoted.push(ch);
+-    }
+-    quoted.push_str(&"\\".repeat(backslashes * 2));
+-    quoted.push('"');
+-    quoted
+-}
+-
+-fn cmd_encoded_powershell_command(script: &str) -> String {
+-    use base64::Engine as _;
+-
+-    let utf16 = script
+-        .encode_utf16()
+-        .flat_map(u16::to_le_bytes)
+-        .collect::<Vec<_>>();
+-    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+-    format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
+-}
+-
+ pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
+     detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
+ }
+@@ -3732,42 +3655,92 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn powershell_agent_command_omits_argument_list_when_no_arguments_are_passed() {
+-        let argv = vec!["opencode".into()];
++    fn supported_windows_shells_keep_agent_launch_in_the_selected_shell() {
++        let argv = vec!["agent-cli".into()];
++
++        assert_eq!(
++            interactive_shell_command(&argv, "powershell.exe").as_deref(),
++            Some(
++                "& (Get-Command -Name agent-cli -CommandType Application -TotalCount 1 -ErrorAction Stop).Path"
++            )
++        );
++        assert_eq!(
++            interactive_shell_command(&argv, "cmd.exe").as_deref(),
++            Some("agent-cli")
++        );
++        assert_eq!(
++            interactive_shell_command(&argv, "nu.exe").as_deref(),
++            Some("^\"agent-cli\"")
++        );
++        assert_eq!(
++            interactive_shell_command(&argv, "bash.exe").as_deref(),
++            Some("agent-cli")
++        );
++        assert_eq!(interactive_shell_command(&argv, "unknown.exe"), None);
++    }
++
++    #[test]
++    fn nushell_agent_commands_use_direct_external_invocation() {
++        let argv = vec![
++            "agent-cli".into(),
++            "resume".into(),
++            "--workspace".into(),
++            r"C:\Workspaces\two words".into(),
++        ];
+ 
++        let command = interactive_shell_command(&argv, "nu.exe").unwrap();
+         assert_eq!(
+-            super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
+-            Some("& opencode")
++            command,
++            r#"^"agent-cli" "resume" "--workspace" "C:\\Workspaces\\two words""#
+         );
++        assert!(!command.to_ascii_lowercase().contains("powershell"));
++        assert!(!command.contains("EncodedCommand"));
+     }
+ 
+     #[test]
+-    fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
+-        use base64::Engine as _;
++    fn child_process_job_assigns_and_terminates_within_deadline() {
++        let mut child = Command::new("powershell.exe")
++            .args([
++                "-NoLogo",
++                "-NoProfile",
++                "-Command",
++                "Start-Sleep -Seconds 30",
++            ])
++            .stdin(Stdio::null())
++            .stdout(Stdio::null())
++            .stderr(Stdio::null())
++            .spawn()
++            .expect("spawn job test child");
++        let job = super::ChildProcessJob::new_kill_on_close().expect("create child job");
++        if let Err(err) = job.assign(&child) {
++            let _ = child.kill();
++            let _ = super::wait_child_bounded(&mut child, Duration::from_secs(5));
++            panic!("assign job test child: {err}");
++        }
++        assert!(child.try_wait().expect("inspect job test child").is_none());
++        let started = Instant::now();
++        job.terminate_and_wait(&mut child, Duration::from_secs(5))
++            .expect("terminate job test child");
++        assert!(started.elapsed() < Duration::from_secs(5));
++        assert!(child
++            .try_wait()
++            .expect("reinspect job test child")
++            .is_some());
++    }
+ 
+-        assert_eq!(super::super::quote_powershell_arg("@options"), "'@options'");
++    #[test]
++    fn cmd_agent_command_escapes_shell_expansion_without_powershell() {
+         let argv = vec![
+             "pi".into(),
+             String::new(),
+             "two words".into(),
+             "100%".into(),
+-            "wow!".into(),
+-            "a'b".into(),
+-            "--model".into(),
++            "%PATH%".into(),
++            "a&b".into(),
++            "!PATH!".into(),
+         ];
+-        let command = super::interactive_shell_command(&argv, "cmd.exe").unwrap();
+-        let encoded = command.split_whitespace().last().unwrap();
+-        let bytes = base64::engine::general_purpose::STANDARD
+-            .decode(encoded)
+-            .unwrap();
+-        let utf16 = bytes
+-            .chunks_exact(2)
+-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+-            .collect::<Vec<_>>();
+-        assert_eq!(
+-            String::from_utf16(&utf16).unwrap(),
+-            "if((Get-Command pi -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& pi '' 'two words' '100%' 'wow!' 'a''b' '--model'}else{Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b --model' -NoNewWindow -Wait}"
+-        );
++        let command = interactive_shell_command(&argv, "cmd.exe").unwrap();
++        assert_eq!(command, r#"pi "" "two words" 100^% ^%PATH^% a^&b ^!PATH^!"#);
+     }
+ 
+     #[test]
+@@ -3788,6 +3761,16 @@ mod tests {
+             "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
+         )
+         .unwrap();
++        fs::write(
++            base.join("pi"),
++            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" > \"$HERDR_ARGV_CAPTURE\"\n",
++        )
++        .unwrap();
++        fs::write(
++            base.join("pi.ps1"),
++            "& \"$PSScriptRoot\\pi.cmd\" @args\nexit $LASTEXITCODE\n",
++        )
++        .unwrap();
+         let argv = vec![
+             "pi".into(),
+             String::new(),
+@@ -3801,14 +3784,29 @@ mod tests {
+         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
+         let run_command = |shell: &str, command: &str, capture: &std::path::Path| {
+-            let mut process = if shell == "cmd.exe" {
+-                let mut process = Command::new("cmd.exe");
+-                process.args(["/d", "/c", command]);
+-                process
+-            } else {
+-                let mut process = Command::new("powershell.exe");
+-                process.args(["-NoLogo", "-NoProfile", "-Command", command]);
+-                process
++            let mut process = match shell {
++                "cmd.exe" => {
++                    let mut process = Command::new("cmd.exe");
++                    process.args(["/d", "/s", "/c"]);
++                    process.raw_arg(format!("\"{command}\""));
++                    process
++                }
++                "powershell.exe" => {
++                    let mut process = Command::new("powershell.exe");
++                    process.args(["-NoLogo", "-NoProfile", "-Command", command]);
++                    process
++                }
++                "nu.exe" => {
++                    let mut process = Command::new("nu.exe");
++                    process.args(["--no-config-file", "--commands", command]);
++                    process
++                }
++                "bash.exe" | "sh.exe" => {
++                    let mut process = Command::new(shell);
++                    process.args(["--noprofile", "--norc", "-c", command]);
++                    process
++                }
++                _ => unreachable!("unsupported test shell"),
+             };
+             process
+                 .env("PATH", &path)
+@@ -3818,9 +3816,21 @@ mod tests {
+                 .unwrap()
+         };
+ 
+-        for shell in ["powershell.exe", "cmd.exe"] {
++        let mut shells = vec!["powershell.exe", "cmd.exe"];
++        for shell in ["nu.exe", "bash.exe", "sh.exe"] {
++            if Command::new(shell)
++                .arg("--version")
++                .stdout(std::process::Stdio::null())
++                .stderr(std::process::Stdio::null())
++                .status()
++                .is_ok_and(|status| status.success())
++            {
++                shells.push(shell);
++            }
++        }
++        for shell in shells {
+             let no_args_capture = base.join(format!("{shell}-no-args.txt"));
+-            let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
++            let no_args_command = interactive_shell_command(&["pi".into()], shell).unwrap();
+             let status = run_command(shell, &no_args_command, &no_args_capture);
+             assert!(status.success(), "{shell} argument-free command failed");
+             assert_eq!(
+@@ -3831,7 +3841,7 @@ mod tests {
+             );
+ 
+             let capture = base.join(format!("{shell}.txt"));
+-            let command = super::interactive_shell_command(&argv, shell).unwrap();
++            let command = interactive_shell_command(&argv, shell).unwrap();
+             let status = run_command(shell, &command, &capture);
+             assert!(status.success(), "{shell} command failed");
+             assert_eq!(
+@@ -3848,7 +3858,7 @@ mod tests {
+         .unwrap();
+         for shell in ["powershell.exe", "cmd.exe"] {
+             let capture = base.join(format!("{shell}-ps1.txt"));
+-            let command = super::interactive_shell_command(&argv, shell).unwrap();
++            let command = interactive_shell_command(&argv, shell).unwrap();
+             let status = run_command(shell, &command, &capture);
+             assert!(status.success(), "{shell} PowerShell script command failed");
+             assert_eq!(
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index 65b073817bd540baf16bcff7e43dfbb9622dcd3d..1af81acec16bd697c54d4a419e8e0b553ff9bc9a 100644
+index de36d6b91512716d5b768ad66fadd90f376ba610..fd4dd8a1ce55b5cc7eb796e7783082909f57bb1f 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -4798,6 +4798,8 @@ impl HeadlessServer {
+@@ -3315,7 +3315,7 @@ impl HeadlessServer {
+     ///
+     /// Similar to the former App scheduler but without terminal resize polling.
+     fn handle_scheduled_tasks_headless(&mut self, now: Instant, geometry_dirty: bool) -> bool {
+-        let mut changed = false;
++        let mut changed = self.app.try_start_tab_auto_start_agents(now);
+ 
          // No resize polling needed — server has no terminal.
          // Client resize messages drive size changes instead.
- 
-+        changed |= self.app.try_start_tab_auto_start_agents(now);
-+
-         if self
-             .app
-             .config_diagnostic_deadline
 diff --git a/src/terminal/runtime.rs b/src/terminal/runtime.rs
-index 2e9f5cacf884951de3f75405abc9271923823bbd..9eb3c5dec0e08741c294d50233beb3b3ec073cb4 100644
+index f98b0f9d552678ff23903829ca95894737170f41..326d91358fad872c7ea795a324b96b64355a9097 100644
 --- a/src/terminal/runtime.rs
 +++ b/src/terminal/runtime.rs
-@@ -551,6 +551,10 @@ impl TerminalRuntime {
+@@ -549,6 +549,10 @@ impl TerminalRuntime {
          self.0.cwd()
      }
  

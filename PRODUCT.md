@@ -18,9 +18,9 @@ tests remain the detailed implementation truth.
 - Fork identity appears in repository, release, update-feed, Windows setup, and
   Installed Apps presentation. The Windows package entry is **Herdr Win**; the
   executable, command, configuration, state, sessions, sockets, and protocol remain
-  `herdr`. The fork does not create a second protocol namespace, but a maintained
-  wire change may require matching herdr-win binaries instead of independently
-  released upstream builds.
+  `herdr`. Herdr v0.9.0's frozen binary protocol and negotiated endpoint compatibility
+  are preserved. Optional fork capabilities use named extensions rather than a
+  second wire protocol or an exact-version requirement for compatible attachment.
 - A published `herdr --version` reports `herdr-win <CalVer> (Herdr
   <upstream-version>)`. A separately built local binary instead reports
   `herdr-win <YYYY.MM.DD.HHMMZ> (local, Herdr <upstream-version>, build
@@ -34,8 +34,8 @@ tests remain the detailed implementation truth.
   amd64/arm64, and macOS amd64/arm64. Windows additionally ships the managed
   per-user setup and portable archive; Linux and macOS ship raw executables from
   the same retained candidate. Supported clients and remote endpoints therefore
-  share the same fork wire protocol in mixed-platform development environments.
-  Existing remote provisioning uses those matching assets instead of requiring
+  negotiate endpoint compatibility in mixed-platform development environments.
+  Exact remote provisioning uses matching assets instead of requiring
   manual binary copying or independently released builds. Windows can run both the
   interactive client and an SSH-reachable Herdr server.
   General CLI, TUI, configuration, integration, and issue behavior remains documented
@@ -197,8 +197,8 @@ tests remain the detailed implementation truth.
   CLI, or API. When live reload enables or changes the setting, Herdr also starts
   the selected Agent in each eligible existing tab root that is waiting at its
   shell. Restore or reattach at startup, an unchanged reload, live handoff,
-  `--no-session`, split panes, and the automatic default workspace that replaces
-  the last closed workspace do not trigger it. Exiting or interrupting the Agent
+  split panes, and restored tabs do not trigger it. A genuinely new default workspace
+  replacing the last closed workspace uses the same opt-in setting. Exiting or interrupting the Agent
   returns to the tab's underlying shell, and Herdr never writes the setting.
 - Managed Agent launch stays in the selected interactive shell and preserves
   exact arguments. Initial start, auto-start, and native session resume share
@@ -221,9 +221,11 @@ tests remain the detailed implementation truth.
   custom tokens, and each pane or workspace retains at most 64. Existing key,
   value, source, sequence, and TTL validation remains fail-closed.
 - Every supported client can attach to an x86_64 or ARM64 Windows SSH host. Herdr
-  first uses an exact version- and protocol-matching `herdr.exe` from that SSH
+  first uses an endpoint-compatible `herdr.exe` from that SSH
   user's `PATH` or the stable per-user remote runtime at
-  `%USERPROFILE%\.herdr\remote\herdr.exe`. If neither matches, an
+  `%USERPROFILE%\.herdr\remote\herdr.exe`. Version differences alone do not require
+  replacing a compatible server. Saved-machine reconnect never installs, stops,
+  replaces, or starts a missing server. If neither candidate is compatible, an
   interactive attach offers to transfer the complete digest-verified Windows
   portable payload into that user's profile without running the managed installer
   or changing `PATH`; `--yes` explicitly approves that installation and any required

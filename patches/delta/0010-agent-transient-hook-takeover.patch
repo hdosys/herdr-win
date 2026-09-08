@@ -1,28 +1,15 @@
-From cec1b35ad101465e652402d52d6932ec1fc2c7ad Mon Sep 17 00:00:00 2001
+From 647d37c4c5383251929bc59282b24e324e1d42c3 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 23 Aug 2026 00:13:32 +0200
-Subject: [PATCH 9/17] fix(agent): restore authority after transient takeover
+Subject: [PATCH 8/13] fix(agent): restore authority after transient takeover
 
 Refs herdrdev/herdr#1033
 ---
- docs/next/CHANGELOG.md |  1 +
- src/terminal/state.rs  | 71 ++++++++++++++++++++++++++++++++++++++++--
- 2 files changed, 70 insertions(+), 2 deletions(-)
+ src/terminal/state.rs | 71 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 69 insertions(+), 2 deletions(-)
 
-diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index a15a03c2da80222f9654e5d5864965a08ca69ea2..a8322335b03fd4753d64da571d546f4d4fcdcd02 100644
---- a/docs/next/CHANGELOG.md
-+++ b/docs/next/CHANGELOG.md
-@@ -10,6 +10,7 @@
- 
- ### Fixed
- - Windows `agent start` now launches npm-installed agents with arguments through the interactive shell instead of passing a bare shim name to `Start-Process`. (#2685)
-+- Full-lifecycle agent sessions now regain hook authority after a temporary foreground takeover ends instead of remaining permanently stale. (#1033)
- - Worktree commands now handle explicitly selected accessible repositories across ownership boundaries without persisting Git trust. (#3044)
- - Windows remote startup now detaches the background server from its transient console after crossing into the interactive desktop session, so SSH provisioning no longer leaves a terminal window open.
- 
 diff --git a/src/terminal/state.rs b/src/terminal/state.rs
-index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f6b3772a3 100644
+index dc28af10650258fd3abde28241f8ab9cce207375..5d333c0488d9baf42ec0fdb26fb983594f812f8c 100644
 --- a/src/terminal/state.rs
 +++ b/src/terminal/state.rs
 @@ -42,6 +42,7 @@ struct PendingFullLifecycleHookReport {
@@ -33,7 +20,7 @@ index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f
      HookClear,
      ProcessExit,
  }
-@@ -567,7 +568,7 @@ impl TerminalState {
+@@ -569,7 +570,7 @@ impl TerminalState {
                  })
              });
              self.suppress_current_full_lifecycle_hook_authority(
@@ -42,7 +29,7 @@ index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f
              );
              self.hook_authority = None;
              self.persisted_agent_session = durable_session;
-@@ -907,7 +908,11 @@ impl TerminalState {
+@@ -909,7 +910,11 @@ impl TerminalState {
              if suppressed.agent_label != agent_label {
                  return FullLifecycleHookReportRoute::Ignore;
              }
@@ -55,7 +42,7 @@ index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f
                  let reanchor_sequence = matches!(
                      (&suppressed.session_ref, session_ref),
                      (Some(previous), Some(incoming)) if previous != incoming
-@@ -1095,6 +1100,9 @@ impl TerminalState {
+@@ -1097,6 +1102,9 @@ impl TerminalState {
                  if !should_clear {
                      return true;
                  }
@@ -65,7 +52,7 @@ index 5c659eb9f430c3cf6e2954e704fd6db77d73fe8e..d99b37766ad4722dfe6ea4552d8e421f
                  if suppressed.reason == FullLifecycleHookSuppressionReason::ProcessExit {
                      if let Some(session_ref) = suppressed.replacement_session_ref.take() {
                          if let Some(exited_session_ref) = suppressed
-@@ -3144,6 +3152,65 @@ mod tests {
+@@ -3174,6 +3182,65 @@ mod tests {
          assert_eq!(terminal.state, AgentState::Idle);
      }
  

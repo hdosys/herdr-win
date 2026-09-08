@@ -9,6 +9,8 @@ behavior; code and tests remain the detailed implementation truth.
 
 ## Source and Ownership Model
 
+- The current reviewed base is Herdr v0.9.0, commit
+  `b99002ac99b09e00b4ca692436cb15a6b0d676f1`.
 - Release source is a fresh checkout of the exact commit behind the upstream stable
   release recorded in `BASE` plus the ordered `patches/delta/series` queue. At each
   explicit manual refresh, that commit must be the latest non-draft,
@@ -54,8 +56,15 @@ behavior; code and tests remain the detailed implementation truth.
 
 ## Maintained Delta Boundaries
 
-- Mailbox 0001 owns Windows terminal appearance, color/cursor transport, rendering,
-  and Windows VTI input behavior.
+- Mailbox 0001 owns client-local terminal appearance, cursor presentation, and
+  narrow Windows VTI input behavior. The upstream protocol-22 `wire.rs` remains
+  byte-identical to BASE. Endpoint generation 1 and its named extensions carry
+  optional semantic facts without changing the frozen binary protocol.
+- `shell.surface.cursor-color.v1` is negotiated through `surface_cursor_color`.
+  Its endpoint identity, boot ID, projection revision, and surface revision bind
+  cursor color to the accepted full or retained surface. The server supplies semantic
+  cursor facts; each client chooses presentation and restores its own host cursor.
+  A missing extension cannot change required generation/codec compatibility.
 - Mailbox 0001 synchronizes only the host terminal's default foreground,
   background, and cursor through OSC 10/11/12. Indexed pane colors use Herdr's
   built-in palette; truecolor remains direct. Herdr never automatically queries
@@ -71,8 +80,13 @@ behavior; code and tests remain the detailed implementation truth.
   supported client uses one explicit PowerShell probe for a Windows SSH host,
   accepts only x86_64 or ARM64, and reuses that probe's preferred valid candidate,
   client identity, and server status through the complete attach or provision
-  decision. It never rediscovers or reprobes a mismatched candidate. Upstream owns
-  exact-version, protocol, named-session, status, stop, and restart semantics. The
+  decision. It never rediscovers or reprobes a mismatched candidate. Ordinary and
+  saved-machine connections share this Windows adapter and upstream orchestration.
+  Attach negotiates endpoint generation 1 and required codecs independently of
+  exact build identity. `windows_remote_host` identifies the Windows adapter;
+  `remote_connect_only` guarantees a saved reconnect cannot start a missing server.
+  Every bridge names its session explicitly. Exact build, digest, and binary
+  matching remain provisioning requirements, not compatible-attach requirements. The
   probe prefers `herdr.exe` from the SSH user's `PATH`, then one stable user-owned payload at
   `%USERPROFILE%\.herdr\remote\herdr.exe`.
 - Published provisioning transfers the complete digest-bearing portable ZIP with
@@ -139,11 +153,10 @@ behavior; code and tests remain the detailed implementation truth.
   the existing managed Agent launch owner waits for shell readiness. A live reload
   that enables or changes the selected Agent also queues each eligible existing
   shell-only tab root once; an unchanged reload cannot duplicate pending work.
-  Restore or reattach at startup, live handoff, `--no-session`, pane split, the
-  automatic default workspace that replaces the last closed workspace, and
-  existing managed-Agent terminals do not queue this path. The App records only
-  whether the initial default workspace remains eligible; every successful
-  workspace creation consumes that eligibility. Native Agent resume remains the
+  Server-side `AppPolicy.persist_session` gates this path. Restored tabs, reattach,
+  live handoff, pane split, and existing managed-Agent terminals do not queue it.
+  Newly created replacement default workspaces use the same new-root launch owner.
+  Native Agent resume remains the
   only Agent launch path for restored Agent terminals. Managed start, auto-start,
   and resume resolve the same shell used by pane spawning and call one shared
   shell-command renderer. PowerShell resolves one native application and invokes

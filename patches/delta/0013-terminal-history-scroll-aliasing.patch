@@ -1,7 +1,7 @@
-From 6e9c7bd74058fc2d1c7e6b26f9e5df01b1edd10c Mon Sep 17 00:00:00 2001
+From 9505f1ce0f0f98a5a8c5912fccf16f7694eb1733 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 30 Aug 2026 14:52:23 +0200
-Subject: [PATCH 12/17] fix(terminal): retain repeated scrolled rows
+Subject: [PATCH 11/13] fix(terminal): retain repeated scrolled rows
 
 Refs herdrdev/herdr#2893
 ---

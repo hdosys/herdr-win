@@ -1,31 +1,18 @@
-From 72fff158b88c697d4663194e0ec8a0884a6eea77 Mon Sep 17 00:00:00 2001
+From 4840939276ead3780010d75b38f6a13d2371c30a Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Wed, 26 Aug 2026 13:52:34 +0200
-Subject: [PATCH 10/17] feat(api): expand metadata token capacity
+Subject: [PATCH 9/13] feat(api): expand metadata token capacity
 
 ---
- docs/next/CHANGELOG.md              |  1 +
  docs/next/api/herdr-api.schema.json | 14 +++----
  src/api/schema/common.rs            |  4 +-
  src/app/api/panes.rs                | 29 +++++++++++++++
  src/app/api/workspaces.rs           | 58 +++++++++++++++++++++++++++--
  src/app/api_helpers.rs              | 16 ++++++--
- 6 files changed, 105 insertions(+), 17 deletions(-)
+ 5 files changed, 104 insertions(+), 17 deletions(-)
 
-diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
-index a8322335b03fd4753d64da571d546f4d4fcdcd02..0f3fc76a41796bdbfed40227cea3ed62bab8bc17 100644
---- a/docs/next/CHANGELOG.md
-+++ b/docs/next/CHANGELOG.md
-@@ -6,6 +6,7 @@
- - New persistent sessions can start one configured interactive Agent in the root pane of every genuinely new tab with `[session] auto_start_agent`; enabling the setting during live reload also starts it in existing tab roots that are waiting at their shell.
- 
- ### Changed
-+- Pane and workspace metadata reports can atomically update and retain up to 64 custom tokens while preserving the existing key, value, source, and TTL bounds.
- - Herdr no longer queries all 256 indexed colors from the host terminal. It continues to synchronize the host foreground, background, and cursor while using its built-in indexed palette, preventing raw OSC 4 replies from reaching pane input. (#2786)
- 
- ### Fixed
 diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
-index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc09b5d58f 100644
+index 3dbfcf198ad295d2df12ca7c0da56f14a832701b..4532e918d04431e34413c14326df3ef1ef6755c9 100644
 --- a/docs/next/api/herdr-api.schema.json
 +++ b/docs/next/api/herdr-api.schema.json
 @@ -857,7 +857,7 @@
@@ -46,7 +33,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                "propertyNames": {
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
-@@ -2958,7 +2958,7 @@
+@@ -3140,7 +3140,7 @@
                    "null"
                  ]
                },
@@ -55,7 +42,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                "propertyNames": {
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
-@@ -4244,7 +4244,7 @@
+@@ -4552,7 +4552,7 @@
                    "null"
                  ]
                },
@@ -64,7 +51,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                "propertyNames": {
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
-@@ -6215,7 +6215,7 @@
+@@ -6711,7 +6711,7 @@
                "additionalProperties": {
                  "type": "string"
                },
@@ -73,7 +60,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                "propertyNames": {
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
-@@ -7491,7 +7491,7 @@
+@@ -8022,7 +8022,7 @@
                "additionalProperties": {
                  "type": "string"
                },
@@ -82,7 +69,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                "propertyNames": {
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
-@@ -9967,7 +9967,7 @@
+@@ -10713,7 +10713,7 @@
                "additionalProperties": {
                  "type": "string"
                },
@@ -92,7 +79,7 @@ index 1475614adb9b16a91c4fa7995f791a2db81efee5..c19965a89867117bda4aec98ed3cdecc
                  "pattern": "^[A-Za-z0-9_-]{1,32}$"
                },
 diff --git a/src/api/schema/common.rs b/src/api/schema/common.rs
-index 7313002cda2210fbfa29a8be5fa2167b4bfd8c98..f0197516d54968ac086be0ed3adb0f70430bfdf0 100644
+index bf0d7cafb6326b47ea4a22ddaec5236056212f1e..6a9f0262b0a13b4c38108e1f0c079e6ac8106d20 100644
 --- a/src/api/schema/common.rs
 +++ b/src/api/schema/common.rs
 @@ -5,7 +5,7 @@ pub(super) fn metadata_token_patch_schema(
@@ -114,10 +101,10 @@ index 7313002cda2210fbfa29a8be5fa2167b4bfd8c98..f0197516d54968ac086be0ed3adb0f70
          "additionalProperties": { "type": "string" }
      })
 diff --git a/src/app/api/panes.rs b/src/app/api/panes.rs
-index 5118382806722a9e80d810ce852cc86dffea56ed..f4f2808fce7773137eb8f767eaff1118ea9b1e12 100644
+index 7f6cca85aa17f34c8277d951227a1585cdd3dfe6..e71ce94f7e08ab36d5b6ceacb2e17b257f239bcd 100644
 --- a/src/app/api/panes.rs
 +++ b/src/app/api/panes.rs
-@@ -3901,6 +3901,35 @@ mod tests {
+@@ -4276,6 +4276,35 @@ mod tests {
          assert!(app.state.terminals[&terminal_id].agent_metadata.is_empty());
      }
  
@@ -154,7 +141,7 @@ index 5118382806722a9e80d810ce852cc86dffea56ed..f4f2808fce7773137eb8f767eaff1118
      fn pane_tokens_are_independent_from_presentation_guards() {
          let (mut app, pane_id) = app_with_test_workspace();
 diff --git a/src/app/api/workspaces.rs b/src/app/api/workspaces.rs
-index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff52285a3eb20 100644
+index 3efcc4dca39243592d1fa8eece6a1fce0e6b6046..db37ed24eba1dd78a2b273e04e423602acb01a26 100644
 --- a/src/app/api/workspaces.rs
 +++ b/src/app/api/workspaces.rs
 @@ -7,7 +7,10 @@ use crate::api::schema::{
@@ -169,7 +156,7 @@ index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff522
  use super::responses::{encode_error, encode_success};
  
  impl App {
-@@ -282,7 +285,7 @@ impl App {
+@@ -294,7 +297,7 @@ impl App {
              Ok(ttl) => ttl,
              Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
          };
@@ -178,7 +165,7 @@ index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff522
              Ok(tokens) => tokens,
              Err(message) => return encode_error(id, "invalid_metadata_token", message),
          };
-@@ -297,14 +300,14 @@ impl App {
+@@ -309,14 +312,14 @@ impl App {
              return encode_success(id, ResponseResult::Ok {});
          }
          if workspace.metadata_tokens.key_count_after_patch(&tokens)
@@ -195,7 +182,7 @@ index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff522
                  ),
              );
          }
-@@ -598,6 +601,53 @@ mod tests {
+@@ -852,6 +855,53 @@ mod tests {
          )));
      }
  
@@ -204,7 +191,7 @@ index 2996f7b10bb0f99512aa7cf5a3d8fb514bd1eb75..e255ee67def99b23f7a2a5f9ba6ff522
 +        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
 +        let mut app = App::new(
 +            &Config::default(),
-+            true,
++            crate::app::AppPolicy::TEST,
 +            None,
 +            api_rx,
 +            crate::api::EventHub::default(),

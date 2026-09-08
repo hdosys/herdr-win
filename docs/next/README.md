@@ -22,7 +22,7 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 ## Engineering approach
 
 - **Upstream-first and contribution-oriented:** each behavior has one responsibility-owned mailbox designed for focused upstream review and leaves the queue when equivalent support ships upstream.
-- **One coherent distribution:** all supported clients, servers, and provisioned remote runtimes come from the same source tree, build identity, and wire protocol.
+- **One coherent distribution:** release assets share one source tree and build identity. Compatible attachment negotiates the upstream endpoint protocol; provisioning verifies the exact payload.
 - **Real boundary evidence:** Windows setup, ConPTY packaging, SSH provisioning, updates, uninstall, and cross-platform artifacts are exercised at their product-owned boundaries before publication.
 - **No parallel product:** fork identity stays in repository, release, update-feed, setup, and Installed Apps presentation while normal Herdr commands and state remain unchanged.
 
@@ -30,10 +30,11 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 
 ```mermaid
 flowchart TB
-    S["Source<br/>Upstream Herdr v0.8.2 → BASE 9eb521456ac0"]
-    Q["patches/delta/series<br/>0001&nbsp;Terminal&nbsp;experience&nbsp;→&nbsp;0003&nbsp;Windows&nbsp;SSH&nbsp;target&nbsp;→&nbsp;0004&nbsp;Windows&nbsp;distribution<br/>↓&nbsp;0005&nbsp;OpenCode&nbsp;lifecycle&nbsp;→&nbsp;0006&nbsp;Hardened&nbsp;downloads&nbsp;→&nbsp;0007&nbsp;Portable&nbsp;docs&nbsp;check<br/>↓&nbsp;0008&nbsp;Scoped&nbsp;Git&nbsp;trust&nbsp;→&nbsp;0009&nbsp;Managed&nbsp;Agent&nbsp;start&nbsp;→&nbsp;0010&nbsp;Agent&nbsp;hook&nbsp;recovery<br/>↓&nbsp;0011&nbsp;Metadata&nbsp;capacity&nbsp;→&nbsp;0012&nbsp;Completion&nbsp;alerts&nbsp;→&nbsp;0013&nbsp;Terminal&nbsp;history<br/>↓&nbsp;0014&nbsp;Plugin-root&nbsp;commands&nbsp;→&nbsp;0015&nbsp;Muted-label&nbsp;contrast&nbsp;→&nbsp;0016&nbsp;Integration&nbsp;hints<br/>↓&nbsp;0017&nbsp;Devin&nbsp;config&nbsp;→&nbsp;0018&nbsp;Windows&nbsp;environment"]
+    S["Reviewed stable source<br/>Upstream Herdr v0.9.0 / BASE b99002ac99b0"]
+    Q["Control branch: patches/delta/series<br/>0001 Terminal experience / 0003 Windows SSH / 0004 Managed distribution<br/>0005 OpenCode / 0006 Downloads / 0008 Worktree lifecycle<br/>0009 Agent start / 0010 Hook recovery / 0011 Metadata<br/>0012 Completion / 0013 History / 0015 Contrast / 0016 Integration hints"]
+    D["Current development source<br/>Stable source + accepted changes<br/>Finalized queue reproduces the accepted tree"]
     V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
-    S --> Q --> V
+    S --> Q --> D --> V
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact reviewed upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only patch order. A manual build replays that source and retains one complete candidate; promotion publishes those exact bytes without rebuilding or repackaging them.
@@ -53,7 +54,7 @@ The table is intentionally capability-level. The linked mailboxes contain the ex
 | Managed Windows releases | **Maintained here** · [`0004`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0004-windows-managed-distribution.patch) | Provides per-user setup, portable archives, immutable runtime activation, update ownership, process-safe uninstall, and stable-only release selection. |
 | OpenCode and multi-Agent workflows | **Maintained here** · [#3052](https://github.com/herdrdev/herdr/issues/3052) · [#2450](https://github.com/herdrdev/herdr/issues/2450) · [`0005`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0005-opencode-retry-notifications.patch) | Keeps retries and prompts truthful, preserves each pane's selected root session, and maps concurrent direct subagents from managed OpenCode roots into adaptive readable splits. |
 | Runtime downloads | **Maintained here** · [`0006`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0006-harden-curl-transfers.patch) | Ignores user `curl` configuration and bounds runtime downloads to TLS 1.2+ HTTPS with limited redirects. |
-| Cross-platform docs checks | **Maintained here** · [#3041](https://github.com/herdrdev/herdr/issues/3041) · [`0007`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0007-docs-parity-native-paths.patch) | Keeps the upstream documentation-parity unittest valid with native paths on Windows and POSIX systems. |
+| Cross-platform docs checks | **Upstreamed in Herdr v0.9.0** · [#3041](https://github.com/herdrdev/herdr/issues/3041) | Upstream's documentation-parity assertion now uses native path separators on Windows and POSIX systems. |
 | Worktree lifecycle | **Maintained here** · [#3044](https://github.com/herdrdev/herdr/issues/3044) · [`0008`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0008-worktree-scoped-git-trust.patch) | Scopes Git trust to the selected checkout, waits for Windows terminals before unregistering worktrees, and preserves foreground focus during background removal. |
 | Managed Agent start | **Maintained here** · [#321](https://github.com/herdrdev/herdr/issues/321) · [#2685](https://github.com/herdrdev/herdr/issues/2685) · [`0009`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0009-session-agent-autostart.patch) | Optionally starts one Agent in each new tab, catches up eligible shell roots after live reload, and shares each selected shell's native command syntax with session restore. |
 | Agent hook recovery | **Maintained here** · [#1033](https://github.com/herdrdev/herdr/issues/1033) · [`0010`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0010-agent-transient-hook-takeover.patch) | Lets a still-running full-lifecycle Agent regain hook authority after a temporary foreground takeover without reviving a session after a real exit. |
@@ -101,7 +102,7 @@ The Windows release also includes `herdr-win_v<version>_windows_amd64.zip`. Extr
 
 ### Linux and macOS
 
-Linux and macOS releases are raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. Use assets from the same herdr-win release on every endpoint because independently released builds are not guaranteed to share this fork's wire protocol.
+Linux and macOS releases are raw `linux_amd64`, `linux_arm64`, `macos_amd64`, and `macos_arm64` executables. Clients negotiate endpoint generation and required codecs. Optional cursor-color support uses a named extension; exact provisioning still uses matching herdr-win release assets.
 
 After downloading a Linux or macOS asset, mark it executable, rename it to `herdr`, and place it in a directory on `PATH`.
 
@@ -123,7 +124,7 @@ A published build reports `herdr-win <CalVer> (Herdr <upstream-version>)`. The s
 
 ### Mixed-platform sessions
 
-Run the client and server on Windows, or use a matching Linux or macOS binary to control a Windows workstation or VM. Windows can also connect to matching Linux and macOS endpoints.
+Run the client and server on Windows, or use an endpoint-compatible Linux or macOS client to control a Windows workstation or VM. Windows can also connect to compatible Linux and macOS endpoints. A compatible version difference alone does not restart a running server; saved-machine reconnects never install, replace, or start a missing server.
 
 Every supported client can attach to or provision an x86_64 or ARM64 Windows SSH host. Use `--yes` to approve a required install or restart for one normal attach; unattended provisioning remains explicit:
 

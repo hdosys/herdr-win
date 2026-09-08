@@ -5,20 +5,14 @@ import re
 import unittest
 from pathlib import Path
 
+from scripts.delta_workflow import CONTROL_PATH_PREFIXES, CONTROL_PATHS
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DELTA_ROOT = PROJECT_ROOT / "patches" / "delta"
 PATCH_NAME = re.compile(r"^[0-9]{4}-[a-z0-9-]+\.patch$")
 MAILBOX_FROM = re.compile(r"^From [0-9a-f]{40} Mon Sep 17 00:00:00 2001$")
 DIFF_PATH = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE)
-CONTROL_PATH_PREFIXES = (".github/", "patches/")
-CONTROL_PATHS = {
-    "AGENTS.md",
-    "CONTRIBUTING.md",
-    "README.md",
-    "docs/next/README.md",
-    "website/preview.json",
-}
 FORK_RELEASE_PREFIXES = (
     "https://github.com/hdosys/herdr-win/releases/download/",
     "https://github.com/User-3090/herdr-win/releases/download/",

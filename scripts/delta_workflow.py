@@ -6,14 +6,18 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from contextlib import contextmanager
+from datetime import datetime
 from email import policy
 from email.parser import BytesParser
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -28,6 +32,11 @@ INTEGRATION_ASSET_RE = re.compile(
 INTEGRATION_VERSION_RE = re.compile(r"HERDR_INTEGRATION_VERSION=(?P<version>[0-9]+)")
 GIT_TIMEOUT_SECONDS = 120
 PREFIX_COMPILE_TIMEOUT_SECONDS = 1200
+CONTROL_PATH_PREFIXES = (".github/", "patches/")
+CONTROL_PATHS = {
+    "AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "CONTRIBUTING.md",
+    "README.md", "docs/next/README.md", "website/preview.json",
+}
 DEVELOPMENT_BRANCH = "candidate/development"
 DEVELOPMENT_REMOTE_REF = f"refs/heads/{DEVELOPMENT_BRANCH}"
 
@@ -436,10 +445,35 @@ def validate_changed_integration_asset_versions(
     )
 
 
+@contextmanager
+def _prefix_replay_directory():
+    path = Path(tempfile.mkdtemp(prefix="herdr-delta-prefixes-"))
+    try:
+        yield path
+    finally:
+        _remove_prefix_replay(path)
+
+
+def _remove_prefix_replay(path: Path) -> None:
+    # Zig dependency paths exceed MAX_PATH. Cleanup must address those same files.
+    cleanup_path = f"\\\\?\\{path.resolve()}" if os.name == "nt" else str(path)
+
+    def remove_readonly(function, name, error):
+        if not isinstance(error, PermissionError):
+            raise error
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+
+    shutil.rmtree(cleanup_path, onexc=remove_readonly)
+
+
 def compile_delta_prefixes(
     project_root: Path = PROJECT_ROOT,
     *,
-    check_command: Sequence[str] = ("cargo", "check", "--locked", "--bins"),
+    check_command: Sequence[str] = (
+        "cargo", "check", "--locked", "--bins", "--target", "x86_64-pc-windows-msvc",
+    ),
+    target_dir: Path | None = None,
 ) -> tuple[str, ...]:
     """Replay and compile each ordered mailbox prefix for an explicit refresh."""
 
@@ -452,8 +486,7 @@ def compile_delta_prefixes(
         "GIT_COMMITTER_NAME": "herdr-win replay",
         "GIT_COMMITTER_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com",
     }
-    with tempfile.TemporaryDirectory(prefix="herdr-delta-prefixes-") as temp_dir:
-        temporary = Path(temp_dir)
+    with _prefix_replay_directory() as temporary:
         checkout = temporary / "source"
         _run_git(
             project_root,
@@ -465,7 +498,9 @@ def compile_delta_prefixes(
             {
                 "CARGO_BUILD_JOBS": str(os.cpu_count() or 1),
                 "CARGO_INCREMENTAL": "0",
-                "CARGO_TARGET_DIR": str(temporary / "target"),
+                "CARGO_TARGET_DIR": str(
+                    target_dir.resolve() if target_dir else temporary / "target"
+                ),
                 "GIT_TERMINAL_PROMPT": "0",
             }
         )
@@ -478,6 +513,7 @@ def compile_delta_prefixes(
             )
             environment["HERDR_DELTA_PREFIX"] = str(prefix)
             environment["HERDR_DELTA_MAILBOX"] = mailbox
+            print(f"compiling-prefix: {prefix}/{len(mailboxes)} {mailbox}", flush=True)
             compile_started = time.monotonic()
             try:
                 result = subprocess.run(
@@ -502,9 +538,111 @@ def compile_delta_prefixes(
                 )
             print(
                 f"compiled-prefix: {prefix}/{len(mailboxes)} {mailbox} "
-                f"elapsed_seconds={time.monotonic() - compile_started:.3f}"
+                f"elapsed_seconds={time.monotonic() - compile_started:.3f}",
+                flush=True,
             )
     return mailboxes
+
+
+def refresh_delta(
+    base: str,
+    head: str,
+    expected_tree: str,
+    dropped: Sequence[str],
+    project_root: Path = PROJECT_ROOT,
+) -> ReplayResult:
+    """Publish a reviewed logical stable-refresh stack, never the merged source history."""
+    project_root = project_root.resolve()
+    _require_clean_delta(project_root)
+    _require_tree_object(project_root, expected_tree, "--expected-tree")
+    for commit in (base, head):
+        if BASE_RE.fullmatch(commit) is None:
+            raise DeltaWorkflowError("refresh requires full base and head commit IDs")
+        _run_git(project_root, ["cat-file", "-e", f"{commit}^{{commit}}"])
+    entries = _read_series(project_root)
+    if len(set(dropped)) != len(dropped) or not set(dropped).issubset(entries):
+        raise DeltaWorkflowError("dropped mailboxes must be unique current series entries")
+    retained = tuple(entry for entry in entries if entry not in dropped)
+    commits = _run_git(
+        project_root, ["rev-list", "--reverse", f"{base}..{head}"]
+    ).stdout.splitlines()
+    if not retained or len(commits) != len(retained):
+        raise DeltaWorkflowError(
+            "refresh requires exactly one logical commit per retained mailbox"
+        )
+    actual_tree = _run_git(project_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
+    if actual_tree != expected_tree:
+        raise DeltaWorkflowError(
+            f"logical source tree differs: expected {expected_tree}, found {actual_tree}"
+        )
+    delta_root = project_root / "patches" / "delta"
+    originals = {
+        delta_root / entry: (delta_root / entry).read_bytes()
+        for entry in (*entries, "BASE", "series")
+    }
+    candidates: dict[Path, bytes] = {}
+    parent = base
+    for position, (entry, commit) in enumerate(zip(retained, commits), start=1):
+        parents = _run_git(project_root, ["show", "-s", "--format=%P", commit]).stdout.strip()
+        if parents != parent:
+            raise DeltaWorkflowError(f"logical refresh stack is not linear at {entry}")
+        changed = _run_git(
+            project_root, ["diff", "--name-only", "--no-renames", parent, commit]
+        ).stdout.splitlines()
+        if not changed or any(
+            path in CONTROL_PATHS or path.startswith(CONTROL_PATH_PREFIXES)
+            for path in changed
+        ):
+            raise DeltaWorkflowError(f"empty or control-plane responsibility in {entry}")
+        metadata = _read_mailbox_metadata(
+            delta_root / entry, entries.index(entry) + 1, len(entries)
+        )
+        current_metadata = _read_commit_metadata(project_root, commit)
+        # Git normalizes the author date's spelling, not its instant.
+        if (metadata.author_name, metadata.author_email, metadata.commit_message) != (
+            current_metadata.author_name,
+            current_metadata.author_email,
+            current_metadata.commit_message,
+        ) or parsedate_to_datetime(metadata.author_date) != datetime.fromisoformat(
+            current_metadata.author_date
+        ):
+            raise DeltaWorkflowError(f"retained mailbox metadata differs in {entry}")
+        candidates[delta_root / entry] = _run_git(project_root, [
+            "format-patch", "--stdout", "--full-index", "--binary",
+            f"--subject-prefix=PATCH {position}/{len(retained)}", "-1", commit,
+        ]).stdout.encode("utf-8")
+        parent = commit
+    candidates[delta_root / "series"] = ("\n".join(retained) + "\n").encode()
+    candidates[delta_root / "BASE"] = (base + "\n").encode()
+
+    # Candidate inputs stay private until the complete replay proves exact identity.
+    with tempfile.TemporaryDirectory(prefix="herdr-delta-refresh-") as temporary:
+        staged_delta = Path(temporary)
+        for path, content in candidates.items():
+            (staged_delta / path.name).write_bytes(content)
+        tree = _tree_after_patches(
+            project_root, base, [staged_delta / entry for entry in retained]
+        )
+        if tree != expected_tree:
+            raise DeltaWorkflowError(
+                f"staged refresh replay differs: expected {expected_tree}, found {tree}"
+            )
+        _run_git(project_root, ["diff", "--check", base, tree])
+        result = ReplayResult(base, retained, tree)
+        for path, content in originals.items():
+            if path.read_bytes() != content:
+                raise DeltaWorkflowError(f"delta changed during refresh: {path.name}")
+        try:
+            for path, content in candidates.items():
+                _atomic_replace(path, content)
+            for entry in dropped:
+                (delta_root / entry).unlink()
+            verify_replay_tree(expected_tree, project_root)
+        except (OSError, DeltaWorkflowError):
+            for path, content in originals.items():
+                _atomic_replace(path, content)
+            raise
+    return result
 
 
 def _require_tree_object(project_root: Path, tree: str, label: str) -> None:
@@ -548,7 +686,9 @@ def _require_clean_delta(project_root: Path) -> None:
             "--porcelain=v1",
             "--untracked-files=no",
             "--",
-            "patches/delta",
+            "patches/delta/BASE",
+            "patches/delta/series",
+            "patches/delta/*.patch",
         ],
     ).stdout.strip()
     if status:
@@ -1351,10 +1491,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"absolute path to the shared {DEVELOPMENT_BRANCH} worktree",
     )
 
-    commands.add_parser(
+    prefixes = commands.add_parser(
         "compile-prefixes",
         help="refresh-only replay and compile of every ordered mailbox prefix",
     )
+    prefixes.add_argument("--target-dir", type=Path, help="task-owned shared Cargo cache")
+
+    refresh = commands.add_parser("refresh", help="verify and finalize an authorized stable-refresh logical stack")
+    refresh.add_argument("--base", required=True)
+    refresh.add_argument("--head", required=True)
+    refresh.add_argument("--expected-tree", required=True)
+    refresh.add_argument("--drop-mailbox", action="append", default=[])
 
     check = commands.add_parser(
         "check", help="replay into a temporary index without another checkout"
@@ -1449,9 +1596,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
 
         if options.command == "compile-prefixes":
-            mailboxes = compile_delta_prefixes()
+            mailboxes = compile_delta_prefixes(target_dir=options.target_dir)
             print(f"compiled-prefixes: {len(mailboxes)}")
             print(f"last-mailbox: {mailboxes[-1]}")
+            return 0
+
+        if options.command == "refresh":
+            result = refresh_delta(options.base, options.head, options.expected_tree, options.drop_mailbox)
+            print(f"base: {result.base}")
+            print(f"tree: {result.tree}")
+            print(f"mailboxes: {len(result.mailboxes)}")
+            print("refresh-finalized: yes")
             return 0
 
         result = verify_replay_tree(options.expected_tree)

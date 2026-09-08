@@ -380,11 +380,29 @@ that separate operation. For every approved refresh:
    version matches replayed Cargo package version.
 3. Replay and review the complete queue on that commit, dropping upstreamed hunks
    and anything no longer required by current fork behavior from its logical owner.
-4. Run `python scripts/delta_workflow.py compile-prefixes` so every ordered mailbox
-   prefix compiles before the refreshed queue can hide cross-mailbox ownership.
-5. Update `BASE` only after the reviewed replay succeeds, regenerate every changed
-   mailbox, replay the checked-in queue again from a fresh checkout, and run all
-   refresh gates.
+4. Reconstruct one linear responsibility commit per retained mailbox on that exact
+   stable commit. Preserve author/date/message and qualified upstream references.
+   The cumulative development history may contain merges; never rewrite it merely
+   to satisfy the queue representation. Use Git's temporary index and `commit-tree`
+   for the internal logical stack when necessary.
+5. Run the stable-refresh owner with the full logical head and accepted tree:
+
+   ```powershell
+   python scripts/delta_workflow.py refresh --base <stable-commit> `
+     --head <logical-stack-head> --expected-tree <accepted-source-tree> `
+     --drop-mailbox <obsolete-series-entry.patch>
+   ```
+
+   Repeat `--drop-mailbox` only for responsibilities now completely absent from
+   the delta. The command stages all mailboxes privately, preserves retained
+   metadata, rejects control files, and proves complete replay equality before
+   replacing the queue and `BASE`; failures preserve existing inputs.
+6. Before publishing control `master`, run `delta_workflow.py compile-prefixes`.
+   Every Windows x86_64 prefix must compile with all logical processors and
+   incremental disabled. `--target-dir <task-owned-cache>` may reuse one fresh
+   compiler cache across decomposition corrections. Remove that disposable cache
+   after the refresh. Evidence from the exact same privately staged prefix trees
+   remains valid; queue finalization or cleanup alone does not require recompilation.
 
 Between explicit refreshes, `BASE` remains pinned to that reviewed stable release;
 there is no scheduled upstream query, replay, build, or release. Manual candidate

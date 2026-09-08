@@ -7,13 +7,26 @@ stable-release commit recorded in `BASE`.
 The queue intentionally contains a few coarse, logical feature patches rather
 than one monolith or a patch for every development commit:
 
-1. Windows terminal appearance.
-2. Windows SSH target support and remote provisioning.
-3. Windows managed distribution, installer lifecycle, and checked-in fork update handling.
-4. OpenCode retry lifecycle correlation.
-5. Hardened cross-platform runtime `curl` transfers.
-6. Cross-platform documentation parity test paths.
-7. Process-local Git trust for explicitly selected worktree paths.
+The current queue targets Herdr v0.9.0 and retains these logical slots:
+
+- 0001: client terminal appearance, negotiated cursor color, and Windows VTI input.
+- 0003: Windows SSH adapter, compatible attach, exact provisioning, and bounded desktop launch.
+- 0004: managed distribution, installer lifecycle, and fork update handling.
+- 0005: OpenCode lifecycle, pane-local selection, and direct-child layouts.
+- 0006: shared runtime `curl` policy.
+- 0008: selected-path Git trust and bounded Windows worktree terminal shutdown.
+- 0009: persistent-session Agent auto-start and shared shell-native launch.
+- 0010: transient foreground takeover recovery.
+- 0011: 64-token metadata capacity.
+- 0012: client-local completion controls and cancellation suppression.
+- 0013: repeated terminal-history rows.
+- 0015: muted-label contrast in client presentation.
+- 0016: section-aware integration settings hints.
+
+Slots 0007, 0014, 0017, and 0018 are absent because v0.9.0 already owns the
+equivalent native-path docs assertion, plugin-root resolution, Devin configuration,
+and Windows environment validation. Partial upstream adoption does not retire a
+remaining responsibility.
 
 When a feature evolves, refresh its existing mailbox in place. Add a new patch
 only when the change has a genuinely independent owner, verification plan, and
@@ -39,11 +52,12 @@ Run this procedure only for a current user-authorized official-upstream refresh.
    exact commit.
 2. Apply `series` in order with `git am --3way`.
 3. Resolve upstream drift in the patch that owns the behavior.
-4. Keep one reviewed commit per logical patch and regenerate its mailbox with
-   `git format-patch --full-index --binary`.
-5. Preserve the stable filename, update `BASE` only after review, replay the
-   complete queue on a fresh checkout of that tagged stable commit, verify the tag
-   matches Cargo version, and run the relevant verification.
+4. Keep one reviewed commit per logical patch, preserving its metadata and stable
+   filename. Do not flatten merged development history into a single mailbox.
+5. Use `delta_workflow.py refresh` as documented in `CONTRIBUTING.md`. It stages
+   full-index binary mailboxes privately and proves the accepted tree before
+   replacing the queue and `BASE`. Every ordered prefix must compile before control
+   publication; evidence for unchanged staged prefix trees remains valid.
 
 Validate the control-plane inventory with:
 

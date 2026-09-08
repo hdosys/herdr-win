@@ -18,6 +18,7 @@ from scripts.delta_workflow import (
     integrate_development_worktree,
     materialize_delta_worktree,
     publish_development_worktree,
+    refresh_delta,
     start_delta_worktree,
     validate_integration_asset_version_changes,
     verify_replay_tree,
@@ -119,6 +120,25 @@ class DeltaFixture:
 
 
 class DeltaWorkflowTests(unittest.TestCase):
+    def test_stable_refresh_requires_exact_tree_and_preserves_retained_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = DeltaFixture(Path(directory))
+            head = run_git(fixture.control, ["rev-parse", "HEAD^"])
+            base = run_git(fixture.control, ["rev-parse", "HEAD^^"])
+            delta = fixture.control / "patches" / "delta"
+            originals = {path.name: path.read_bytes() for path in delta.iterdir()}
+            base_tree = run_git(fixture.control, ["rev-parse", f"{base}^{{tree}}"])
+            with self.assertRaisesRegex(DeltaWorkflowError, "logical source tree differs"):
+                refresh_delta(base, head, base_tree, ["0001-first.patch"], fixture.control)
+            self.assertEqual({path.name: path.read_bytes() for path in delta.iterdir()}, originals)
+
+            result = refresh_delta(base, head, fixture.source_tree, ["0001-first.patch"], fixture.control)
+            self.assertEqual(result.base, base)
+            self.assertEqual(result.tree, fixture.source_tree)
+            self.assertEqual(result.mailboxes, ("0002-second.patch",))
+            self.assertFalse((delta / "0001-first.patch").exists())
+            self.assertIn(b"Subject: [PATCH 1/1] feat: second", (delta / "0002-second.patch").read_bytes())
+
     def test_linked_development_integration_requires_exact_clean_base(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

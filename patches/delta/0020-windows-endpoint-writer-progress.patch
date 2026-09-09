@@ -1,0 +1,77 @@
+From bf7424cd21f6c6f8856c013bb7e6eca9be738659 Mon Sep 17 00:00:00 2001
+From: Jonathan Liebig <jonathan.liebig@gmail.com>
+Date: Wed, 9 Sep 2026 12:27:15 +0200
+Subject: [PATCH 15/24] fix(endpoint): keep Windows polling-peer writes
+ progressing
+
+Backport herdrdev/herdr@c43bdfcfe1c5886d5ca05bc4127ce17d593eb8e8 and herdrdev/herdr@6bc877e17af64b2ebeb4fd5f3cfa620198645ebc. Keep the native polling-peer regression bounded.
+
+Refs herdrdev/herdr#3721, herdrdev/herdr#3651.
+---
+ src/client/endpoint/writer.rs | 39 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/src/client/endpoint/writer.rs b/src/client/endpoint/writer.rs
+index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..7a22f37648a239a7e4290b1ee84f9afc84ebecd2 100644
+--- a/src/client/endpoint/writer.rs
++++ b/src/client/endpoint/writer.rs
+@@ -162,12 +162,18 @@ fn write_frame(
+     mut frame: &[u8],
+     stopped: &AtomicBool,
+ ) -> io::Result<()> {
+-    let deadline = Instant::now() + WRITE_TIMEOUT;
++    let mut deadline = Instant::now() + WRITE_TIMEOUT;
+     while !frame.is_empty() && !stopped.load(Ordering::Acquire) {
+-        match writer.write(frame) {
++        // Match the named-pipe buffer hint so a polling Windows peer can make progress.
++        #[cfg(windows)]
++        let chunk = &frame[..frame.len().min(512)];
++        #[cfg(not(windows))]
++        let chunk = frame;
++        match writer.write(chunk) {
+             Ok(0) => {}
+             Ok(written) => {
+                 frame = &frame[written..];
++                deadline = Instant::now() + WRITE_TIMEOUT;
+                 continue;
+             }
+             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+@@ -276,7 +282,34 @@ mod tests {
+ 
+     #[test]
+     fn native_endpoint_flush_drains_large_frames_before_detach() {
+-        let (stream, mut peer, path) = streams();
++        struct PollingPeer {
++            stream: LocalStream,
++            deadline: Instant,
++        }
++        impl io::Read for PollingPeer {
++            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
++                loop {
++                    if Instant::now() >= self.deadline {
++                        return Err(io::Error::new(
++                            io::ErrorKind::TimedOut,
++                            "polling peer deadline elapsed",
++                        ));
++                    }
++                    match crate::ipc::poll_local_stream_read_count(&mut self.stream, buffer)? {
++                        crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
++                        crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
++                        crate::ipc::LocalStreamReadCount::Pending => {
++                            std::thread::sleep(IO_POLL_INTERVAL)
++                        }
++                    }
++                }
++            }
++        }
++        let (stream, peer, path) = streams();
++        let mut peer = PollingPeer {
++            stream: peer,
++            deadline: Instant::now() + Duration::from_secs(10),
++        };
+         let mut transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
+         let (done, received) = mpsc::channel();
+         let reader = std::thread::spawn(move || {
+-- 
+2.55.0.windows.3
+

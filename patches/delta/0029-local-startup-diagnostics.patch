@@ -1,0 +1,588 @@
+From 2c805dcfb32a0dba6ef2431fee28a245c5586d91 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Wed, 9 Sep 2026 13:50:01 +0200
+Subject: [PATCH 24/24] fix(client): preserve Local startup errors during saved
+ federation
+
+Validate running Local endpoints even with saved machines enabled. Retain startup/connect/handshake diagnostics in transient startup data and the existing notice owner, keep Local notices visible across projection changes, and never freeze healthy remote presentation for a Local attention event. Preserve normal restored selection and standalone failure.
+
+Refs herdrdev/herdr#3759.
+---
+ .../src/content/docs/connecting-machines.mdx  |  2 +
+ .../content/docs/ja/connecting-machines.mdx   |  2 +
+ .../docs/zh-cn/connecting-machines.mdx        |  2 +
+ src/client/endpoint/registry.rs               | 35 ++++++++
+ src/client/loop_config.rs                     |  1 +
+ src/client/mod.rs                             | 49 ++++++-----
+ src/client/shell/actions.rs                   | 19 +++++
+ src/client/shell/endpoint_notices.rs          |  6 +-
+ src/client/shell/state.rs                     |  6 +-
+ src/client/shell/tests/endpoints.rs           | 55 ++++++++++++
+ src/client/startup.rs                         | 56 ++++++++++++-
+ src/main.rs                                   |  2 +-
+ src/server/autodetect.rs                      | 84 +++++++++++++++----
+ 13 files changed, 276 insertions(+), 43 deletions(-)
+
+diff --git a/docs/next/website/src/content/docs/connecting-machines.mdx b/docs/next/website/src/content/docs/connecting-machines.mdx
+index 2d78eb8c2053d8217f90995864a38fff0477e484..273d1bcbedf5d8eabfc9e1420d9bd4ac52f4daf6 100644
+--- a/docs/next/website/src/content/docs/connecting-machines.mdx
++++ b/docs/next/website/src/content/docs/connecting-machines.mdx
+@@ -71,6 +71,8 @@ Renaming changes the displayed label without reconnecting. Disabling keeps the p
+ 
+ Removing or disabling the machine you are viewing returns you to Local. If Local is unavailable, Herdr shows that and retries its connection instead of selecting a different remote machine. With enabled saved machines, the client can remain usable even if Local fails or restarts.
+ 
++Local startup and compatibility failures show their reason and restart guidance without blocking a healthy saved machine. A previously saved machine selection is still restored normally; a Local failure does not select a different machine.
++
+ ## Connection problems
+ 
+ - **Reconnecting:** Herdr retries with bounded backoff after a network interruption, sleep, or SSH failure. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
+diff --git a/docs/next/website/src/content/docs/ja/connecting-machines.mdx b/docs/next/website/src/content/docs/ja/connecting-machines.mdx
+index a7539eb6e04f3853890f7fbe8d67f186e2e8d2e5..7a351de374f432b6f7cf13f445ed3f9b30efb66f 100644
+--- a/docs/next/website/src/content/docs/ja/connecting-machines.mdx
++++ b/docs/next/website/src/content/docs/ja/connecting-machines.mdx
+@@ -65,6 +65,8 @@ herdr machine remove <profile-id>
+ 
+ 表示中のマシンを削除または無効化すると Local に戻ります。Local が利用できない場合は、別のリモートを選ばず、その状態を表示して再接続します。有効な保存済みマシンがあれば、Local が失敗または再起動してもクライアントを使い続けられます。
+ 
++Local の起動や互換性のエラーは、正常な保存済みマシンを妨げず、原因と再起動の案内を表示します。保存済みの選択は通常どおり復元され、Local のエラーを理由に別のマシンを選ぶことはありません。
++
+ ## 接続の問題
+ 
+ - **Reconnecting:** ネットワーク中断、スリープ、SSH 障害の後は、上限のある待機間隔で再試行します。SSH 接続はアプリケーションの通信を監視し、通信がない間はヘルスチェックを行うため、切れた接続が Online のままになりません。Local はリモート用のプローブではなく、ネイティブ接続の終了や失敗を検知します。
+diff --git a/docs/next/website/src/content/docs/zh-cn/connecting-machines.mdx b/docs/next/website/src/content/docs/zh-cn/connecting-machines.mdx
+index 8abea9633768865e806d97475254643144dd1d45..e841b10de74f68394ceb4baa8d30c83422bf94dc 100644
+--- a/docs/next/website/src/content/docs/zh-cn/connecting-machines.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/connecting-machines.mdx
+@@ -65,6 +65,8 @@ herdr machine remove <profile-id>
+ 
+ 移除或禁用正在查看的机器会返回 Local。如果 Local 不可用，Herdr 会显示该状态并重试连接，而不是选择其他远程机器。有已启用的保存机器时，即使 Local 失败或重启，客户端仍可继续使用。
+ 
++Local 启动或兼容性失败时会显示原因和重启指引，不会阻塞正常的已保存机器。之前保存的机器选择仍会正常恢复；Local 失败不会自动选择另一台机器。
++
+ ## 连接问题
+ 
+ - **Reconnecting：** 网络中断、睡眠或 SSH 故障后，Herdr 会以有上限的退避间隔重试。SSH 连接会监测应用层活动并在空闲时探测，避免已断开的连接一直显示 Online。Local 使用本地连接关闭或失败来判断断线，而不是远程健康探测。
+diff --git a/src/client/endpoint/registry.rs b/src/client/endpoint/registry.rs
+index 437f39f37f6b90930e9e56a38dcc1e92c39b7fbf..2eb4302ac9618842667864ed85339d4d1d5c56ff 100644
+--- a/src/client/endpoint/registry.rs
++++ b/src/client/endpoint/registry.rs
+@@ -492,6 +492,41 @@ mod tests {
+         assert!(registry.take_failures().is_empty());
+     }
+ 
++    #[test]
++    fn unavailable_local_does_not_route_input_to_an_unselected_connected_remote() {
++        let mut registry = EndpointRegistry::empty();
++        let sent = Arc::new(Mutex::new(Vec::new()));
++        let remote = ClientEndpointId::Ssh(profile());
++        registry.insert(
++            remote.clone(),
++            FakeTransport {
++                sent: sent.clone(),
++                error: None,
++            },
++            2,
++            negotiation(),
++            true,
++        );
++        assert_eq!(registry.active_id(), &ClientEndpointId::Local);
++        assert!(!registry.active_surface_available());
++        assert_eq!(
++            registry.send(&ClientMessage::Input {
++                data: b"x".to_vec()
++            }),
++            EndpointSendOutcome::NotSent
++        );
++        assert!(sent.lock().unwrap().is_empty());
++        assert!(registry.set_active(&remote));
++        registry.unfreeze_input();
++        assert!(registry.active_surface_available());
++        assert_eq!(
++            registry.send(&ClientMessage::Input {
++                data: b"x".to_vec()
++            }),
++            EndpointSendOutcome::Sent
++        );
++    }
++
+     #[test]
+     fn negotiated_remote_health_probe_expires_the_connection() {
+         let mut registry = EndpointRegistry::new(
+diff --git a/src/client/loop_config.rs b/src/client/loop_config.rs
+index 53ef9f389241249eeb7e8e7d886b7b3ec3a5cf17..e9aa7aed63f4293f6c0ae68b2dd813cd32bde978 100644
+--- a/src/client/loop_config.rs
++++ b/src/client/loop_config.rs
+@@ -1,6 +1,7 @@
+ use super::*;
+ 
+ pub(super) struct ClientLoopConfig {
++    pub(super) local_startup_error: Option<String>,
+     pub(super) sound_config: crate::config::SoundConfig,
+     pub(super) mouse_scroll_lines: usize,
+     pub(super) redraw_on_focus_gained: bool,
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index d08ed5ea833126bb53a092c321bb23921cbbb922..a358d3e09728d42477cf596fb629134d2876eac1 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -52,6 +52,7 @@ use transport::*;
+ 
+ #[cfg(test)]
+ pub(crate) use shell::{ClientShellConfig, ClientShellState};
++pub(crate) use startup::retain_local_startup_result;
+ pub use startup::{run_client, run_terminal_attach};
+ pub use terminal_sessions::{run_terminal_session_control, run_terminal_session_observe};
+ 
+@@ -138,6 +139,7 @@ fn run_client_with_mode(
+     attach_request: Option<(String, bool)>,
+     attach_escape: Option<AttachEscapeState>,
+     log_message: &'static str,
++    mut local_startup_error: Option<String>,
+ ) -> io::Result<()> {
+     init_logging();
+ 
+@@ -170,7 +172,8 @@ fn run_client_with_mode(
+     let endpoint_keybindings = shell_config
+         .as_ref()
+         .is_some_and(shell::ClientShellConfig::uses_endpoint_keybindings);
+-    let loop_config = ClientLoopConfig {
++    let mut loop_config = ClientLoopConfig {
++        local_startup_error: None,
+         sound_config: loaded_config.config.ui.sound,
+         mouse_scroll_lines,
+         redraw_on_focus_gained,
+@@ -197,17 +200,21 @@ fn run_client_with_mode(
+     };
+     let federated = endpoint_catalog.has_enabled_ssh();
+ 
+-    let initial_stream = match crate::ipc::connect_local_stream(&socket_path) {
+-        Ok(stream) => Some(stream),
+-        Err(error) if federated => {
+-            warn!(%error, "Local is unavailable; keeping saved machines available");
+-            None
+-        }
+-        Err(error) => {
+-            return Err(io::Error::other(
+-                ClientError::ConnectionFailed(error).to_string(),
+-            ));
++    if !federated {
++        if let Some(error) = local_startup_error.take() {
++            return Err(io::Error::other(error));
+         }
++    }
++    let initial_stream = if local_startup_error.is_some() {
++        None
++    } else {
++        retain_local_startup_result(
++            crate::ipc::connect_local_stream(&socket_path).map_err(|error| {
++                io::Error::other(ClientError::ConnectionFailed(error).to_string())
++            }),
++            federated,
++            &mut local_startup_error,
++        )?
+     };
+ 
+     // Get the terminal geometry before handshake (before raw mode).
+@@ -258,14 +265,9 @@ fn run_client_with_mode(
+             Ok((stream, handshake))
+         })
+         .transpose();
+-    let initial = match initial {
+-        Ok(initial) => initial,
+-        Err(error) if federated => {
+-            warn!(%error, "Local handshake failed; keeping saved machines available");
+-            None
+-        }
+-        Err(error) => return Err(error),
+-    };
++    let initial =
++        retain_local_startup_result(initial, federated, &mut local_startup_error)?.flatten();
++    loop_config.local_startup_error = local_startup_error;
+ 
+     // The federated shell can show connection notices without any server snapshot.
+     let direct_attach = attach_escape.is_some();
+@@ -424,6 +426,9 @@ async fn run_client_loop(
+                 endpoint::ClientEndpointStatus::Connecting,
+             );
+         }
++        if let Some(error) = config.local_startup_error {
++            shell.receive_local_unavailable(error);
++        }
+     }
+     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
+     // Cell size reported by the host terminal, packed as width<<32 | height.
+@@ -1150,6 +1155,12 @@ async fn run_client_loop(
+                     }
+                     let unavailable = state.shell.as_mut().and_then(|shell| {
+                         shell.set_endpoint_status(&endpoint_id, status);
++                        if status == endpoint::ClientEndpointStatus::Attention
++                            && endpoint_id.is_local()
++                        {
++                            shell.receive_local_unavailable(message.clone());
++                            return None;
++                        }
+                         (status == endpoint::ClientEndpointStatus::Attention
+                             && shell.endpoint_is_active(&endpoint_id))
+                         .then(|| format!("{}: {message}", shell.endpoint_label(&endpoint_id)))
+diff --git a/src/client/shell/actions.rs b/src/client/shell/actions.rs
+index 119988f611568cf13ce3bbb5f067c7fd11b82495..ef9e5475987a649d5362d2c3ad1f60a17397ba6a 100644
+--- a/src/client/shell/actions.rs
++++ b/src/client/shell/actions.rs
+@@ -472,6 +472,25 @@ impl ClientShellState {
+         )
+     }
+ 
++    pub(crate) fn receive_local_unavailable(&mut self, message: String) -> bool {
++        self.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Attention);
++        if self.visible_endpoint_notice.as_ref().is_some_and(|notice| {
++            notice.key.kind == ClientEndpointNoticeKind::LocalUnavailable
++                && notice.deadline > std::time::Instant::now()
++        }) {
++            return false;
++        }
++        self.push_endpoint_notice(
++            ClientEndpointNoticeKind::LocalUnavailable,
++            message.clone(),
++            "Local unavailable",
++            format!(
++                "Local: {message}\n\n{}",
++                crate::session::active_restart_after_update_guidance()
++            ),
++        )
++    }
++
+     pub(crate) fn focus_endpoint_target(
+         &mut self,
+         target: ClientEndpointFocusTarget,
+diff --git a/src/client/shell/endpoint_notices.rs b/src/client/shell/endpoint_notices.rs
+index e796d2c557e505b85c7b734b3aafcb3b55f246d9..c23d294d493cfa07261136e66864d2b48b5de47a 100644
+--- a/src/client/shell/endpoint_notices.rs
++++ b/src/client/shell/endpoint_notices.rs
+@@ -71,9 +71,9 @@ pub(super) fn render_notice(
+             ClientEndpointNoticeKind::Unsupported | ClientEndpointNoticeKind::Rejected => {
+                 palette.red
+             }
+-            ClientEndpointNoticeKind::Timeout | ClientEndpointNoticeKind::Unavailable => {
+-                palette.yellow
+-            }
++            ClientEndpointNoticeKind::Timeout
++            | ClientEndpointNoticeKind::Unavailable
++            | ClientEndpointNoticeKind::LocalUnavailable => palette.yellow,
+         },
+         palette,
+     )
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index 6a8990beaf79c7cbb9c27596d9d55cc4e9b94319..47b5d9b3d8fcaf3e6fd4851265d654c379e6a11d 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -737,6 +737,7 @@ pub(super) enum ClientEndpointNoticeKind {
+     Rejected,
+     Timeout,
+     Unavailable,
++    LocalUnavailable,
+ }
+ 
+ #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+@@ -1295,7 +1296,10 @@ impl ClientShellState {
+         self.popup_pending_deadline = None;
+         self.pending_integration_installs = 0;
+         self.endpoint_notice_seen.clear();
+-        self.visible_endpoint_notice = None;
++        self.visible_endpoint_notice = self.visible_endpoint_notice.take().filter(|notice| {
++            notice.key.kind == ClientEndpointNoticeKind::LocalUnavailable
++                && notice.deadline > std::time::Instant::now()
++        });
+         self.endpoint_error = None;
+         self.navigate_workspace_id = None;
+         self.overlay = self
+diff --git a/src/client/shell/tests/endpoints.rs b/src/client/shell/tests/endpoints.rs
+index e425b794bbb84d6d37b0466643105ddb452352df..71f2458fe2b134ae8a22a3eacd9f18e3cc255d88 100644
+--- a/src/client/shell/tests/endpoints.rs
++++ b/src/client/shell/tests/endpoints.rs
+@@ -198,6 +198,61 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
+     }
+ }
+ 
++#[test]
++fn local_startup_notice_survives_remote_activation_without_blocking_remote_input() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    let profile = remote_profile();
++    let remote = ClientEndpointId::Ssh(profile.id.clone());
++    state.set_endpoint_catalog(&[profile]);
++    state.receive_local_unavailable("endpoint generation 99 is incompatible".into());
++    assert_eq!(
++        state.endpoint_status(&ClientEndpointId::Local),
++        Some(ClientEndpointStatus::Attention)
++    );
++    let deadline = state.visible_endpoint_notice.as_ref().unwrap().deadline;
++    assert!(state.endpoint_is_active(&ClientEndpointId::Local));
++    let typed = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
++        KeyCode::Char('x'),
++        KeyModifiers::NONE,
++    ))]);
++    assert!(typed.requests.is_empty() && typed.actions.is_empty());
++
++    state.set_endpoint_status(&remote, ClientEndpointStatus::Online);
++    let mut remote_snapshot = snapshot();
++    remote_snapshot.boot_id = "remote-boot".into();
++    state.set_endpoint_snapshot(&remote, Box::new(remote_snapshot));
++    assert!(state.activate_endpoint_projection(&remote));
++    let mut remote_surface = surface();
++    remote_surface.boot_id = "remote-boot".into();
++    state.set_pane_surface(remote_surface);
++    let frame = state.compose(160, 40).unwrap();
++    let text = frame
++        .cells
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect::<String>();
++    assert!(text.contains("Local unavailable"));
++    assert!(text.contains("generation 99"));
++    let notice = state.visible_endpoint_notice.as_ref().unwrap();
++    assert_eq!(notice.deadline, deadline);
++    assert!(notice.body.contains("Stopping exits pane processes"));
++    assert!(!state.receive_local_unavailable("later retry failure".into()));
++    assert!(state
++        .visible_endpoint_notice
++        .as_ref()
++        .unwrap()
++        .body
++        .contains("generation 99"));
++    let typed = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
++        KeyCode::Char('x'),
++        KeyModifiers::NONE,
++    ))]);
++    assert!(matches!(
++        typed.requests.as_slice(),
++        [ClientMessage::ClientShellPaneInput { .. }]
++    ));
++}
++
+ #[test]
+ fn sidebar_renders_local_and_saved_ssh_endpoints_with_status() {
+     let (mut state, _) = state_with_remote();
+diff --git a/src/client/startup.rs b/src/client/startup.rs
+index 40ee2cc8e82b58f8ab5ed94cc97232aa126d8060..be389167f24537d59bdb78cbd5eb1a24e2122a95 100644
+--- a/src/client/startup.rs
++++ b/src/client/startup.rs
+@@ -1,8 +1,59 @@
+ use super::*;
+ 
+ /// Runs the thin client and enters the main event loop.
+-pub fn run_client() -> io::Result<()> {
+-    run_client_with_mode(None, None, "connecting to server")
++pub fn run_client(local_startup_error: Option<String>) -> io::Result<()> {
++    run_client_with_mode(None, None, "connecting to server", local_startup_error)
++}
++
++pub(crate) fn retain_local_startup_result<T>(
++    result: io::Result<T>,
++    federated: bool,
++    diagnostic: &mut Option<String>,
++) -> io::Result<Option<T>> {
++    match result {
++        Ok(value) => Ok(Some(value)),
++        Err(error) if federated => {
++            warn!(%error, "Local startup failed; keeping saved machines available");
++            diagnostic.get_or_insert_with(|| error.to_string());
++            Ok(None)
++        }
++        Err(error) => Err(error),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn initial_local_handshake_failure_keeps_its_reason_and_first_diagnostic() {
++        let mut diagnostic = None;
++        let rejection = ClientError::HandshakeRejected {
++            version: 99,
++            error: "required input codec unavailable".into(),
++        }
++        .to_string();
++        let connection = retain_local_startup_result::<()>(
++            Err(io::Error::other(rejection.clone())),
++            true,
++            &mut diagnostic,
++        )
++        .unwrap();
++        assert!(connection.is_none());
++        assert_eq!(diagnostic.as_deref(), Some(rejection.as_str()));
++        assert!(retain_local_startup_result::<()>(
++            Err(io::Error::other("later connection failure")),
++            true,
++            &mut diagnostic
++        )
++        .unwrap()
++        .is_none());
++        assert_eq!(diagnostic.as_deref(), Some(rejection.as_str()));
++        assert_eq!(
++            retain_local_startup_result(Ok(42), true, &mut None).unwrap(),
++            Some(42)
++        );
++    }
+ }
+ 
+ #[cfg(unix)]
+@@ -11,6 +62,7 @@ pub fn run_terminal_attach(terminal_id: String, takeover: bool) -> io::Result<()
+         Some((terminal_id, takeover)),
+         Some(AttachEscapeState::default()),
+         "attaching to terminal",
++        None,
+     )
+ }
+ 
+diff --git a/src/main.rs b/src/main.rs
+index bd1842ee807dab1a0909211f94b48a631e5663cd..cd870f070e64f7c3b3a0a8593ddfc4a6b666c605 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -598,7 +598,7 @@ fn main() -> io::Result<()> {
+     if args.get(1).map(|s| s.as_str()) == Some("client") {
+         let loaded_config = config::Config::load();
+         exit_if_nested_disabled(&loaded_config.config);
+-        return client::run_client();
++        return client::run_client(None);
+     }
+ 
+     if args.get(1).map(|s| s.as_str()) == Some("update") {
+diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
+index d188f550e1ebf00cd3966d3b3c9fa1daf3b38ca9..e49430e3cf12d17a44d90c27c884e4fa149142fb 100644
+--- a/src/server/autodetect.rs
++++ b/src/server/autodetect.rs
+@@ -191,8 +191,11 @@ fn client_protocol_welcome_is_ready(
+     }
+ }
+ 
+-fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<()> {
+-    let Some(status) = read_server_status()? else {
++fn validate_running_server_compatibility(
++    status: Option<crate::api::RuntimeStatus>,
++    saved_federation: bool,
++) -> io::Result<()> {
++    let Some(status) = status else {
+         return Err(io::Error::other(format!(
+             "a herdr server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
+             crate::session::active_restart_after_update_guidance()
+@@ -266,7 +269,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
+ pub fn start_server_daemon_with_exe(exe: PathBuf) -> io::Result<()> {
+     let socket_path = client_socket_path();
+     if is_server_listening_at(&socket_path) {
+-        validate_running_server_compatibility(false)?;
++        validate_running_server_compatibility(read_server_status()?, false)?;
+         return Ok(());
+     }
+     let mut command = build_server_daemon_command(exe);
+@@ -367,31 +370,76 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
+ 
+     let startup = if is_server_listening_at(&socket_path) {
+         info!("server already running, attaching as client");
+-        if saved_federation {
+-            Ok(())
+-        } else {
+-            validate_running_server_compatibility(false)
+-        }
++        read_server_status()
++            .and_then(|status| validate_running_server_compatibility(status, saved_federation))
+     } else {
+         info!("no server running, spawning server daemon");
+         spawn_server_daemon()
+             .and_then(|_| wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT))
+     };
+-    if let Err(error) = startup {
+-        if !saved_federation {
+-            return Err(error);
+-        }
+-        tracing::warn!(%error, "Local startup failed; keeping saved machines available");
+-    }
++    let mut local_startup_error = None;
++    crate::client::retain_local_startup_result(
++        startup,
++        saved_federation,
++        &mut local_startup_error,
++    )?;
+ 
+     // Now attach as a thin client.
+-    crate::client::run_client()
++    crate::client::run_client(local_startup_error)
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Tests
+ // ---------------------------------------------------------------------------
+ 
++#[cfg(test)]
++mod startup_diagnostic_tests {
++    use super::*;
++
++    #[test]
++    fn local_compatibility_failure_is_retained_for_federation_but_not_ignored() {
++        let mut status = crate::api::RuntimeStatus {
++            version: Some("another-build".into()),
++            protocol: Some(1),
++            binary: None,
++            capabilities: Some(crate::api::schema::ServerCapabilities {
++                live_handoff: false,
++                detached_server_daemon: true,
++                endpoint_protocol_generation: Some(
++                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
++                ),
++                surface_interest: true,
++                health_check: true,
++            }),
++        };
++        assert!(validate_running_server_compatibility(Some(status.clone()), true).is_ok());
++        status
++            .capabilities
++            .as_mut()
++            .unwrap()
++            .endpoint_protocol_generation = Some(99);
++        let error = validate_running_server_compatibility(Some(status), true).unwrap_err();
++        let expected = error.to_string();
++        assert!(expected.contains("endpoint generation 99"));
++        assert!(expected.contains("Stopping exits pane processes"));
++        let mut diagnostic = None;
++        assert!(crate::client::retain_local_startup_result::<()>(
++            Err(error),
++            true,
++            &mut diagnostic
++        )
++        .unwrap()
++        .is_none());
++        assert_eq!(diagnostic.as_deref(), Some(expected.as_str()));
++        assert!(crate::client::retain_local_startup_result::<()>(
++            Err(io::Error::other(expected)),
++            false,
++            &mut None
++        )
++        .is_err());
++    }
++}
++
+ #[cfg(all(test, windows))]
+ mod windows_tests {
+     #[test]
+@@ -682,7 +730,8 @@ test "$sid" = "$$"
+         let path = dir.join("api.sock");
+         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
+ 
+-        let err = validate_running_server_compatibility(false).unwrap_err();
++        let err = validate_running_server_compatibility(read_server_status().unwrap(), false)
++            .unwrap_err();
+ 
+         assert!(
+             err.to_string().contains("status API is unavailable"),
+@@ -718,7 +767,8 @@ test "$sid" = "$$"
+             stream.flush().unwrap();
+         });
+ 
+-        let err = validate_running_server_compatibility(false).unwrap_err();
++        let err = validate_running_server_compatibility(read_server_status().unwrap(), false)
++            .unwrap_err();
+         let message = err.to_string();
+ 
+         let _ = handle.join();
+-- 
+2.55.0.windows.3
+

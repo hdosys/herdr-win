@@ -38,9 +38,10 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 flowchart TB
     S["Reviewed stable source<br/>Upstream Herdr v0.9.0 / BASE b99002ac99b0"]
     Q["Control branch: patches/delta/series<br/>0001 Terminal experience / 0003 Windows SSH / 0004 Managed distribution<br/>0005 OpenCode / 0006 Downloads / 0008 Worktree lifecycle<br/>0009 Agent start / 0010 Hook recovery / 0011 Metadata<br/>0012 Completion / 0013 History / 0015 Contrast / 0016 Integration hints"]
-    D["Current development source<br/>Stable source + accepted changes<br/>Finalized queue reproduces the accepted tree"]
+    B["Temporary corrections after the foundation<br/>0019-0027 Reviewed upstream backports<br/>0028-0029 Local session and startup fixes"]
+    D["Current local development candidate, unpublished<br/>Finalized queue reproduces the accepted source tree"]
     V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
-    S --> Q --> D --> V
+    S --> Q --> B --> D --> V
 ```
 
 [`patches/delta/BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) records the exact reviewed upstream stable commit. [`series`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/series) is the only patch order. A manual build replays that source and retains one complete candidate; promotion publishes those exact bytes without rebuilding or repackaging them.
@@ -69,6 +70,15 @@ The table is intentionally capability-level. ✅ marks capabilities now provided
 | Integration settings | **Maintained here** · [#2880](https://github.com/herdrdev/herdr/issues/2880) · [`0016`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0016-settings-integration-hints.patch) | Shows only controls that the selected integration supports. |
 | Devin configuration | ✅ **Upstreamed in Herdr v0.9.0** · [#2724](https://github.com/herdrdev/herdr/issues/2724) | Upstream finds Devin's native configuration in roaming AppData while respecting an explicit XDG override. |
 | Windows process environment | ✅ **Upstreamed in Herdr v0.9.0** · [#3430](https://github.com/herdrdev/herdr/issues/3430) | Upstream rejects malformed Windows environment entries and validates registry values before process creation. |
+| Remote transport and input corrections | **Reviewed backports, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Preserves Windows download and endpoint-write progress, matching control-key text, and nested mouse input. |
+| Multi-machine workspace views | **Reviewed backports, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Scopes collapsed groups to each machine, focuses new worktrees in the requesting client, supports guarded cross-machine navigation, and preserves public focus and focused geometry. |
+| Session safety and startup diagnostics | **Local corrections, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Requires exact recorded names for session deletion and keeps Local startup errors visible without freezing healthy remote views. |
+
+These corrections are included in the current local development candidate, not a
+published herdr-win release. They keep the reviewed v0.9.0 base unchanged. An upstream
+PR reference is provenance, not a claim that the fix has shipped in upstream stable;
+temporary mailboxes remain until equivalent stable behavior includes the necessary
+adaptations.
 
 ## Install
 

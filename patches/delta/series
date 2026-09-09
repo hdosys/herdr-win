@@ -11,3 +11,14 @@
 0013-terminal-history-scroll-aliasing.patch
 0015-muted-label-contrast.patch
 0016-settings-integration-hints.patch
+0019-windows-bridge-blocking-download.patch
+0020-windows-endpoint-writer-progress.patch
+0021-associated-control-key-text.patch
+0022-nested-windows-mouse-input.patch
+0023-endpoint-scoped-worktree-collapse.patch
+0024-client-local-worktree-autofocus.patch
+0025-multi-machine-workspace-navigation.patch
+0026-public-agent-focus-projection.patch
+0027-background-activation-geometry.patch
+0028-exact-recorded-session-deletion.patch
+0029-local-startup-diagnostics.patch

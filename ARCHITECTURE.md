@@ -36,6 +36,11 @@ behavior; code and tests remain the detailed implementation truth.
   mailboxes.
 - `patches/upstream/` is a frozen historical archive. `patches/delta/` is the only
   active product delta; `series` is the only application order.
+- Temporary post-stable backports remain separate logical mailboxes after the
+  reviewed foundation. Their mailbox metadata owns immutable upstream provenance
+  and author credit; `patches/delta/README.md` owns the concise inventory. The
+  reviewed v0.9.0 base does not move when these corrections are appended. Stable
+  adoption must cover necessary fork adaptations before a mailbox is retired.
 - Day-to-day maintained source has one integration state:
   `candidate/development`, with the same local and `origin` branch name. Its history
   starts from the current complete replay and accumulates every completed
@@ -382,6 +387,25 @@ behavior; code and tests remain the detailed implementation truth.
   runtime leases.
 
 ## Windows and Rust Boundaries
+
+- The Windows SSH bridge preserves blocking download writes. Endpoint writers
+  bound work per write and measure stalled progress rather than lengthening the
+  stall timeout. These reuse the current bridge and writer owners, not another
+  transport or retry path.
+- Associated control-key text must match its key report. Nested Windows mouse
+  reports preserve transactional input ordering, client-local host observations,
+  and flushing before semantic events.
+- Client-local worktree focus and collapse state are endpoint-scoped. Cross-machine
+  navigation carries endpoint boot and connection identity; actions require the
+  selected endpoint to be active and current. Successful public Agent focus is
+  projected to all attached clients through the existing public-focus contract;
+  client-origin focus remains local. Background activation cannot replace focused
+  geometry or bypass deferred startup initialization.
+- Session deletion resolves the exact immediate directory entry using its recorded
+  native name, then applies the existing live-peer refusal to that exact target.
+  Local startup failures remain transient diagnostics shown by the existing notice
+  owner, including during saved federation. They do not freeze healthy remote
+  presentation or introduce fallback, retries, or exact-version attach requirements.
 
 - Windows PTY integration owns process-tree cleanup, handle inheritance, resize,
   and byte-stream behavior explicitly; Windows-only code compiles only on Windows.

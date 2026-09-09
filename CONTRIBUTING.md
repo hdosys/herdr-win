@@ -190,6 +190,19 @@ mailbox from its reviewed logical commit. A replay conflict or tree mismatch is 
 real promotion blocker. Repeated builds, broad gates, and raw review of generated
 mailbox churn are not substitutes for source review plus exact tree identity.
 
+An explicitly authorized post-stable backport finalization does not advance `BASE`.
+Append one mailbox per coherent correction, combining fixture repairs with their
+owning fix rather than preserving incidental development commits. Preserve source
+author credit, qualified upstream references, and immutable reviewed source hashes.
+Keep existing mailboxes byte-identical except for their required total-count subject
+renumbering. Stage the complete candidate queue privately and prove the accepted
+source tree before replacing inputs. Every new prefix must compile before control
+publication; when the existing prefix command checks the whole queue, run it once
+with a disjoint task-owned `--work-dir`. Do not add a verification bypass to skip
+the reviewed foundation. Keep backport inventory in `patches/delta/README.md`, mark
+local candidates as unpublished, and retire a correction only after an authorized
+stable refresh proves equivalent behavior including necessary fork adaptations.
+
 ### Fast cumulative Windows development installer
 
 The control checkout owns one thin local entrypoint that reuses the materialized
@@ -427,10 +440,13 @@ that separate operation. For every approved refresh:
    Every Windows x86_64 prefix must compile with all logical processors and
    incremental disabled. Use `--work-dir <absolute-task-owned-empty-directory>`
    throughout one refresh correction cycle to retain both the source checkout's
-   native Zig caches/output and its sibling Cargo `target`. The first invocation
-   accepts only a new or empty directory outside the control checkout. Subsequent
-   invocations require the same local repository and `BASE`, reject dirty source
-   or unfinished replay, and return to `BASE` without forced checkout or cleanup.
+   native Zig caches/output and its sibling Cargo `target`. Choose a short Windows
+   path: Zig's relative generator-executable launch can hit
+   `MAX_PATH` before normalization even when the resolved executable path is shorter.
+   The first invocation accepts only a new or empty directory outside the control
+   checkout. Subsequent invocations require the same local repository and `BASE`,
+   reject dirty source or unfinished replay, and return to `BASE` without forced
+   checkout or cleanup.
    Do not edit or share this disposable workspace. A compile failure retains it;
    a replay conflict requires inspection rather than automatic recovery. Use a new
    workspace when changing `BASE`. Every invocation replays and checks every prefix,

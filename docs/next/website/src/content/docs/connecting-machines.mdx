@@ -45,6 +45,10 @@ Choose a machine or one of its workspaces in the sidebar. The selected machine r
 
 Click the arrow beside any machine to collapse or expand its workspace list without switching away from your current workspace. This also works while that machine is reconnecting.
 
+For keyboard navigation, press `prefix+w`, then use the workspace navigation keys (Up/Down by default) to highlight workspaces across connected machines in sidebar order. Enter activates the highlighted workspace; Esc or the prefix key cancels without switching. Compact and expanded sidebars reveal the highlighted row, including under a collapsed machine. On desktop, navigation wraps at the ends; the mobile switcher stops at the first or last workspace. Disconnected machines are skipped.
+
+When highlighting a workspace on another machine, press Enter before using other keyboard actions. This prevents pane, tab, workspace, or custom-command shortcuts from acting on the current machine by mistake. Clicking cancels a remote desktop keyboard preview. Expanded sidebars respect each machine's collapsed worktree groups.
+
 Local opens immediately on startup without waiting for SSH connections. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
 
 When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.

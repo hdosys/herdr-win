@@ -931,7 +931,8 @@ pub(crate) struct ClientShellState {
     pub(super) active_endpoint_id: ClientEndpointId,
     pub(super) collapsed_endpoints: HashSet<ClientEndpointId>,
     pub(super) mode: ClientShellMode,
-    pub(super) navigate_workspace_id: Option<String>,
+    pub(super) navigate_workspace_id: Option<WorkspaceNavigationTarget>,
+    pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
@@ -1086,6 +1087,7 @@ impl ClientShellState {
             collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,
             navigate_workspace_id: None,
+            reveal_navigation_workspace: false,
             overlay,
             previous_pane_id: None,
             pane_mouse_gesture: None,
@@ -1392,7 +1394,12 @@ impl ClientShellState {
             self.hits = ShellHitMap::default();
         }
         if boot_changed {
+            // A reboot must not turn Enter on a stale preview into focus on a reused ID.
+            let preview = (self.mode == ClientShellMode::Navigate)
+                .then(|| self.navigate_workspace_id.take())
+                .flatten();
             self.reset_endpoint_projection();
+            self.navigate_workspace_id = preview;
         } else if let Some(previous) = self
             .snapshot
             .as_deref()
@@ -1508,15 +1515,11 @@ impl ClientShellState {
                 }
             }
         }
-        if self.mode == ClientShellMode::Navigate
-            && self.navigate_workspace_id.as_ref().is_none_or(|selected| {
-                !snapshot
-                    .workspaces
-                    .iter()
-                    .any(|workspace| &workspace.workspace_id == selected)
-            })
-        {
-            self.navigate_workspace_id = snapshot.focused_workspace_id.clone();
+        if self.mode == ClientShellMode::Navigate && self.navigate_workspace_id.is_none() {
+            self.navigate_workspace_id = snapshot
+                .focused_workspace_id
+                .as_deref()
+                .and_then(|id| self.navigation_target(&self.active_endpoint_id, id));
             self.reveal_mobile_workspace = self.mobile_layout_active();
         }
         let pane_exists =

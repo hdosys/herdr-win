@@ -22,6 +22,42 @@ pub(super) fn render_collapsed(
     let palette = &config.palette;
     super::render::render_sidebar_background(buffer, area, palette);
     let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
+    let mut total_rows = 0usize;
+    let mut selected_row = None;
+    let reveal = std::mem::take(state.reveal_navigation_workspace);
+    for endpoint in state.endpoints {
+        total_rows += 1;
+        if state.collapsed_endpoints.contains(&endpoint.endpoint_id) {
+            continue;
+        }
+        if let Some(snapshot) = endpoint.snapshot.as_deref() {
+            if reveal {
+                if let Some(target) = state
+                    .selected_workspace_id
+                    .filter(|target| target.endpoint_id == endpoint.endpoint_id)
+                {
+                    selected_row = snapshot
+                        .workspaces
+                        .iter()
+                        .position(|workspace| workspace.workspace_id == target.workspace_id)
+                        .map(|index| total_rows + index);
+                }
+            }
+            total_rows += snapshot.workspaces.len();
+        }
+    }
+    let height = usize::from(workspace_area.height);
+    let max_scroll = total_rows.saturating_sub(height);
+    *state.workspace_scroll = (*state.workspace_scroll).min(max_scroll);
+    if let Some(row) = selected_row {
+        if row < *state.workspace_scroll {
+            *state.workspace_scroll = row;
+        } else if row >= state.workspace_scroll.saturating_add(height) {
+            *state.workspace_scroll = row.saturating_add(1).saturating_sub(height).min(max_scroll);
+        }
+    }
+    hits.workspace_max_scroll = max_scroll;
+    let mut skip = *state.workspace_scroll;
     let mut y = workspace_area.y;
     for (index, endpoint) in state.endpoints.iter().enumerate() {
         if y >= workspace_area.bottom() {
@@ -30,37 +66,41 @@ pub(super) fn render_collapsed(
         let rect = Rect::new(workspace_area.x, y, workspace_area.width, 1);
         let active = &endpoint.endpoint_id == state.active_endpoint_id;
         let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
-        if active && collapsed {
-            buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
-        }
-        let label = if endpoint.endpoint_id.is_local() {
-            "L".to_owned()
+        if skip > 0 {
+            skip -= 1;
         } else {
-            (index + 1).to_string()
-        };
-        let marker = if collapsed { "▸" } else { "▾" };
-        put_text(
-            buffer,
-            rect.x,
-            rect.y,
-            rect.width.saturating_sub(1),
-            &format!("{marker}{label}"),
-            Style::default().fg(if endpoint.status == ClientEndpointStatus::Online {
-                palette.text
+            if active && collapsed {
+                buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+            }
+            let label = if endpoint.endpoint_id.is_local() {
+                "L".to_owned()
             } else {
-                palette.overlay0
-            }),
-        );
-        if !endpoint.endpoint_id.is_local() {
-            let (glyph, _, color) = endpoint_status_presentation(endpoint.status, palette);
-            put_right_text(buffer, rect, rect.y, glyph, Style::default().fg(color));
+                (index + 1).to_string()
+            };
+            let marker = if collapsed { "▸" } else { "▾" };
+            put_text(
+                buffer,
+                rect.x,
+                rect.y,
+                rect.width.saturating_sub(1),
+                &format!("{marker}{label}"),
+                Style::default().fg(if endpoint.status == ClientEndpointStatus::Online {
+                    palette.text
+                } else {
+                    palette.overlay0
+                }),
+            );
+            if !endpoint.endpoint_id.is_local() {
+                let (glyph, _, color) = endpoint_status_presentation(endpoint.status, palette);
+                put_right_text(buffer, rect, rect.y, glyph, Style::default().fg(color));
+            }
+            hits.machines.push(MachineHit {
+                rect,
+                collapse_toggle: Rect::new(rect.x, rect.y, u16::from(rect.width > 1), 1),
+                endpoint_id: endpoint.endpoint_id.clone(),
+            });
+            y = y.saturating_add(1);
         }
-        hits.machines.push(MachineHit {
-            rect,
-            collapse_toggle: Rect::new(rect.x, rect.y, u16::from(rect.width > 1), 1),
-            endpoint_id: endpoint.endpoint_id.clone(),
-        });
-        y = y.saturating_add(1);
         if collapsed {
             continue;
         }
@@ -68,12 +108,26 @@ pub(super) fn render_collapsed(
             continue;
         };
         for workspace in &snapshot.workspaces {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
             if y >= workspace_area.bottom() {
                 break;
             }
             let rect = Rect::new(workspace_area.x, y, workspace_area.width, 1);
             let focused = active && workspace.focused;
-            if focused {
+            let selected = state.selected_workspace_id.is_some_and(|target| {
+                target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
+            });
+            let selection_background = if palette.selection_bg == ratatui::style::Color::Reset {
+                palette.active_row_bg
+            } else {
+                palette.selection_bg
+            };
+            if selected {
+                buffer.set_style(rect, Style::default().bg(selection_background));
+            } else if focused {
                 buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
             }
             let stale = endpoint.status != ClientEndpointStatus::Online;
@@ -261,6 +315,32 @@ pub(super) fn render_expanded(
         })
         .collect::<Vec<_>>();
     let gaps = vec![0; rows.len()];
+    if std::mem::take(state.reveal_navigation_workspace) {
+        let selected_row = rows.iter().position(|row| match row {
+            Row::Workspace { endpoint, entry } => {
+                let endpoint = &state.endpoints[*endpoint];
+                endpoint
+                    .snapshot
+                    .as_deref()
+                    .and_then(|snapshot| snapshot.workspaces.get(entry.index))
+                    .is_some_and(|workspace| {
+                        state.selected_workspace_id.is_some_and(|target| {
+                            target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
+                        })
+                    })
+            }
+            Row::Endpoint(_) => false,
+        });
+        if let Some(selected_row) = selected_row {
+            *state.workspace_scroll = super::scroll::list_scroll_start_to_reveal(
+                &row_heights,
+                &gaps,
+                body.height,
+                *state.workspace_scroll,
+                selected_row,
+            );
+        }
+    }
     let metrics = super::scroll::list_scroll_metrics(
         &row_heights,
         &gaps,
@@ -338,6 +418,9 @@ pub(super) fn render_expanded(
                     rect.height,
                 );
                 let endpoint_active = &endpoint.endpoint_id == state.active_endpoint_id;
+                let selected = state.selected_workspace_id.is_some_and(|target| {
+                    target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
+                });
                 super::sidebar::render_workspace_rows(
                     buffer,
                     nested,
@@ -347,10 +430,13 @@ pub(super) fn render_expanded(
                     entry,
                     tokens,
                     endpoint_active,
-                    false,
+                    selected,
                     false,
                     palette,
                 );
+                if selected && palette.selection_bg == ratatui::style::Color::Reset {
+                    buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
+                }
                 if endpoint.status != ClientEndpointStatus::Online {
                     buffer.set_style(
                         rect,

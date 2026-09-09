@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "workspace_navigation.rs"]
+mod workspace_navigation;
 use crate::client::endpoint::{
     ClientEndpointId, ClientEndpointStatus, ProfileId, SavedSshEndpoint,
 };

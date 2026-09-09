@@ -13,12 +13,27 @@ impl ClientShellState {
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleSidebar) => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 self.sidebar_collapsed_manual = true;
+                self.reveal_navigation_workspace = true;
                 self.invalidate_pane_surface();
                 outcome.repaint = true;
                 outcome.resize = true;
                 self.persist_chrome_preferences(outcome);
             }
             crate::input::KeybindMatch::Action(action) => {
+                if self.workspace_preview_action_blocked()
+                    && matches!(
+                        action,
+                        crate::input::KeybindAction::RenameWorkspace
+                            | crate::input::KeybindAction::CloseWorkspace
+                    )
+                {
+                    self.receive_endpoint_unavailable(
+                        "Select an available workspace and press Enter before renaming or closing it"
+                            .into(),
+                    );
+                    outcome.repaint = true;
+                    return;
+                }
                 if matches!(
                     action,
                     crate::input::KeybindAction::NewWorktree
@@ -129,10 +144,8 @@ impl ClientShellState {
                     self.mobile_switcher_scroll = 0;
                     self.reveal_mobile_workspace = false;
                     self.mode = ClientShellMode::Navigate;
-                    self.navigate_workspace_id = self
-                        .snapshot
-                        .as_deref()
-                        .and_then(|snapshot| snapshot.focused_workspace_id.clone());
+                    self.navigate_workspace_id = self.focused_navigation_target();
+                    self.reveal_navigation_workspace = true;
                     outcome.repaint = true;
                     return;
                 }
@@ -337,7 +350,7 @@ impl ClientShellState {
         self.push_endpoint_method_with_kind(method, PendingEndpointKind::Generic, outcome);
     }
 
-    fn push_endpoint_notice(
+    pub(super) fn push_endpoint_notice(
         &mut self,
         kind: ClientEndpointNoticeKind,
         code: impl Into<String>,

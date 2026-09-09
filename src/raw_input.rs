@@ -103,6 +103,11 @@ impl RawInputFramer {
         self.byte_framer.has_pending_bracketed_paste()
     }
 
+    #[cfg(any(windows, test))]
+    pub(crate) fn has_pending_default_mouse_sequence(&self) -> bool {
+        starts_with_incomplete_default_mouse_sequence(&self.byte_framer.buffer)
+    }
+
     pub(crate) fn flush_timeout(&mut self) -> Vec<RawInputEvent> {
         Self::events_from_chunks(self.byte_framer.flush_timeout())
     }
@@ -853,7 +858,7 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn starts_with_incomplete_default_mouse_sequence(buffer: &[u8]) -> bool {
     buffer.starts_with(b"\x1b[M") && buffer.len() < 6
 }

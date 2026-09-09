@@ -359,3 +359,13 @@ configuration repository.
   later measurements independently exposed disk exhaustion. This replaces serial
   cache surgery, not failure diagnosis. Owner: `CONTRIBUTING.md`; no automatic retry
   or fallback.
+
+- **Status: proposed. Bound upstream remote-regression evidence retrieval.** Use
+  the local issue/owner report to select exact bridge, IPC, writer, or input hunks;
+  retrieve terminal issue/PR state and relevant acceptance comments before full
+  traces. Preserve meaningful bot closure and verification evidence rather than
+  filtering solely by author type. Evidence: unfiltered issue JSON and broad fork
+  diffs produced truncated output dominated by keyboard traces, while the Windows
+  SSH diagnosis depended on a small transport path. Expected benefit: less serial
+  source triage and fewer unnecessary context reads. Owner: remote triage examples
+  in `CONTRIBUTING.md`; no new network-report index or automatic GitHub posting.

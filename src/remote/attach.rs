@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 
 use interprocess::TryClone as _;
 use interprocess::local_socket::ListenerNonblockingMode;
-use interprocess::local_socket::traits::{Listener as _, Stream as _};
+use interprocess::local_socket::traits::Listener as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::sync::{
@@ -3889,6 +3889,7 @@ fn sanitize_path_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use interprocess::local_socket::traits::Stream as _;
 
     #[cfg(windows)]
     #[test]
@@ -3896,7 +3897,10 @@ mod tests {
         use std::sync::mpsc;
 
         let socket = local_forward_socket_path("polling-copy-test", "default");
+        crate::ipc::prepare_socket_path(&socket, |_| "test bridge is already active".into())
+            .unwrap();
         let listener = crate::ipc::bind_private_local_listener(&socket).unwrap();
+        let socket_identity = crate::ipc::socket_file_identity(&socket).unwrap();
         let mut client = crate::ipc::connect_local_stream(&socket).unwrap();
         let mut server = prepare_remote_bridge_stream(listener.accept().unwrap()).unwrap();
         crate::ipc::set_local_stream_polling(&mut server, true).unwrap();
@@ -3953,6 +3957,8 @@ mod tests {
                 .is_err()
         );
         writer.join().unwrap();
+        drop(listener);
+        crate::ipc::remove_socket_file_if_owned(&socket, &socket_identity).unwrap();
     }
 
     #[cfg(unix)]

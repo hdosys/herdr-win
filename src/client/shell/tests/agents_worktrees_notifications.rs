@@ -978,7 +978,7 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
             if params.workspace_id.as_deref() == Some("ws_1")
                 && params.branch.as_deref() == Some("feature/client-shell")
                 && params.path.is_none()
-                && params.focus
+                && !params.focus
     ));
 }
 

@@ -874,10 +874,9 @@ impl ClientShellState {
                 return self.handle_settings_endpoint_result(kind, result);
             }
             kind => {
-                return (
-                    self.handle_worktree_endpoint_result(kind, result),
-                    Vec::new(),
-                );
+                let mut outcome = ClientShellInput::default();
+                let repaint = self.handle_worktree_endpoint_result(kind, result, &mut outcome);
+                return (repaint || outcome.repaint, outcome.actions);
             }
         }
         let repaint = match result {

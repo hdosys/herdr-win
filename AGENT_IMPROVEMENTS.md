@@ -360,15 +360,15 @@ configuration repository.
   cache surgery, not failure diagnosis. Owner: `CONTRIBUTING.md`; no automatic retry
   or fallback.
 
-- **Status: proposed. Bound upstream remote-regression evidence retrieval.** Use
-  the local issue/owner report to select exact bridge, IPC, writer, or input hunks;
-  retrieve terminal issue/PR state and relevant acceptance comments before full
-  traces. Preserve meaningful bot closure and verification evidence rather than
-  filtering solely by author type. Evidence: unfiltered issue JSON and broad fork
-  diffs produced truncated output dominated by keyboard traces, while the Windows
-  SSH diagnosis depended on a small transport path. Expected benefit: less serial
-  source triage and fewer unnecessary context reads. Owner: remote triage examples
-  in `CONTRIBUTING.md`; no new network-report index or automatic GitHub posting.
+- **Status: done. Bound upstream remote-regression evidence retrieval.**
+  `CONTRIBUTING.md` now gives short examples for issue/PR state, comment selection
+  and exact owner-file diffs, reusing the existing local report. It preserves useful
+  bot evidence, requires exact source when patches are truncated, and distinguishes
+  symptoms, demonstrated causes, fork exposure and missing runtime evidence.
+  Evidence: unfiltered issue JSON and broad fork diffs had produced truncated output
+  dominated by keyboard traces, while the Windows SSH diagnosis depended on a small
+  transport path. This reduces duplicate retrieval without another script, index,
+  gate, or automatic upstream action. Owner: `CONTRIBUTING.md`.
 
 - **Status: done. Accept validated source-writer branches for test-only runs.**
   `local_windows_installer.py test-one` accepts a named source branch after the same

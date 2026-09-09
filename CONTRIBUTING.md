@@ -694,6 +694,44 @@ as private, review the selected fields before sharing, and never commit generate
 reports. This command performs no replay, history scan, network call, or ledger
 write and creates no second maintained issue index.
 
+### Focused upstream follow-up
+
+Only perform the exact upstream reads authorized by the current user. Reuse an
+existing local report while its inputs are unchanged. Start with the reported
+symptom, reproduction, affected process and current issue/PR state; then follow
+the relevant source owners rather than scanning complete history or every hunk.
+
+```powershell
+gh issue view <issue> --repo herdrdev/herdr --json number,title,state,url
+gh pr view <pr> --repo herdrdev/herdr --json state,headRefOid,mergedAt,url
+```
+
+Read the relevant reproduction once. For long threads, list comment identities
+before selecting the acceptance, correction or remaining-failure evidence:
+
+```powershell
+gh api 'repos/herdrdev/herdr/issues/<issue-or-pr>/comments?per_page=100' --paginate `
+  --jq '.[] | {id,author:.user.login,updated_at,html_url}'
+gh api 'repos/herdrdev/herdr/issues/comments/<comment-id>' --jq '{html_url,body}'
+```
+
+Do not filter solely by author type: bot comments can contain relevant fix,
+verification or closure evidence, and some automated accounts have user accounts.
+For a bridge/IPC fix, request the actual owner hunks rather than the full PR:
+
+```powershell
+gh api 'repos/herdrdev/herdr/pulls/<pr>/files?per_page=100' --paginate `
+  --jq '.[] | select(.filename == "src/remote/attach.rs" or .filename == "src/ipc.rs") | {filename,status,patch}'
+```
+
+Change the selected paths to the owners established for that issue. Missing or
+truncated patches require reading the exact source blob at the recorded commit,
+not inferring that behavior is absent. Compare against the immutable accepted fork
+and recorded `BASE`; a merged PR is not proof of stable-release inclusion or full
+fork equivalence. Stop when the bounded question is answered. Keep separate facts
+for an observed symptom, a demonstrated root cause, fork exposure and missing
+runtime evidence. These reads never authorize a post, import, or new recovery path.
+
 ## Pull requests and commits
 
 - Keep pull requests focused on one logical owner.

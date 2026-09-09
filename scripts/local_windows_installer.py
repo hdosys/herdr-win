@@ -327,7 +327,7 @@ def _git(path: Path, arguments: Sequence[str]) -> str:
     ).stdout.strip()
 
 
-def _source_root(path: Path) -> Path:
+def _source_root(path: Path, *, test_only: bool = False) -> Path:
     source = _safe_path(path, "--source-worktree", directory=True)
     if Path(_git(source, ["rev-parse", "--show-toplevel"])).resolve() != source:
         raise LocalInstallerError("--source-worktree must identify its Git root")
@@ -339,7 +339,7 @@ def _source_root(path: Path) -> Path:
     ).resolve()
     if os.path.normcase(control_common) != os.path.normcase(source_common):
         raise LocalInstallerError("source worktree belongs to another Git repository")
-    branch = _source_branch(source)
+    _source_branch(source, test_only=test_only)
     for relative in (
         "scripts/package_windows_conpty.py",
         "scripts/package_windows_installer.ps1",
@@ -349,9 +349,9 @@ def _source_root(path: Path) -> Path:
     return source
 
 
-def _source_branch(source: Path) -> str:
+def _source_branch(source: Path, *, test_only: bool = False) -> str:
     branch = _git(source, ["symbolic-ref", "--short", "HEAD"])
-    if branch != DEVELOPMENT_BRANCH and not branch.startswith("agent/delta-"):
+    if not test_only and branch != DEVELOPMENT_BRANCH and not branch.startswith("agent/delta-"):
         raise LocalInstallerError(f"source worktree uses unsupported branch {branch!r}")
     return branch
 
@@ -1144,7 +1144,7 @@ def release_precheck(options: argparse.Namespace) -> None:
 
 
 def test_one(options: argparse.Namespace) -> None:
-    source = _source_root(options.source_worktree)
+    source = _source_root(options.source_worktree, test_only=True)
     cargo_target = _directory(options.cargo_target_dir, "--cargo-target-dir")
     jobs = _available_cpu_count()
     print(f"cargo_jobs={jobs}")

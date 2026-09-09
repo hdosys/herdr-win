@@ -369,3 +369,12 @@ configuration repository.
   SSH diagnosis depended on a small transport path. Expected benefit: less serial
   source triage and fewer unnecessary context reads. Owner: remote triage examples
   in `CONTRIBUTING.md`; no new network-report index or automatic GitHub posting.
+
+- **Status: done. Accept validated source-writer branches for test-only runs.**
+  `local_windows_installer.py test-one` accepts a named source branch after the same
+  Git-root, common-repository, path, and required-source checks. Artifact commands
+  retain their existing branch restrictions. Evidence: the stabilization writer
+  `agent/v090-stabilization` was rejected by a naming-prefix check, forcing callers
+  to reconstruct the existing shared-target test invocation manually. Two focused
+  assertions protect the test-only permission and unchanged packaging boundary.
+  Owner: `scripts/local_windows_installer.py` and its tests; no new runner or cache.

@@ -228,6 +228,15 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         ):
             self.assertEqual(_source_branch(Path("C:/development")), DEVELOPMENT_BRANCH)
 
+    def test_source_writer_branch_is_accepted_only_for_test_command(self) -> None:
+        with patch("scripts.local_windows_installer._git", return_value="agent/v090-stabilization"):
+            with self.assertRaisesRegex(LocalInstallerError, "unsupported branch"):
+                _source_branch(Path("C:/writer"))
+            self.assertEqual(
+                _source_branch(Path("C:/writer"), test_only=True),
+                "agent/v090-stabilization",
+            )
+
     def test_legacy_combined_branch_is_not_canonical(self) -> None:
         self.assertEqual(
             _candidate_paths(
@@ -478,7 +487,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
             ),
         )
 
-    def test_pre_push_command_reuses_the_candidate_normal_test_owner(self) -> None:
+    def test_test_only_command_reuses_the_candidate_normal_test_owner(self) -> None:
         source = Path("C:/development")
         cargo_target = Path("C:/cargo-target")
         options = argparse.Namespace(
@@ -490,7 +499,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         with (
             patch(
                 "scripts.local_windows_installer._source_root", return_value=source
-            ),
+            ) as source_root,
             patch(
                 "scripts.local_windows_installer._directory",
                 return_value=cargo_target,
@@ -508,6 +517,7 @@ class LocalWindowsInstallerTests(unittest.TestCase):
         focused_test.assert_called_once_with(
             source, cargo_target, 16, "exact_test_filter"
         )
+        source_root.assert_called_once_with(source, test_only=True)
 
     def test_portable_pty_focused_test_cleans_its_temporary_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

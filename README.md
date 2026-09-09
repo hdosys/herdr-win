@@ -1,5 +1,8 @@
 # herdr-win
 
+> [!IMPORTANT]
+> **A Herdr v0.9.0-based release is in progress.** We are addressing upstream regressions discovered after v0.9.0 before publishing our next release. This is expected to take a few more days; we will publish once the fixes have been validated for practical use.
+
 **An upstream-friendly [Herdr](https://github.com/herdrdev/herdr) distribution for developers who need extended capabilities today: multi-agent extensions, terminal experience improvements, better OpenCode integration, and first-class Windows support.**
 
 [![Latest stable release](https://img.shields.io/github/v/release/hdosys/herdr-win?display_name=tag&sort=semver)](https://github.com/hdosys/herdr-win/releases/latest) [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Release pipeline](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)

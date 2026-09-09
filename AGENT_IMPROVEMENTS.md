@@ -378,3 +378,14 @@ configuration repository.
   to reconstruct the existing shared-target test invocation manually. Two focused
   assertions protect the test-only permission and unchanged packaging boundary.
   Owner: `scripts/local_windows_installer.py` and its tests; no new runner or cache.
+
+- **Status: done. Remove the duplicate local installer release gate.** The complete
+  installation/uninstallation/fault matrix remains on the fresh GitHub Windows
+  release runner, not as a prerequisite in the active development Sandbox. Evidence:
+  the procedure required a local full matrix in addition to the workflow's existing
+  release-artifact matrix, despite shared HKCU, PATH, and activation-state risks.
+  Local package validation and isolated probes remain; existing manual installation
+  evidence is reusable. The local diagnostic entrypoint is retained only for explicit,
+  isolated investigations and its help states the mutation boundary. This removes
+  one duplicate mandatory gate without introducing another runner or test suite.
+  Owner: `CONTRIBUTING.md`, `ARCHITECTURE.md`, and the diagnostic CLI help.

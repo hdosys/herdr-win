@@ -1346,7 +1346,15 @@ def _parser() -> argparse.ArgumentParser:
         help="validated runtime product and managed install-root name",
     )
     build_command.add_argument("--isolated", action="store_true")
-    precheck_command = commands.add_parser("release-precheck")
+    precheck_command = commands.add_parser(
+        "release-precheck",
+        help="manual installer diagnostics in an isolated environment, not a release gate",
+        description=(
+            "Manual installer fault diagnostics. Mutates the current user's registry "
+            "and PATH; use only an explicitly isolated Windows environment, never an "
+            "active working profile. Not required before a GitHub release build."
+        ),
+    )
     precheck_command.add_argument("--source-worktree", required=True, type=Path)
     precheck_command.add_argument("--input-bundle", required=True, type=Path)
     precheck_command.add_argument(

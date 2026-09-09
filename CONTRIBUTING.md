@@ -365,9 +365,10 @@ python scripts/local_windows_installer.py build `
   --product-name "<runtime product name>"
 ```
 
-`candidate` accepts the same optional input, and `release-precheck` must receive the
-same value when it checks that installer. Omitting it keeps the current `Herdr`
-default. The materialized packager remains the one validation owner.
+`candidate` accepts the same optional input. An explicitly requested, isolated
+`release-precheck` diagnostic must use the same value for that installer. Omitting
+it keeps the current `Herdr` default. The materialized packager remains the one
+validation owner.
 
 Every invocation rechecks all bundle hashes, exact ConPTY stage contents, runtime
 and launcher identity, then delegates to the materialized source's existing NSIS
@@ -388,8 +389,32 @@ user and agent testing can continue in parallel. Missing or corrupt inputs are a
 clear preparation blocker, not authority to unpack an old installer or repeatedly
 rebuild unchanged payloads.
 
-After reporting the local installer and before dispatching a remote release build,
-run the complete installer fault matrix against that same validated bundle:
+### Installer acceptance and execution location
+
+The full installation, uninstallation, and installer fault matrix belongs to the
+fresh GitHub-hosted Windows runner in `.github/workflows/release.yml`, where it
+checks the actual release artifacts. It is **not** an additional local prerequisite
+before dispatching the release build. Do not repeat that complete matrix in the
+actively used development Sandbox or user profile.
+
+Local work retains build and package-integrity validation, focused source checks,
+and native probes whose state and process ownership are demonstrably isolated.
+User-performed installation and usage checks remain acceptance evidence; reuse them
+while the relevant artifact, source, and environment assumptions are unchanged.
+
+A separate runtime or remote sidecar, an alternate Herdr session, or an overridden
+temporary data directory does not establish installer isolation. These tests can
+still modify shared HKCU registration, user PATH, launcher, and activation state.
+Do not change those shared resources underneath a running working environment.
+
+<details>
+<summary>Explicit installer diagnostics in an isolated environment</summary>
+
+The existing `release-precheck` command is retained for a specifically requested
+installer investigation, not routine release preparation. Use it only after proving
+that its Windows installation/profile state is isolated from active work. A release
+request alone does not authorize running this mutating diagnostic in the working
+Sandbox:
 
 ```powershell
 python scripts/local_windows_installer.py release-precheck `
@@ -397,14 +422,16 @@ python scripts/local_windows_installer.py release-precheck `
   --input-bundle <reported-input-bundle>
 ```
 
-This is the exact local owner for installer recovery, hard-termination, managed
-skill, and pending-update acceptance. It runs through Windows PowerShell 5.1,
+This reuses the existing installer recovery, hard-termination, managed-skill, and
+pending-update fixtures. It runs through Windows PowerShell 5.1,
 uses a short ignored output directory, and removes its generated fault installers
 after completion. The pending-update fixture deliberately constructs Windows CRLF
 checkout input before writing canonical package bytes, and holds its synthetic
 runtime lease until an explicit signal releases it. Never replace either boundary
 with a fixed-duration sleep. Passing evidence remains reusable while the source
 worktree, bundle bytes, and relevant environment remain unchanged.
+
+</details>
 
 ### Refreshing from official upstream
 

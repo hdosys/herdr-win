@@ -516,12 +516,12 @@ behavior; code and tests remain the detailed implementation truth.
 - Verification has distinct control-plane inventory, replayed-product, and
   native/package lanes. `CONTRIBUTING.md` owns when each lane runs and keeps broad
   gates on one frozen logical snapshot.
-- Formatting, Clippy, and the smallest changed-behavior test run in replayed
-  product source during development. Cross-platform release builds add native
-  target/machine checks and static-link validation for Linux. Windows candidate
-  builds retain only product-owned package checks, exact Rust filters, native
-  quiet-uninstall, helper and launcher checks, and representative installer fault
-  evidence whose failure would change a supported lifecycle outcome.
+- Development verifies replayed product source and local package integrity, with
+  focused behavior checks and isolated native probes. The fresh GitHub-hosted
+  Windows release lane owns installation, quiet-uninstall, helper/launcher lifecycle,
+  and installer fault-matrix acceptance of the actual release artifacts. It is not
+  duplicated as a mandatory local installation gate. Cross-platform release builds
+  add native target/machine checks and static-link validation for Linux.
 - Fork-owned checks follow the admission gate in `AGENTS.md`. Release automation
   never provisions an external application solely to exercise a test, and it does
   not repeat source formatting or blanket lint gates already owned by development.

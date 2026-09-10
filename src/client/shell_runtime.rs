@@ -560,6 +560,11 @@ pub(super) fn install_client_shell_snapshot(
     let generation = connection.generation;
     let project_snapshot =
         !projection_pending && endpoints.active_id() == endpoint_id && connection.surface_active;
+    let replay_host_theme = project_snapshot
+        && state
+            .shell
+            .as_ref()
+            .is_some_and(|shell| !shell.endpoint_has_snapshot(endpoint_id));
     let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
         let waits_for_selected_surface = projection_pending
             || (endpoints.active_id() == endpoint_id
@@ -597,6 +602,9 @@ pub(super) fn install_client_shell_snapshot(
     } else {
         (None, None, Vec::new())
     };
+    if replay_host_theme {
+        state.replay_host_theme(endpoints, endpoint_id);
+    }
     apply_client_shell_input_source_changes(state, prefix_input_source);
     state.present_graphics(&graphics_cleanup);
     if let Some(resize) = resize {

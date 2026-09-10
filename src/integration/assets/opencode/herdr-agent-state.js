@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=22
+// HERDR_INTEGRATION_VERSION=23
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -104,6 +104,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
 
   const attachServerUrl = serverUrl instanceof URL ? serverUrl.toString() : undefined;
   const defaultDirectory = typeof directory === "string" && directory ? directory : undefined;
+  const attachedSessionID = process.env[SUBAGENT_SESSION_ENV] || undefined;
 
   function requestOnce(method, params, allowWhileDisposing = false) {
     if (disposed || (disposing && !allowWhileDisposing)) {
@@ -848,7 +849,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         return;
       }
 
-      if ((type === "session.created" || type === "session.updated") && info?.id && info.parentID) {
+      if ((type === "session.created" || type === "session.updated") && info?.id &&
+          info.parentID && info.id !== attachedSessionID) {
         const child = children.get(info.id) ?? {
           info,
           working: false,

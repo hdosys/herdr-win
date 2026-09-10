@@ -77,6 +77,7 @@ beforeEach(() => {
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
+  delete process.env.HERDR_OPENCODE_SUBAGENT_SESSION_ID;
   originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(null, { status: 200 });
 });
@@ -895,6 +896,26 @@ test("keeps the root working while a direct child is busy", async () => {
 
   expect(requests.map(requestState)).toEqual(["working", "idle"]);
   expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+});
+
+test("an attached child pane reports its own lifecycle", async () => {
+  process.env.HERDR_OPENCODE_SUBAGENT_SESSION_ID = "child-session";
+  selectedRootSessionID = "child-session";
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin.event(sessionStatusEvent("child-session", { type: "busy" }));
+  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+
+  expect(requests.map(requestState)).toEqual(["working", "idle"]);
+  expect(requests.map(requestSessionID)).toEqual(["child-session", "child-session"]);
 });
 
 test("reconciles child status changes while attach is starting", async () => {

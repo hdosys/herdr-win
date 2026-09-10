@@ -467,6 +467,14 @@ fn terminal_restore_postlude_restores_original_cursor_color() {
         g: 0x55,
         b: 0x66,
     });
+    assert_eq!(
+        super::terminal_setup::latest_host_cursor_color(),
+        Some(crate::terminal_theme::RgbColor {
+            r: 0x44,
+            g: 0x55,
+            b: 0x66,
+        })
+    );
     let mut output = Vec::new();
     write_terminal_restore_postlude(&mut output, false).unwrap();
     assert_eq!(output, b"\x1b]12;rgb:11/22/33\x1b\\\x1b[?25h\x1b[0 q");

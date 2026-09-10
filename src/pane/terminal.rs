@@ -1207,10 +1207,7 @@ impl GhosttyPaneTerminal {
         });
         let previous = core.terminal.set_color_scheme(color_scheme);
 
-        let transitioned = matches!(
-            (previous, color_scheme),
-            (Some(previous), Some(current)) if previous != current
-        );
+        let transitioned = color_scheme.is_some() && previous != color_scheme;
         if !transitioned
             || !core
                 .terminal
@@ -5919,9 +5916,10 @@ mod tests {
         assert!(pane.apply_host_terminal_appearance(None).is_none());
         let unknown_query = pane.process_pty_bytes(pane_id, 0, b"\x1b[?996n", &tx);
         assert!(unknown_query.terminal_responses.is_empty());
-        assert!(pane
-            .apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark))
-            .is_none());
+        assert_eq!(
+            pane.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark)),
+            Some(Bytes::from_static(b"\x1b[?997;1n"))
+        );
 
         pane.process_pty_bytes(pane_id, 0, b"\x1bc", &tx);
         assert!(pane

@@ -92,7 +92,7 @@ impl ClientState {
             shell.surface_cursor_color(metadata)
         });
         self.blit_encoder
-            .set_cursor_color(child.or(super::terminal_setup::original_host_cursor_color()));
+            .set_cursor_color(child.or(super::terminal_setup::latest_host_cursor_color()));
     }
     pub(super) fn request_repaint(&mut self) {
         self.repaint_pending = true;

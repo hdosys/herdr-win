@@ -17,15 +17,26 @@ use super::frame_output::clear_received_kitty_graphics;
 use super::terminal_geometry::should_query_host_terminal_theme;
 
 static ORIGINAL_HOST_CURSOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LATEST_HOST_CURSOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub(crate) fn record_host_cursor_color(color: crate::terminal_theme::RgbColor) {
     let value =
         0x01000000 | (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b);
     let _ = ORIGINAL_HOST_CURSOR.compare_exchange(0, value, Ordering::AcqRel, Ordering::Acquire);
+    LATEST_HOST_CURSOR.store(value, Ordering::Release);
 }
 
 pub(crate) fn original_host_cursor_color() -> Option<crate::terminal_theme::RgbColor> {
     let value = ORIGINAL_HOST_CURSOR.load(Ordering::Acquire);
+    (value != 0).then_some(crate::terminal_theme::RgbColor {
+        r: (value >> 16) as u8,
+        g: (value >> 8) as u8,
+        b: value as u8,
+    })
+}
+
+pub(crate) fn latest_host_cursor_color() -> Option<crate::terminal_theme::RgbColor> {
+    let value = LATEST_HOST_CURSOR.load(Ordering::Acquire);
     (value != 0).then_some(crate::terminal_theme::RgbColor {
         r: (value >> 16) as u8,
         g: (value >> 8) as u8,
@@ -58,6 +69,7 @@ pub(super) fn setup_terminal_with_capabilities(
     mouse_capture: bool,
 ) -> io::Result<TerminalGuard> {
     ORIGINAL_HOST_CURSOR.store(0, Ordering::Release);
+    LATEST_HOST_CURSOR.store(0, Ordering::Release);
     #[cfg(windows)]
     let original_windows_input_mode = read_windows_input_mode();
     ratatui::init();

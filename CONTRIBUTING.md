@@ -42,6 +42,10 @@ accepted does not wait on issue ceremony. A useful bug report includes the
 herdr-win release tag, Windows version, terminal, shell, exact reproduction,
 current behavior, and expected behavior.
 
+When offering herdr-win builds in an upstream discussion, link to the
+[current releases page](https://github.com/hdosys/herdr-win/releases) rather than
+to a version-specific release so the guidance remains current.
+
 ## Developing the maintained delta
 
 The patch queue is the release representation, not the day-to-day editing surface.

@@ -1,4 +1,4 @@
-From bf7424cd21f6c6f8856c013bb7e6eca9be738659 Mon Sep 17 00:00:00 2001
+From 2feb66ca01accbbb834922665461ec8b4f28c938 Mon Sep 17 00:00:00 2001
 From: Jonathan Liebig <jonathan.liebig@gmail.com>
 Date: Wed, 9 Sep 2026 12:27:15 +0200
 Subject: [PATCH 15/25] fix(endpoint): keep Windows polling-peer writes
@@ -8,14 +8,67 @@ Backport herdrdev/herdr@c43bdfcfe1c5886d5ca05bc4127ce17d593eb8e8 and herdrdev/he
 
 Refs herdrdev/herdr#3721, herdrdev/herdr#3651.
 ---
- src/client/endpoint/writer.rs | 39 ++++++++++++++++++++++++++++++++---
- 1 file changed, 36 insertions(+), 3 deletions(-)
+ src/api/server.rs                      |  6 +-
+ src/api/server/pane_graphics_stream.rs |  1 +
+ src/client/endpoint/writer.rs          | 43 ++++++++++++-
+ src/client/handshake.rs                |  1 +
+ src/ipc.rs                             | 83 ++++++++++++++++++++------
+ src/remote/attach.rs                   |  1 +
+ src/server/autodetect.rs               |  1 +
+ src/server/client_accept.rs            |  4 +-
+ src/server/client_transport.rs         |  1 +
+ src/server/headless.rs                 |  1 +
+ src/session.rs                         |  1 +
+ 11 files changed, 119 insertions(+), 24 deletions(-)
 
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 58666b1342d35ea0689ee5ea8d52e48644c1f758..5e4a9690015762c2aa126661c8c1878d0b97883d 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::Arc;
+ use std::time::{Duration, Instant};
+ 
+-use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
++#[cfg(unix)]
++use interprocess::local_socket::traits::ListenerExt as _;
++use interprocess::local_socket::traits::Stream as _;
+ use tracing::{debug, error, info, warn};
+ 
+ #[cfg(all(test, unix))]
+@@ -573,6 +575,7 @@ fn read_initial_request_line_with_limits(
+ #[cfg(all(test, windows))]
+ mod windows_tests {
+     use super::*;
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::io::{BufRead, BufReader};
+     use std::sync::mpsc::{self, Receiver};
+@@ -957,6 +960,7 @@ fn error_response_json(id: String, code: &str, message: String) -> String {
+ #[cfg(all(test, unix))]
+ mod tests {
+     use super::*;
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::collections::HashMap;
+     use std::io::{BufRead, BufReader};
+diff --git a/src/api/server/pane_graphics_stream.rs b/src/api/server/pane_graphics_stream.rs
+index 0df857fc5b1b2403cb46664feea71f853a6429b3..3c24f18ef7b2264d599f4b28ff4463b2366fcd1f 100644
+--- a/src/api/server/pane_graphics_stream.rs
++++ b/src/api/server/pane_graphics_stream.rs
+@@ -632,6 +632,7 @@ mod tests {
+     #[cfg(unix)]
+     use crate::api::EventHub;
+     use crate::ipc::LocalStream;
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::io::{BufRead, BufReader, Write};
+     use std::path::PathBuf;
 diff --git a/src/client/endpoint/writer.rs b/src/client/endpoint/writer.rs
-index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..7a22f37648a239a7e4290b1ee84f9afc84ebecd2 100644
+index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..5d0bb2bbad0ec6cb1b494c19c478e3a93703fed3 100644
 --- a/src/client/endpoint/writer.rs
 +++ b/src/client/endpoint/writer.rs
-@@ -162,12 +162,18 @@ fn write_frame(
+@@ -162,12 +162,21 @@ fn write_frame(
      mut frame: &[u8],
      stopped: &AtomicBool,
  ) -> io::Result<()> {
@@ -23,9 +76,12 @@ index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..7a22f37648a239a7e4290b1ee84f9afc
 +    let mut deadline = Instant::now() + WRITE_TIMEOUT;
      while !frame.is_empty() && !stopped.load(Ordering::Acquire) {
 -        match writer.write(frame) {
-+        // Match the named-pipe buffer hint so a polling Windows peer can make progress.
++        // Match the Windows named-pipe buffer so large input frames do not require thousands of
++        // polling intervals while a polling peer can still make progress.
 +        #[cfg(windows)]
-+        let chunk = &frame[..frame.len().min(512)];
++        let chunk = &frame[..frame
++            .len()
++            .min(crate::ipc::WINDOWS_LOCAL_PIPE_BUFFER_BYTES)];
 +        #[cfg(not(windows))]
 +        let chunk = frame;
 +        match writer.write(chunk) {
@@ -36,7 +92,15 @@ index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..7a22f37648a239a7e4290b1ee84f9afc
                  continue;
              }
              Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-@@ -276,7 +282,34 @@ mod tests {
+@@ -190,6 +199,7 @@ mod tests {
+     use super::*;
+ 
+     fn streams() -> (LocalStream, LocalStream, std::path::PathBuf) {
++        #[cfg(unix)]
+         use interprocess::local_socket::traits::Listener as _;
+         let path = std::env::temp_dir().join(format!(
+             "herdr-writer-{}-{}.sock",
+@@ -276,7 +286,34 @@ mod tests {
  
      #[test]
      fn native_endpoint_flush_drains_large_frames_before_detach() {
@@ -72,6 +136,222 @@ index 973ff2348e6d810cbcd8e29fe72b782ef089e67c..7a22f37648a239a7e4290b1ee84f9afc
          let mut transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
          let (done, received) = mpsc::channel();
          let reader = std::thread::spawn(move || {
+diff --git a/src/client/handshake.rs b/src/client/handshake.rs
+index cef4246ce197606438b514d79c7ae8644480aa5e..9f3869f1ebe651a63e2aa482ae9626ef9f09fd83 100644
+--- a/src/client/handshake.rs
++++ b/src/client/handshake.rs
+@@ -282,6 +282,7 @@ pub(super) fn do_handshake(
+ #[cfg(all(test, windows))]
+ mod tests {
+     use super::*;
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::io::Write as _;
+ 
+diff --git a/src/ipc.rs b/src/ipc.rs
+index 6231343da06260bafd14ccc3e3e4a947eaa3830d..d3819cab8a4264ae13e2d17db8197db5cf1408d9 100644
+--- a/src/ipc.rs
++++ b/src/ipc.rs
+@@ -7,9 +7,50 @@ use std::path::Path;
+ #[cfg(unix)]
+ use interprocess::local_socket::traits::Stream as _;
+ 
++#[cfg(unix)]
+ pub(crate) type LocalListener = interprocess::local_socket::Listener;
+ pub(crate) type LocalStream = interprocess::local_socket::Stream;
+ 
++#[cfg(windows)]
++pub(crate) const WINDOWS_LOCAL_PIPE_BUFFER_BYTES: usize = 16 * 1024;
++
++#[cfg(windows)]
++pub(crate) struct LocalListener {
++    inner: interprocess::os::windows::named_pipe::PipeListener<
++        interprocess::os::windows::named_pipe::pipe_mode::Bytes,
++        interprocess::os::windows::named_pipe::pipe_mode::Bytes,
++    >,
++    stream_nonblocking: std::sync::atomic::AtomicBool,
++}
++
++#[cfg(windows)]
++impl LocalListener {
++    pub(crate) fn accept(&self) -> io::Result<LocalStream> {
++        use std::sync::atomic::Ordering;
++
++        let stream = self.inner.accept()?;
++        stream.set_nonblocking(self.stream_nonblocking.load(Ordering::Acquire))?;
++        let stream = interprocess::os::windows::named_pipe::local_socket::Stream::from(stream);
++        Ok(LocalStream::from(stream))
++    }
++
++    pub(crate) fn incoming(&self) -> impl Iterator<Item = io::Result<LocalStream>> + '_ {
++        std::iter::repeat_with(|| self.accept())
++    }
++
++    pub(crate) fn set_nonblocking(
++        &self,
++        mode: interprocess::local_socket::ListenerNonblockingMode,
++    ) -> io::Result<()> {
++        use std::sync::atomic::Ordering;
++
++        self.inner.set_nonblocking(mode.accept_nonblocking())?;
++        self.stream_nonblocking
++            .store(mode.stream_nonblocking(), Ordering::Release);
++        Ok(())
++    }
++}
++
+ pub(crate) enum LocalStreamRead {
+     Data,
+     Pending,
+@@ -65,14 +106,7 @@ pub(crate) fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
+ 
+     #[cfg(windows)]
+     {
+-        use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions};
+-
+-        let name = path.to_string_lossy().to_string();
+-        let name = name.to_ns_name::<GenericNamespaced>()?;
+-        let listener = ListenerOptions::new()
+-            .name(name)
+-            .reclaim_name(false)
+-            .create_sync()?;
++        let listener = bind_windows_local_listener(path, None)?;
+         fs::write(path, windows_socket_marker())?;
+         Ok(listener)
+     }
+@@ -141,26 +175,39 @@ pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListen
+ 
+     #[cfg(windows)]
+     {
+-        use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions};
+-        use interprocess::os::windows::local_socket::ListenerOptionsExt as _;
+         use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+         use widestring::U16CString;
+ 
+         let sddl = U16CString::from_str("D:P(A;;GA;;;SY)(A;;GA;;;OW)")
+             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+         let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
+-        let name = path.to_string_lossy().to_string();
+-        let name = name.to_ns_name::<GenericNamespaced>()?;
+-        let listener = ListenerOptions::new()
+-            .name(name)
+-            .reclaim_name(false)
+-            .security_descriptor(security_descriptor)
+-            .create_sync()?;
++        let listener = bind_windows_local_listener(path, Some(security_descriptor))?;
+         fs::write(path, windows_socket_marker())?;
+         Ok(listener)
+     }
+ }
+ 
++#[cfg(windows)]
++fn bind_windows_local_listener(
++    path: &Path,
++    security_descriptor: Option<interprocess::os::windows::security_descriptor::SecurityDescriptor>,
++) -> io::Result<LocalListener> {
++    use interprocess::os::windows::named_pipe::{pipe_mode::Bytes, PipeListenerOptions};
++
++    let mut pipe_name = std::ffi::OsString::from(r"\\.\pipe\");
++    pipe_name.push(path.as_os_str());
++    let inner = PipeListenerOptions::new()
++        .path(pipe_name.as_os_str())
++        .input_buffer_size_hint(WINDOWS_LOCAL_PIPE_BUFFER_BYTES as u32)
++        .output_buffer_size_hint(WINDOWS_LOCAL_PIPE_BUFFER_BYTES as u32)
++        .security_descriptor(security_descriptor)
++        .create_duplex::<Bytes>()?;
++    Ok(LocalListener {
++        inner,
++        stream_nonblocking: std::sync::atomic::AtomicBool::new(false),
++    })
++}
++
+ pub(crate) fn poll_local_stream_read(
+     stream: &mut LocalStream,
+     buf: &mut [u8],
+@@ -384,8 +431,6 @@ pub(crate) fn restrict_socket_permissions(_path: &Path, _mode: u32) -> io::Resul
+ mod tests {
+     use super::*;
+     #[cfg(windows)]
+-    use interprocess::local_socket::traits::Listener as _;
+-    #[cfg(windows)]
+     use std::path::PathBuf;
+ 
+     #[test]
+diff --git a/src/remote/attach.rs b/src/remote/attach.rs
+index aaae614e2c7f5ab021309114b62bc3cb384327f0..c7c754d62199c1b065992339b30990215caca2da 100644
+--- a/src/remote/attach.rs
++++ b/src/remote/attach.rs
+@@ -9,6 +9,7 @@ use std::process::{Command, Output, Stdio};
+ 
+ use interprocess::TryClone as _;
+ use interprocess::local_socket::ListenerNonblockingMode;
++#[cfg(unix)]
+ use interprocess::local_socket::traits::Listener as _;
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest as _, Sha256};
+diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
+index d188f550e1ebf00cd3966d3b3c9fa1daf3b38ca9..7f190ab72ecd106dfc14dacec9303927ac8f0856 100644
+--- a/src/server/autodetect.rs
++++ b/src/server/autodetect.rs
+@@ -423,6 +423,7 @@ mod windows_tests {
+         ))
+         .unwrap());
+ 
++        #[cfg(unix)]
+         use interprocess::local_socket::traits::Listener as _;
+         let root =
+             std::env::temp_dir().join(format!("herdr-inactive-readiness-{}", std::process::id()));
+diff --git a/src/server/client_accept.rs b/src/server/client_accept.rs
+index e2a8a42d981597afae17c2860fdc2cbc84219929..7712e10b813d65d8f094e6200bbfc9c5d7520ede 100644
+--- a/src/server/client_accept.rs
++++ b/src/server/client_accept.rs
+@@ -1,7 +1,9 @@
+ use std::io;
+ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+ 
+-use interprocess::local_socket::traits::{Listener as _, Stream as _};
++#[cfg(unix)]
++use interprocess::local_socket::traits::Listener as _;
++use interprocess::local_socket::traits::Stream as _;
+ use tokio::sync::mpsc;
+ use tracing::{debug, error, warn};
+ 
+diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
+index b6287c06a9b93f7a1155cfcb00ada620d6d4bca2..578980fd5be0970720daef3894c14cc7b4115ca8 100644
+--- a/src/server/client_transport.rs
++++ b/src/server/client_transport.rs
+@@ -1371,6 +1371,7 @@ fn client_read_loop_with_endpoint_controls(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::path::PathBuf;
+ 
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index fd4dd8a1ce55b5cc7eb796e7783082909f57bb1f..791d7e98e49e572d2912c598950fab9f02d7bbe7 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::Arc;
+ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
++#[cfg(unix)]
+ use interprocess::local_socket::traits::Listener as _;
+ #[cfg(windows)]
+ use interprocess::local_socket::traits::Stream as _;
+diff --git a/src/session.rs b/src/session.rs
+index faa864c06050e40caa7c2eb00895c5e41247568f..815266b4efe7f7d2f810ca7c77f31e7f0cf6872b 100644
+--- a/src/session.rs
++++ b/src/session.rs
+@@ -507,6 +507,7 @@ fn normalize_name(name: &str) -> Result<Option<String>, String> {
+ mod tests {
+     use super::*;
+     #[cfg(unix)]
++    #[cfg(unix)]
+     use interprocess::local_socket::traits::Listener as _;
+     use std::sync::{Mutex, OnceLock};
+ 
 -- 
 2.55.0.windows.3
 

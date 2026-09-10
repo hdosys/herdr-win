@@ -1,4 +1,4 @@
-From 10e7ac6aa9a98a7f601c796d3fc4d610ab52a4f7 Mon Sep 17 00:00:00 2001
+From c14f406bfca9d4915231e3d11560e125572ec4a8 Mon Sep 17 00:00:00 2001
 From: User-3090 <71881005+User-3090@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 07:35:54 +0200
 Subject: [PATCH 1/26] feat(windows): preserve terminal appearance
@@ -25,8 +25,8 @@ Refs herdrdev/herdr#2786
  src/client/shell_runtime.rs                   |   9 +
  src/client/state.rs                           |  50 +-
  src/client/terminal_geometry.rs               |   6 +-
- src/client/terminal_setup.rs                  |  63 ++-
- src/client/tests/mod.rs                       |  38 +-
+ src/client/terminal_setup.rs                  |  69 ++-
+ src/client/tests/mod.rs                       |  44 +-
  src/config/theme.rs                           |   6 +-
  src/ghostty/mod.rs                            |   6 -
  src/main.rs                                   |   2 +-
@@ -51,7 +51,7 @@ Refs herdrdev/herdr#2786
  src/server/render_stream.rs                   |  76 ++-
  src/terminal_modes.rs                         |  15 +-
  src/terminal_theme.rs                         |  90 ++--
- 44 files changed, 1578 insertions(+), 554 deletions(-)
+ 44 files changed, 1590 insertions(+), 554 deletions(-)
 
 diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
 index e6a374b30582f925f1b1d0ed9a98b627a6c1d720..8e363b1a3d17da11a97da751f12f03b6e099ed33 100644
@@ -1137,10 +1137,10 @@ index aaf216dfc5620aa921d2d6b0713b2e3c670cdba0..0e793f57ee6bad53830a88bdfc3ab21c
      writer.flush()
  }
 diff --git a/src/client/terminal_setup.rs b/src/client/terminal_setup.rs
-index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd869f9256b 100644
+index 9c035346b5caf871be3403db1335139ac17e4a21..cbf62335ac2d36d21c02e99882b5509ff7a42a41 100644
 --- a/src/client/terminal_setup.rs
 +++ b/src/client/terminal_setup.rs
-@@ -16,6 +16,34 @@ use crossterm::terminal::{DisableLineWrap, EnableLineWrap};
+@@ -16,6 +16,40 @@ use crossterm::terminal::{DisableLineWrap, EnableLineWrap};
  use super::frame_output::clear_received_kitty_graphics;
  use super::terminal_geometry::should_query_host_terminal_theme;
  
@@ -1172,10 +1172,16 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
 +    })
 +}
 +
++#[cfg(test)]
++pub(super) fn reset_host_cursor_colors_for_test() {
++    ORIGINAL_HOST_CURSOR.store(0, Ordering::Release);
++    LATEST_HOST_CURSOR.store(0, Ordering::Release);
++}
++
  // ---------------------------------------------------------------------------
  // Terminal setup / restore
  // ---------------------------------------------------------------------------
-@@ -40,6 +68,10 @@ pub(super) fn setup_terminal_with_capabilities(
+@@ -40,6 +74,10 @@ pub(super) fn setup_terminal_with_capabilities(
      enable_client_protocols: bool,
      mouse_capture: bool,
  ) -> io::Result<TerminalGuard> {
@@ -1186,7 +1192,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
      ratatui::init();
      crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
      let host_color_scheme_reports =
-@@ -63,7 +95,7 @@ pub(super) fn setup_terminal_with_capabilities(
+@@ -63,7 +101,7 @@ pub(super) fn setup_terminal_with_capabilities(
          }
          push_keyboard_enhancement_flags()?;
      } else {
@@ -1195,7 +1201,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
              write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
          }
          set_mouse_capture(mouse_capture, false)?;
-@@ -106,12 +138,12 @@ pub(super) fn setup_terminal_with_capabilities(
+@@ -106,12 +144,12 @@ pub(super) fn setup_terminal_with_capabilities(
          restore_claimed: Arc::new(AtomicBool::new(false)),
          restored: false,
          #[cfg(windows)]
@@ -1210,7 +1216,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
  }
  
  /// Guard that restores the terminal when dropped.
-@@ -148,6 +180,20 @@ pub(super) fn write_terminal_restore_postlude(
+@@ -148,6 +186,20 @@ pub(super) fn write_terminal_restore_postlude(
          )?;
      }
      // Restore a visible cursor and reset DECSCUSR back to the terminal default.
@@ -1231,7 +1237,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
      writer.write_all(b"\x1b[?25h\x1b[0 q")?;
      writer.flush()
  }
-@@ -236,6 +282,14 @@ pub(super) fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
+@@ -236,6 +288,14 @@ pub(super) fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
      mode | 0x0200
  }
  
@@ -1246,7 +1252,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
  #[cfg(windows)]
  fn restore_windows_input_mode_value(mode: u32) {
      use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-@@ -336,12 +390,11 @@ fn restore_terminal_state(
+@@ -336,12 +396,11 @@ fn restore_terminal_state(
          DisableBracketedPaste
      );
      let _ = set_mouse_capture(false, false);
@@ -1261,7 +1267,7 @@ index 9c035346b5caf871be3403db1335139ac17e4a21..88b94fd2d8ec181ffe83ff7a821addd8
          write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
  
 diff --git a/src/client/tests/mod.rs b/src/client/tests/mod.rs
-index cca732327b4ed4c749ecd2cf59af0a2f77aa6bfd..0db7ebe708810622fb0bfcb05b204217a7da0366 100644
+index cca732327b4ed4c749ecd2cf59af0a2f77aa6bfd..6eaf59abf6889ddb878a68bbd2398566d05ffd17 100644
 --- a/src/client/tests/mod.rs
 +++ b/src/client/tests/mod.rs
 @@ -359,10 +359,7 @@ fn write_host_terminal_theme_query_emits_osc_queries() {
@@ -1287,16 +1293,21 @@ index cca732327b4ed4c749ecd2cf59af0a2f77aa6bfd..0db7ebe708810622fb0bfcb05b204217
  }
  
  #[test]
-@@ -455,7 +452,32 @@ fn color_scheme_reports_are_enabled_only_for_full_clients() {
+@@ -453,9 +450,38 @@ fn color_scheme_reports_are_enabled_only_for_full_clients() {
+ 
+ #[test]
  fn terminal_restore_postlude_restores_visible_default_cursor() {
-     let mut output = Vec::new();
-     write_terminal_restore_postlude(&mut output, false).unwrap();
--    assert_eq!(output, b"\x1b[?25h\x1b[0 q");
++    let _guard = env_lock().lock().unwrap();
++    super::terminal_setup::reset_host_cursor_colors_for_test();
++    let mut output = Vec::new();
++    write_terminal_restore_postlude(&mut output, false).unwrap();
 +    assert_eq!(output, b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
 +}
 +
 +#[test]
 +fn terminal_restore_postlude_restores_original_cursor_color() {
++    let _guard = env_lock().lock().unwrap();
++    super::terminal_setup::reset_host_cursor_colors_for_test();
 +    super::terminal_setup::record_host_cursor_color(crate::terminal_theme::RgbColor {
 +        r: 0x11,
 +        g: 0x22,
@@ -1315,13 +1326,23 @@ index cca732327b4ed4c749ecd2cf59af0a2f77aa6bfd..0db7ebe708810622fb0bfcb05b204217
 +            b: 0x66,
 +        })
 +    );
-+    let mut output = Vec::new();
-+    write_terminal_restore_postlude(&mut output, false).unwrap();
+     let mut output = Vec::new();
+     write_terminal_restore_postlude(&mut output, false).unwrap();
+-    assert_eq!(output, b"\x1b[?25h\x1b[0 q");
 +    assert_eq!(output, b"\x1b]12;rgb:11/22/33\x1b\\\x1b[?25h\x1b[0 q");
  }
  
  #[test]
-@@ -476,7 +498,7 @@ fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
+@@ -469,6 +495,8 @@ fn direct_attach_mouse_capture_combines_local_preference_with_child_demand() {
+ 
+ #[test]
+ fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
++    let _guard = env_lock().lock().unwrap();
++    super::terminal_setup::reset_host_cursor_colors_for_test();
+     let mut output = Vec::new();
+     write_terminal_restore_postlude(&mut output, true).unwrap();
+ 
+@@ -476,7 +504,7 @@ fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
      expected.extend_from_slice(
          crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
      );

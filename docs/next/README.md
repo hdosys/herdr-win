@@ -11,9 +11,6 @@ Every published release contains matching Windows, Linux, and macOS binaries bui
 > [!IMPORTANT]
 > GitHub's **ahead/behind** banner compares commit ancestry, not release-source freshness. This repository's `master` is a control branch for the patch queue and release automation, not a mirror of upstream `master`. Each build starts from the stable commit recorded in [`BASE`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/BASE) and applies the maintained patches. GitHub's **Sync fork** action is not this project's refresh mechanism.
 
-> [!NOTE]
-> herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a sister project that provides disposable native Windows environments for coding agents. It is not a runtime dependency.
-
 [What differs from upstream](#what-differs-from-upstream) · [Install](#install) · [First use](#first-use) · [Everyday use](#everyday-use) · [Troubleshooting](#troubleshooting) · [Project reference](#project-reference)
 
 ## See it in action
@@ -28,6 +25,9 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 - **One coherent distribution:** release assets share one source tree and build identity. Compatible attachment negotiates the upstream endpoint protocol; provisioning verifies the exact payload.
 - **Real boundary evidence:** Windows setup, ConPTY packaging, SSH provisioning, updates, uninstall, and cross-platform artifacts are exercised at their product-owned boundaries before publication.
 - **No parallel product:** fork identity stays in repository, release, update-feed, setup, and Installed Apps presentation while normal Herdr commands and state remain unchanged.
+
+> [!NOTE]
+> herdr-win is developed and validated with [**Herdr Sandbox**](https://github.com/hdosys/herdr-sandbox), a sister project that provides disposable native Windows environments for coding agents. It is not a runtime dependency.
 
 ## How it works
 

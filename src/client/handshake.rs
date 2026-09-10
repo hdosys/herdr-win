@@ -282,6 +282,7 @@ pub(super) fn do_handshake(
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
     use std::io::Write as _;
 

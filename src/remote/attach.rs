@@ -9,6 +9,7 @@ use std::process::{Command, Output, Stdio};
 
 use interprocess::TryClone as _;
 use interprocess::local_socket::ListenerNonblockingMode;
+#[cfg(unix)]
 use interprocess::local_socket::traits::Listener as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};

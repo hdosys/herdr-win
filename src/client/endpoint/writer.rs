@@ -164,9 +164,12 @@ fn write_frame(
 ) -> io::Result<()> {
     let mut deadline = Instant::now() + WRITE_TIMEOUT;
     while !frame.is_empty() && !stopped.load(Ordering::Acquire) {
-        // Match the named-pipe buffer hint so a polling Windows peer can make progress.
+        // Match the Windows named-pipe buffer so large input frames do not require thousands of
+        // polling intervals while a polling peer can still make progress.
         #[cfg(windows)]
-        let chunk = &frame[..frame.len().min(512)];
+        let chunk = &frame[..frame
+            .len()
+            .min(crate::ipc::WINDOWS_LOCAL_PIPE_BUFFER_BYTES)];
         #[cfg(not(windows))]
         let chunk = frame;
         match writer.write(chunk) {
@@ -196,6 +199,7 @@ mod tests {
     use super::*;
 
     fn streams() -> (LocalStream, LocalStream, std::path::PathBuf) {
+        #[cfg(unix)]
         use interprocess::local_socket::traits::Listener as _;
         let path = std::env::temp_dir().join(format!(
             "herdr-writer-{}-{}.sock",

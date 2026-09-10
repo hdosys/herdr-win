@@ -632,6 +632,7 @@ mod tests {
     #[cfg(unix)]
     use crate::api::EventHub;
     use crate::ipc::LocalStream;
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{BufRead, BufReader, Write};
     use std::path::PathBuf;

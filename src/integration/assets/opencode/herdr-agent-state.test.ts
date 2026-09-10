@@ -877,6 +877,26 @@ test("keeps the child pane when delayed idle disagrees with live status", async 
   expect(requestParam(requests[0], "pane_id")).toBe("test:p2");
 });
 
+test("keeps the root working while a direct child is busy", async () => {
+  const plugin = await loadPlugin();
+  await plugin["chat.message"]({ sessionID: "root-session" });
+  requests.length = 0;
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin.event(sessionStatusEvent("root-session", { type: "idle" }));
+  await plugin.event(sessionStatusEvent("child-session", { type: "idle" }));
+
+  expect(requests.map(requestState)).toEqual(["working", "idle"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+});
+
 test("reconciles child status changes while attach is starting", async () => {
   const plugin = await loadPlugin({
     directory: "C:\\repo",

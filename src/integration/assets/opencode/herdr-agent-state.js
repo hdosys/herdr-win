@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=21
+// HERDR_INTEGRATION_VERSION=22
 
 import { createHash } from "node:crypto";
 import net from "node:net";
@@ -91,6 +91,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
   let paneRequestChain = Promise.resolve();
   let panePlacementChain = Promise.resolve();
   let currentRootSessionID;
+  let rootHeldWorkingForChildren = false;
   let unscopedErrorBlocked = false;
   let disposing = false;
   let disposed = false;
@@ -681,6 +682,11 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       !sessionID || rootSessionFor(sessionID) === currentRootSessionID);
   }
 
+  function hasWorkingChildren() {
+    return [...children.entries()].some(([sessionID, child]) =>
+      child.working && rootSessionFor(sessionID) === currentRootSessionID);
+  }
+
   function markSessionContinuing(sessionID, status) {
     if (!sessionID) {
       return;
@@ -748,6 +754,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
   async function reportContinuing(state, sessionID, status) {
     markSessionContinuing(sessionID, status);
     if (sessionID && sessionID === currentRootSessionID) {
+      rootHeldWorkingForChildren = false;
       unscopedErrorBlocked = false;
     }
     if (!unscopedErrorBlocked && !hasActivePrompts()) {
@@ -768,7 +775,8 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
       return;
     }
     clearSessionLifecycle(sessionID);
-    await reportState("idle", sessionID, suppressCompletion);
+    rootHeldWorkingForChildren = hasWorkingChildren();
+    await reportState(rootHeldWorkingForChildren ? "working" : "idle", sessionID, suppressCompletion);
   }
 
   async function dispose() {
@@ -798,6 +806,7 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
     children.clear();
     deletedSessions.clear();
     currentRootSessionID = undefined;
+    rootHeldWorkingForChildren = false;
     unscopedErrorBlocked = false;
     reportRequestChain = Promise.resolve();
     paneRequestChain = Promise.resolve();
@@ -877,6 +886,11 @@ export const HerdrAgentStatePlugin = async ({ client, directory, serverUrl } = {
         if (state && selectionKnown && rootSessionFor(sessionID) === currentRootSessionID &&
             !unscopedErrorBlocked) {
           await reportState(state, rootSessionFor(sessionID));
+        } else if (childStatus && selectionKnown && rootHeldWorkingForChildren &&
+                   rootSessionFor(sessionID) === currentRootSessionID &&
+                   !hasWorkingChildren()) {
+          rootHeldWorkingForChildren = false;
+          await reportIdleOrConfirmError(currentRootSessionID);
         }
         return;
       }

@@ -31,7 +31,7 @@ remaining responsibility.
 ## Reviewed v0.9.0 corrections
 
 The following 13 logical mailboxes extend the reviewed 13-mailbox foundation
-without advancing `BASE`. They are included in herdr-win v2026.09.10.1. An
+without advancing `BASE`. They are included in herdr-win v2026.09.10.2. An
 upstream PR reference records provenance, not that its changes have shipped in an
 upstream stable release.
 

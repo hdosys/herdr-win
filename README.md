@@ -67,11 +67,11 @@ The table is intentionally capability-level. ✅ marks capabilities now provided
 | Integration settings | **Maintained here** · [#2880](https://github.com/herdrdev/herdr/issues/2880) · [`0016`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0016-settings-integration-hints.patch) | Shows only controls that the selected integration supports. |
 | Devin configuration | ✅ **Upstreamed in Herdr v0.9.0** · [#2724](https://github.com/herdrdev/herdr/issues/2724) | Upstream finds Devin's native configuration in roaming AppData while respecting an explicit XDG override. |
 | Windows process environment | ✅ **Upstreamed in Herdr v0.9.0** · [#3430](https://github.com/herdrdev/herdr/issues/3430) | Upstream rejects malformed Windows environment entries and validates registry values before process creation. |
-| Remote transport and input corrections | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Preserves Windows download and endpoint-write progress, matching control-key text, and nested mouse input. |
-| Multi-machine workspace views | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Scopes collapsed groups to each machine, focuses new worktrees in the requesting client, supports guarded cross-machine navigation, and preserves public focus and focused geometry. |
-| Session safety and startup diagnostics | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Requires exact recorded names for session deletion and keeps Local startup errors visible without freezing healthy remote views. |
+| Remote transport and input corrections | **Included in v2026.09.10.2** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Preserves Windows download and endpoint-write progress, matching control-key text, and nested mouse input. |
+| Multi-machine workspace views | **Included in v2026.09.10.2** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Scopes collapsed groups to each machine, focuses new worktrees in the requesting client, supports guarded cross-machine navigation, and preserves public focus and focused geometry. |
+| Session safety and startup diagnostics | **Included in v2026.09.10.2** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Requires exact recorded names for session deletion and keeps Local startup errors visible without freezing healthy remote views. |
 
-These corrections are included in herdr-win v2026.09.10.1. They keep the reviewed
+These corrections are included in herdr-win v2026.09.10.2. They keep the reviewed
 v0.9.0 base unchanged. An upstream PR reference is provenance, not a claim that the
 fix has shipped in upstream stable; temporary mailboxes remain until equivalent
 stable behavior includes the necessary adaptations.

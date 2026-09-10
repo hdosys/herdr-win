@@ -1,0 +1,97 @@
+From ac466a136af7bd52e579f524d6ad1f7206be0d71 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Thu, 10 Sep 2026 16:13:05 +0200
+Subject: [PATCH 26/26] feat(client): surface machine setup in menu
+
+---
+ src/client/shell/global_menu.rs            |  7 +++++++
+ src/client/shell/tests/chrome_context.rs   | 11 +++++++++++
+ src/client/shell/tests/startup_overlays.rs |  4 ++--
+ 3 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/shell/global_menu.rs b/src/client/shell/global_menu.rs
+index e5bd6f78b43a4ef305b590f2d7c53a4ad97970a8..e27df8419c18b5facf74c8557cad102986321bf8 100644
+--- a/src/client/shell/global_menu.rs
++++ b/src/client/shell/global_menu.rs
+@@ -3,6 +3,7 @@ use super::*;
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(super) enum ClientGlobalMenuAction {
+     Binding(crate::input::KeybindAction),
++    AddMachine,
+     WhatsNew,
+ }
+ 
+@@ -35,6 +36,7 @@ pub(super) fn global_menu_items(
+             "reload config",
+             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::ReloadConfig),
+         ),
++        ("add machine...", ClientGlobalMenuAction::AddMachine),
+     ];
+     if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
+         items.push((
+@@ -103,6 +105,11 @@ impl ClientShellState {
+             ClientGlobalMenuAction::Binding(binding) => {
+                 self.record_binding(crate::input::KeybindMatch::Action(binding), outcome)
+             }
++            ClientGlobalMenuAction::AddMachine => outcome.actions.push(
++                ClientShellAction::OpenSafeWebUrl(
++                    "https://herdr.dev/docs/connecting-machines/".to_owned(),
++                ),
++            ),
+             ClientGlobalMenuAction::WhatsNew => self.open_release_notes(),
+         }
+         outcome.repaint = true;
+diff --git a/src/client/shell/tests/chrome_context.rs b/src/client/shell/tests/chrome_context.rs
+index 5747bb971de468da46fba5af5febd064caef060a..4c5263a1585b43eda32b82e53a601d2a5ee8a398 100644
+--- a/src/client/shell/tests/chrome_context.rs
++++ b/src/client/shell/tests/chrome_context.rs
+@@ -309,6 +309,7 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
+     assert!(text.contains("settings"));
+     assert!(text.contains("keybinds"));
+     assert!(text.contains("reload config"));
++    assert!(text.contains("add machine..."));
+     assert!(text.contains("detach"));
+ 
+     let keybinds = state.hits.global_menu_rows[1].0;
+@@ -324,6 +325,16 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
+     state.overlay = Some(ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay {
+         highlighted: 3,
+     }));
++    let machine_setup = state.handle_input_bytes(b"\r");
++    assert!(matches!(
++        &machine_setup.actions[..],
++        [ClientShellAction::OpenSafeWebUrl(url)]
++            if url == "https://herdr.dev/docs/connecting-machines/"
++    ));
++
++    state.overlay = Some(ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay {
++        highlighted: 4,
++    }));
+     let detach = state.handle_input_bytes(b"\r");
+     assert!(detach.detach);
+     assert!(state.overlay.is_none());
+diff --git a/src/client/shell/tests/startup_overlays.rs b/src/client/shell/tests/startup_overlays.rs
+index 7107aa713db59876189d6b3195477ce5bdfdf235..9fc3008a51a374ced117701ec941d009ec6ebdfe 100644
+--- a/src/client/shell/tests/startup_overlays.rs
++++ b/src/client/shell/tests/startup_overlays.rs
+@@ -710,7 +710,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
+         .collect::<Vec<_>>()
+         .join("\n");
+     assert!(text.contains("● update ready"));
+-    let update_row = state.hits.global_menu_rows[3].0;
++    let update_row = state.hits.global_menu_rows[4].0;
+     assert_eq!(update_row.width, 16);
+     let menu_buffer = menu.to_ratatui_buffer().expect("menu buffer");
+     assert_eq!(
+@@ -721,7 +721,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
+         menu_buffer[(update_row.x + 3, update_row.y)].fg,
+         state.config.palette.text
+     );
+-    state.activate_global_menu_item(3, &mut ClientShellInput::default());
++    state.activate_global_menu_item(4, &mut ClientShellInput::default());
+     let notes = state.compose(106, 30).expect("release notes");
+     let bottom_row_start = usize::from(notes.width) * usize::from(notes.height - 1);
+     let bottom_row = notes.cells[bottom_row_start..]
+-- 
+2.55.0.windows.3
+

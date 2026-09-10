@@ -389,3 +389,15 @@ configuration repository.
   isolated investigations and its help states the mutation boundary. This removes
   one duplicate mandatory gate without introducing another runner or test suite.
   Owner: `CONTRIBUTING.md`, `ARCHITECTURE.md`, and the diagnostic CLI help.
+
+- **Status: proposed. Resolve the provisioned MSVC inspection tools in the canonical
+  local installer owner.** A clean candidate build failed before packaging because
+  `dumpbin.exe` was installed under the Sandbox Visual Studio toolchain but absent
+  from the caller's `PATH`; prepending its existing `Hostx64\x64` directory made the
+  unchanged build succeed. Let `scripts/local_windows_installer.py` derive the
+  provisioned Visual Studio environment through the repository's existing toolchain
+  owner before invoking package validation, while preserving a terminal error when
+  no supported installation exists. Expected benefit: remove a repeated manual shell
+  prerequisite without adding a fallback packager or weakening binary validation.
+  Owner: `scripts/local_windows_installer.py` and its focused packaging-tool discovery
+  checks.

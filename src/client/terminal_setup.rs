@@ -44,6 +44,12 @@ pub(crate) fn latest_host_cursor_color() -> Option<crate::terminal_theme::RgbCol
     })
 }
 
+#[cfg(test)]
+pub(super) fn reset_host_cursor_colors_for_test() {
+    ORIGINAL_HOST_CURSOR.store(0, Ordering::Release);
+    LATEST_HOST_CURSOR.store(0, Ordering::Release);
+}
+
 // ---------------------------------------------------------------------------
 // Terminal setup / restore
 // ---------------------------------------------------------------------------

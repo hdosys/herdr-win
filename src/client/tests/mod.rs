@@ -450,6 +450,8 @@ fn color_scheme_reports_are_enabled_only_for_full_clients() {
 
 #[test]
 fn terminal_restore_postlude_restores_visible_default_cursor() {
+    let _guard = env_lock().lock().unwrap();
+    super::terminal_setup::reset_host_cursor_colors_for_test();
     let mut output = Vec::new();
     write_terminal_restore_postlude(&mut output, false).unwrap();
     assert_eq!(output, b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
@@ -457,6 +459,8 @@ fn terminal_restore_postlude_restores_visible_default_cursor() {
 
 #[test]
 fn terminal_restore_postlude_restores_original_cursor_color() {
+    let _guard = env_lock().lock().unwrap();
+    super::terminal_setup::reset_host_cursor_colors_for_test();
     super::terminal_setup::record_host_cursor_color(crate::terminal_theme::RgbColor {
         r: 0x11,
         g: 0x22,
@@ -491,6 +495,8 @@ fn direct_attach_mouse_capture_combines_local_preference_with_child_demand() {
 
 #[test]
 fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
+    let _guard = env_lock().lock().unwrap();
+    super::terminal_setup::reset_host_cursor_colors_for_test();
     let mut output = Vec::new();
     write_terminal_restore_postlude(&mut output, true).unwrap();
 

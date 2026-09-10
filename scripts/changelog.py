@@ -459,7 +459,7 @@ def load_product_announcement(path: Path) -> dict[str, str] | None:
 
 
 def write_text(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def fetch_release_payload(version: str, repo: str) -> dict[str, Any]:

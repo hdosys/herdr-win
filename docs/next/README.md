@@ -1,8 +1,5 @@
 # herdr-win
 
-> [!IMPORTANT]
-> **A Herdr v0.9.0-based release is in progress.** We are addressing upstream regressions discovered after v0.9.0 before publishing our next release. This is expected to take a few more days; we will publish once the fixes have been validated for practical use.
-
 **An upstream-friendly [Herdr](https://github.com/herdrdev/herdr) distribution for developers who need extended capabilities today: multi-agent extensions, terminal experience improvements, better OpenCode integration, and first-class Windows support.**
 
 [![Latest stable release](https://img.shields.io/github/v/release/hdosys/herdr-win?display_name=tag&sort=semver)](https://github.com/hdosys/herdr-win/releases/latest) [![Patch replay](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/ci.yml) [![Release pipeline](https://github.com/hdosys/herdr-win/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/hdosys/herdr-win/actions/workflows/release.yml) [![Rust 1.96.1](https://img.shields.io/badge/Rust-1.96.1-000000?logo=rust&logoColor=white)](https://github.com/hdosys/herdr-win/blob/master/rust-toolchain.toml) [![Built with Herdr Sandbox](https://img.shields.io/badge/built%20with-Herdr%20Sandbox-0078D4?logo=windows11&logoColor=white)](https://github.com/hdosys/herdr-sandbox) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/hdosys/herdr-win/blob/master/LICENSE)
@@ -38,8 +35,8 @@ Detach from a Windows-hosted Herdr session, reconnect from another terminal, and
 flowchart TB
     S["Reviewed stable source<br/>Upstream Herdr v0.9.0 / BASE b99002ac99b0"]
     Q["Control branch: patches/delta/series<br/>0001 Terminal experience / 0003 Windows SSH / 0004 Managed distribution<br/>0005 OpenCode / 0006 Downloads / 0008 Worktree lifecycle<br/>0009 Agent start / 0010 Hook recovery / 0011 Metadata<br/>0012 Completion / 0013 History / 0015 Contrast / 0016 Integration hints"]
-    B["Temporary corrections after the foundation<br/>0019-0027 Reviewed upstream backports<br/>0028-0029 Local session and startup fixes"]
-    D["Current local development candidate, unpublished<br/>Finalized queue reproduces the accepted source tree"]
+    B["Corrections after the foundation<br/>0019-0027, 0030 Reviewed upstream backports<br/>0028-0029, 0031 Local fixes and discoverability"]
+    D["Current maintained source<br/>Finalized queue reproduces the accepted source tree"]
     V["Validated distribution<br/>Fresh replay → native + cross-platform gates<br/>→ Windows setup + ZIP, Linux/macOS binaries + digests"]
     S --> Q --> B --> D --> V
 ```
@@ -70,15 +67,14 @@ The table is intentionally capability-level. ✅ marks capabilities now provided
 | Integration settings | **Maintained here** · [#2880](https://github.com/herdrdev/herdr/issues/2880) · [`0016`](https://github.com/hdosys/herdr-win/blob/master/patches/delta/0016-settings-integration-hints.patch) | Shows only controls that the selected integration supports. |
 | Devin configuration | ✅ **Upstreamed in Herdr v0.9.0** · [#2724](https://github.com/herdrdev/herdr/issues/2724) | Upstream finds Devin's native configuration in roaming AppData while respecting an explicit XDG override. |
 | Windows process environment | ✅ **Upstreamed in Herdr v0.9.0** · [#3430](https://github.com/herdrdev/herdr/issues/3430) | Upstream rejects malformed Windows environment entries and validates registry values before process creation. |
-| Remote transport and input corrections | **Reviewed backports, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Preserves Windows download and endpoint-write progress, matching control-key text, and nested mouse input. |
-| Multi-machine workspace views | **Reviewed backports, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Scopes collapsed groups to each machine, focuses new worktrees in the requesting client, supports guarded cross-machine navigation, and preserves public focus and focused geometry. |
-| Session safety and startup diagnostics | **Local corrections, unpublished** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Requires exact recorded names for session deletion and keeps Local startup errors visible without freezing healthy remote views. |
+| Remote transport and input corrections | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Preserves Windows download and endpoint-write progress, matching control-key text, and nested mouse input. |
+| Multi-machine workspace views | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Scopes collapsed groups to each machine, focuses new worktrees in the requesting client, supports guarded cross-machine navigation, and preserves public focus and focused geometry. |
+| Session safety and startup diagnostics | **Included in v2026.09.10.1** · [Inventory](https://github.com/hdosys/herdr-win/blob/master/patches/delta/README.md#reviewed-v090-corrections) | Requires exact recorded names for session deletion and keeps Local startup errors visible without freezing healthy remote views. |
 
-These corrections are included in the current local development candidate, not a
-published herdr-win release. They keep the reviewed v0.9.0 base unchanged. An upstream
-PR reference is provenance, not a claim that the fix has shipped in upstream stable;
-temporary mailboxes remain until equivalent stable behavior includes the necessary
-adaptations.
+These corrections are included in herdr-win v2026.09.10.1. They keep the reviewed
+v0.9.0 base unchanged. An upstream PR reference is provenance, not a claim that the
+fix has shipped in upstream stable; temporary mailboxes remain until equivalent
+stable behavior includes the necessary adaptations.
 
 ## Install
 

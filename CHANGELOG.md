@@ -4,6 +4,30 @@ This changelog records only user-visible changes released by the `herdr-win` for
 
 ## Unreleased
 
+## [2026.09.10.1] - 2026-09-10
+
+Unofficial herdr-win snapshot based on Herdr v0.9.0 plus the maintained delta.
+
+### Added
+- One client can monitor and navigate saved SSH machines, with endpoint-scoped
+  workspace state and a direct machine-setup guide in the client menu.
+
+### Changed
+- Windows remote image and input forwarding uses matching pipe and writer buffers,
+  making large pastes substantially faster while preserving bounded backpressure.
+
+### Fixed
+- Host terminal appearance is applied when the client starts and remains current
+  without allowing late palette replies to reach pane input.
+- Sidebar resizing remains stable instead of briefly rendering the wrong view
+  (`herdrdev/herdr#3817`).
+- Windows SSH bridge downloads, endpoint writes, control-key text, and nested mouse
+  reports remain responsive and correctly framed.
+- Cross-machine workspace navigation, focus, collapse state, and geometry stay
+  scoped to the requesting client and selected machine.
+- Session deletion requires an exact recorded name, and Local startup failures stay
+  visible without freezing healthy remote views.
+
 ## [2026.08.31.4] - 2026-08-31
 
 Unofficial herdr-win snapshot based on Herdr v0.8.2 plus the maintained delta.

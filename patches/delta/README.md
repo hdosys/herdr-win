@@ -30,10 +30,10 @@ remaining responsibility.
 
 ## Reviewed v0.9.0 corrections
 
-The following 11 logical mailboxes extend the reviewed 13-mailbox foundation
-without advancing `BASE`. They are included in the local development candidate,
-not a published herdr-win release. An upstream PR reference records provenance,
-not that its changes have shipped in an upstream stable release.
+The following 13 logical mailboxes extend the reviewed 13-mailbox foundation
+without advancing `BASE`. They are included in herdr-win v2026.09.10.1. An
+upstream PR reference records provenance, not that its changes have shipped in an
+upstream stable release.
 
 | Slot | Responsibility | Reviewed source |
 | --- | --- | --- |
@@ -48,6 +48,8 @@ not that its changes have shipped in an upstream stable release.
 | [0027](0027-background-activation-geometry.patch) | Focused geometry during background activation | [PR 3746](https://github.com/herdrdev/herdr/pull/3746) |
 | [0028](0028-exact-recorded-session-deletion.patch) | Exact recorded session names and live-session deletion refusal | Local correction for [issue 3819](https://github.com/herdrdev/herdr/issues/3819) |
 | [0029](0029-local-startup-diagnostics.patch) | Visible Local startup diagnostics without freezing healthy remote views | Local correction for [issue 3759](https://github.com/herdrdev/herdr/issues/3759) |
+| [0030](0030-client-sidebar-resize.patch) | Stable client-owned sidebar resizing | [PR 3862](https://github.com/herdrdev/herdr/pull/3862) |
+| [0031](0031-machine-setup-discovery.patch) | Machine setup guidance in the client menu | Local discoverability improvement |
 
 Keep each temporary correction with its original author credit, immutable source
 references, and necessary fork adaptations. Retire it only during an explicitly
